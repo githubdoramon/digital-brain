@@ -5,12 +5,79 @@ V8 is the current Android glasses wake detector in this checkout. It accepts
 validated general release.
 
 The Mentra SDK supplies 16 kHz mono PCM16. A native Sherpa keyword spotter runs
-continuously on 20 ms frames and proposes candidates. Only then does the app
-run the existing openWakeWord mel/embedding ONNX models over the preceding four
-seconds of untrimmed PCM. The personalized classifier accepts a candidate at a
-fixed score of `0.7614435404638955` or higher. It does not transcribe or learn
-from audio. A confirmed wake follows the existing blue-LED and command-capture
-path; a rejected candidate has no user-visible effect.
+continuously on 20 ms frames and proposes candidates. Native code keeps an
+eight-second PCM ring and filtered ambient-level history, so idle PCM does not
+cross the React Native bridge to JS. Only a candidate's aligned four-second
+audio range crosses to JS for the existing openWakeWord mel/embedding ONNX
+verifier. The personalized classifier accepts a candidate at a fixed score of
+`0.7614435404638955` or higher. It does not transcribe or learn from audio.
+After acceptance, native code snapshots the 1.8-second pre-roll plus audio
+accumulated during verification, then forwards command PCM to JS in 80 ms
+batches. A rejected proposal has no user-visible effect.
+
+## Glasses VAD experiment and native recovery
+
+Settings → Smart glasses → Troubleshooting → **Glasses speech detection**
+controls a persisted, Android-only experiment for Mentra Live. It defaults on;
+an explicit saved off choice remains respected.
+While idle wake detection owns the microphone, the SDK requests BES VAD using
+`cs_swit` type 8. It requests continuous audio before command capture and when
+wake listening stops or hands the mic to recording. The app never discards
+delivered PCM based on a VAD event; the existing native ring, verifier window
+and command pre-roll remain in use. It cannot reconstruct audio clipped by
+firmware. Firmware suppression of silence, onset retention, and detection
+accuracy still require validation on the installed glasses. Disable the setting
+if wake phrases are missed or clipped. This adds no keyword model to the glasses and does not keep their MTK
+Android processor awake.
+
+The patched Mentra Live watchdog uses monotonic time. Missing audio still
+triggers recovery after five seconds, checked by the existing ten-second
+watchdog, but repeated failures back off from 30 seconds to five minutes.
+Actual audio resets the backoff. With the experiment enabled, a reported
+silence transition grants up to 30 seconds of grace; repeated silence events
+do not extend that grace. Unknown/stale silence never suppresses recovery
+indefinitely. No VAD events within 15 seconds of listening, or reported speech
+without audio for five seconds, requests continuous audio again at the next
+watchdog opportunity. Pause/disconnect clears speech and recovery state;
+other glasses retain their existing watchdog policy.
+
+Micbeat start removes the old callback before replacing it. Callbacks check
+identity, connection, mic intent and playback suspension before sending or
+rescheduling. Stop clears callback ownership so old timers cannot restart the
+microphone. Blocking wake-model initialization, snapshots and worker waits run
+on `Dispatchers.IO`, leaving Expo's shared native function queue available.
+
+`wake_debug_snapshot.native_spotter.glassesVad` includes the experiment
+preference, supported-device status, requested VAD state, last speech/audio
+ages, packet and silence-packet counters, audio resumes/gaps, silence deferrals,
+recovery count/backoff and automatic fallback reason. These are observations,
+not proof of reduced power or firmware acknowledgement. To evaluate it on a
+production APK, compare enabled/disabled quiet periods and wake attempts,
+including an immediate command, reconnect, and recording handoff. Export
+snapshots and retained command WAVs; check for clipped wake/command onsets and
+recovery loops as well as CPU/battery changes. No device validation has yet
+been performed for this experiment.
+
+## Freeze isolation switches
+
+Settings → Smart glasses → Troubleshooting has two persisted Android switches:
+
+- **Wake-word processing** off keeps the glasses mic stream and native PCM
+  callback active, but native code counts packets and skips PCM copies, queueing,
+  Sherpa decoding, and wake verification. Wake commands cannot trigger. This
+  isolates detector work from continuous audio transport.
+- **Continuous glasses listening** off stops the wake listener, mic stream, and
+  wake runtime. Wake commands cannot trigger until it is turned on again. This
+  isolates continuous glasses listening from app-side wake processing.
+
+For a first comparison, record a baseline with both on, then try processing off
+with listening on, followed by processing on with listening off. Keep each run
+long enough to compare the same idle/scroll/navigation behavior and battery
+conditions. The controls persist across app restarts. Wake snapshots include
+both settings; the native spotter stats also report `wakeInputMode` as
+`DETECTION`, `LISTENING_ONLY`, or `STOPPED`. These switches diagnose correlation;
+they do not establish which component causes a freeze without repeated device
+observations.
 
 The selected Sherpa model is the 2025 zh-en 3M model from the upstream
 `sherpa-onnx` keyword-spotting assets. The app packages its chunk-8 int8 encoder,
@@ -38,9 +105,10 @@ installable Android APK with `cd android && ./gradlew :app:assembleRelease
 `mobile/android/app/build/outputs/apk/release/app-release.apk`. Building does
 not install or test it on glasses.
 
-The current test APK is arm64-only, uses package ID
-`com.appcalipse.digitalbrain.dev`, and is signed with the local Android debug
-key. With your phone connected for USB debugging, install it from `mobile/`:
+The package and signing of a generated local Android project depend on the
+variant used during prebuild; an `assembleRelease` task alone does not select
+the production application ID. With your phone connected for USB debugging,
+an appropriate APK can be installed from `mobile/`:
 
 ```bash
 adb install -r android/app/build/outputs/apk/release/app-release.apk

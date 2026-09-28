@@ -8,7 +8,6 @@ import {
   getMentraConnectionStatus,
   setMentraMicState,
   subscribeMentraConnectionState,
-  subscribeMentraMicPcm,
   subscribeMentraVideoRecordingStatus,
 } from '@/mentraCapture/sdk';
 import { appendMentraDebugLog, appendWakeCommandDebugLog } from '@/mentraCapture/debug';
@@ -17,7 +16,6 @@ import {
   cancelGlassesCommandTranscription,
   createGlassesCommandId,
   isGlassesCommandSessionActive,
-  observeGlassesAmbientPcm,
   startGlassesCommandTranscription,
   warmGlassesCommandTranscription,
 } from '@/mentraCapture/commandTranscription';
@@ -37,10 +35,11 @@ type PauseReason =
   | 'video_recording'
   | 'glasses_command'
   | 'connection_lost'
-  | 'firmware_update';
+  | 'firmware_update'
+  | 'listening_disabled';
 let initialized = false;
 let detector: V8TwoStageWakeWordDetector | null = null;
-let pcmUnsubscribe: (() => void) | null = null;
+let commandPcmUnsubscribe: (() => void) | null = null;
 let candidateUnsubscribe: (() => void) | null = null;
 let nativeWakeErrorUnsubscribe: (() => void) | null = null;
 let connectionUnsubscribe: (() => void) | null = null;
@@ -55,13 +54,10 @@ let detectorInitialization: Promise<V8TwoStageWakeWordDetector> | null = null;
 let wakeDebugTimer: ReturnType<typeof setInterval> | null = null;
 let lastWakeError: string | null = null;
 let lastWakeStep = 'not_initialized';
-let pcmCallbacksTotal = 0;
-let pcmSamplesTotal = 0;
-let pcmSamplesSinceSnapshot = 0;
-let pcmSquaredAmplitudeSinceSnapshot = 0;
-let pcmPeakSinceSnapshot = 0;
-let lastPcmAt: number | null = null;
-let firstPcmForListener = false;
+let commandCaptureTransition = false;
+let commandPcmTransitionChunks: Int16Array[] | null = null;
+let wakeDetectionProcessingEnabled = true;
+let continuousGlassesListeningEnabled = true;
 let wakeInferenceCountSinceSnapshot = 0;
 let wakeInferenceSlowCountSinceSnapshot = 0;
 let wakeInferenceBacklogCountSinceSnapshot = 0;
@@ -80,18 +76,12 @@ function wakeErrorMessage(error: unknown): string {
 
 /** A manual snapshot also proves the diagnostic writer is still working after clear. */
 export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record<string, unknown>> {
-  const intervalSamples = pcmSamplesSinceSnapshot;
-  const intervalSquaredAmplitude = pcmSquaredAmplitudeSinceSnapshot;
-  const intervalPeak = pcmPeakSinceSnapshot;
   const inferenceCount = wakeInferenceCountSinceSnapshot;
   const inferenceSlowCount = wakeInferenceSlowCountSinceSnapshot;
   const inferenceBacklogCount = wakeInferenceBacklogCountSinceSnapshot;
   const inferenceTotalMs = wakeInferenceTotalMsSinceSnapshot;
   const inferenceMaxMs = wakeInferenceMaxMsSinceSnapshot;
   const inferenceMaxPendingChunks = wakeInferenceMaxPendingChunksSinceSnapshot;
-  pcmSamplesSinceSnapshot = 0;
-  pcmSquaredAmplitudeSinceSnapshot = 0;
-  pcmPeakSinceSnapshot = 0;
   wakeInferenceCountSinceSnapshot = 0;
   wakeInferenceSlowCountSinceSnapshot = 0;
   wakeInferenceBacklogCountSinceSnapshot = 0;
@@ -105,6 +95,7 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
       error: wakeErrorMessage(error),
     })) ?? Promise.resolve(null),
   ]);
+  const nativePcmStats = nativeStats && 'pcmCallbacksTotal' in nativeStats ? nativeStats : null;
   const snapshot: Record<string, unknown> = {
     source,
     initialized,
@@ -112,16 +103,17 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
     activation_pending: listenerActivation !== null,
     last_step: lastWakeStep,
     last_error: lastWakeError,
+    wake_detection_processing_enabled: wakeDetectionProcessingEnabled,
+    continuous_glasses_listening_enabled: continuousGlassesListeningEnabled,
     pause_reasons: [...pauseReasons.keys()],
     connection,
-    pcm_callbacks_total: pcmCallbacksTotal,
-    pcm_samples_total: pcmSamplesTotal,
-    pcm_samples_since_snapshot: intervalSamples,
-    pcm_peak_since_snapshot: intervalPeak / 32768,
-    pcm_rms_since_snapshot: intervalSamples
-      ? Math.sqrt(intervalSquaredAmplitude / intervalSamples) / 32768
-      : 0,
-    last_pcm_at: lastPcmAt,
+    pcm_callbacks_total: nativePcmStats?.pcmCallbacksTotal ?? 0,
+    pcm_samples_total: nativePcmStats?.pcmSamplesTotal ?? 0,
+    pcm_samples_since_snapshot: nativePcmStats?.pcmSamplesSinceSnapshot ?? 0,
+    wake_detector_samples_since_snapshot: nativePcmStats?.wakeDetectorSamplesSinceSnapshot ?? 0,
+    pcm_peak_since_snapshot: nativePcmStats?.wakeDetectorPeakSinceSnapshot ?? 0,
+    pcm_rms_since_snapshot: nativePcmStats?.wakeDetectorRmsSinceSnapshot ?? 0,
+    last_pcm_at: nativePcmStats?.lastPcmAtMs || null,
     pending_wake_candidates: pendingCandidates.length,
     processing_wake_candidate: processingCandidate,
     wake_inference_count: inferenceCount,
@@ -152,10 +144,18 @@ function handleGlassesCommandTranscriptionFailure(event: {
       error: error instanceof Error ? error.message : String(error),
     }),
   );
+  if (listenerActive) {
+    void GlassesAlertsNative?.stopV8WakeCommandCapture(true).catch((error) =>
+      debug('wake_command_capture_resume_failed', {
+        command_id: event.commandId,
+        error: wakeErrorMessage(error),
+      }),
+    );
+  }
 }
 
 function shouldListen(): boolean {
-  return Platform.OS === 'android' && pauseReasons.size === 0;
+  return Platform.OS === 'android' && continuousGlassesListeningEnabled && pauseReasons.size === 0;
 }
 
 function loadOnnxRuntime(): OnnxRuntimeLike {
@@ -243,7 +243,6 @@ async function processPendingCandidates(): Promise<void> {
       const activeDetector = await getDetector();
       const candidate = pendingCandidates[0];
       if (!candidate || !listenerActive) break;
-      if (candidate.sampleIndex > activeDetector.streamSamples) break;
       pendingCandidates.shift();
       const generation = detectorGeneration;
       const startedAt = Date.now();
@@ -266,6 +265,9 @@ async function processPendingCandidates(): Promise<void> {
         passed: event !== null,
       });
       if (event) {
+        commandCaptureTransition = true;
+        commandPcmTransitionChunks = [];
+        subscribeNativeCommandPcm();
         const commandId = createGlassesCommandId();
         const wakeDetectedAt = Date.now();
         debug('wake_detected', {
@@ -276,7 +278,7 @@ async function processPendingCandidates(): Promise<void> {
           audio_time_ms: event.audioTimeMs,
           pre_roll_start_audio_time_ms: event.preRollStartAudioTimeMs,
           pre_roll_end_audio_time_ms: event.preRollEndAudioTimeMs,
-          pre_roll_samples: event.preRollPcm16.length,
+          pre_roll_samples: candidate.sampleIndex - event.preRollStartSampleIndex,
         });
         // Dispatch the visible acknowledgement before creating the command
         // session so nothing on the JavaScript side adds avoidable LED delay.
@@ -286,39 +288,37 @@ async function processPendingCandidates(): Promise<void> {
             error: error instanceof Error ? error.message : String(error),
           }),
         );
-        // The detector owns a bounded 1.8-second pre-roll which contains the
-        // wake phrase and can include the beginning of a fast command. Keep it
-        // verbatim, alongside any PCM that arrived while inference completed,
-        // so Whisper and the retained WAV receive the complete utterance.
-        const commandInitialChunks = [
-          event.preRollPcm16,
-          ...(event.postDetectionPcm16?.length ? [event.postDetectionPcm16] : []),
-        ];
+        // Switch the native PCM owner atomically: return its bounded wake and
+        // inference audio snapshot, then forward future command audio in 80 ms
+        // batches. JavaScript never receives the continuous idle wake stream.
+        const capture = await activeDetector.startCommandCapture(candidate);
+        if (!listenerActive || generation !== detectorGeneration) {
+          commandCaptureTransition = false;
+          commandPcmTransitionChunks = null;
+          commandPcmUnsubscribe?.();
+          commandPcmUnsubscribe = null;
+          await GlassesAlertsNative?.stopV8WakeCommandCapture(false).catch(() => undefined);
+          continue;
+        }
+        const capturedPcm = new Int16Array(copyPcmBytes(capture.pcm));
+        const commandInitialChunks = capturedPcm.length > 0 ? [capturedPcm] : [];
         const initialAudioDurationMs = Math.round(
           (commandInitialChunks.reduce((total, chunk) => total + chunk.length, 0) / 16_000) * 1_000,
         );
         debug('wake_command_audio_buffered', {
           command_id: commandId,
-          pre_roll_samples: event.preRollPcm16.length,
+          pre_roll_samples: candidate.sampleIndex - event.preRollStartSampleIndex,
+          buffered_samples: capturedPcm.length,
+          capture_end_sample_index: capture.endSampleIndex,
+          ambient_rms_samples: capture.ambientRms.length,
           initial_audio_duration_ms: initialAudioDurationMs,
           wake_decision_audio_time_ms: event.audioTimeMs,
           wake_pre_roll_start_audio_time_ms: event.preRollStartAudioTimeMs,
           wake_pre_roll_end_audio_time_ms: event.preRollEndAudioTimeMs,
         });
-        // Queue the native reset but create the command session immediately;
-        // glasses PCM can arrive while the reset promise is still settling.
-        void (async () => {
-          await GlassesAlertsNative?.stopV8WakeInput();
-          await resetDetector('command_session_started');
-        })().catch((error) =>
-          debug('wake_detector_reset_failed', {
-            command_id: commandId,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
         startGlassesCommandTranscription(
           wakeDetectedAt,
-          () => undefined,
+          handleCommandListeningFinished,
           commandInitialChunks,
           {
             wakePhrase: event.modelName.replace(/[-_]+/gu, ' '),
@@ -326,15 +326,17 @@ async function processPendingCandidates(): Promise<void> {
             preRollStartAudioTimeMs: event.preRollStartAudioTimeMs,
             preRollEndAudioTimeMs: event.preRollEndAudioTimeMs,
           },
-          (transcript) => {
-            void dispatchGlassesCommand(transcript, {
-              pauseListening: () => pauseWakeWordListening('glasses_command'),
-              resumeListening: () => resumeWakeWordListening('glasses_command', 'command_finished'),
-            });
-          },
+          handleCommandTranscribed,
           handleGlassesCommandTranscriptionFailure,
           commandId,
+          capture.ambientRms,
         );
+        commandCaptureTransition = false;
+        const pendingCommandChunks = commandPcmTransitionChunks ?? [];
+        commandPcmTransitionChunks = null;
+        for (const chunk of pendingCommandChunks) feedCommandPcm(chunk);
+        pendingCandidates = [];
+        break;
       }
     }
   } catch (error) {
@@ -345,15 +347,14 @@ async function processPendingCandidates(): Promise<void> {
     await deactivateListener('inference_failed', true).catch(() => undefined);
   } finally {
     processingCandidate = false;
-    if (listenerActive && pendingCandidates.length > 0 &&
-      pendingCandidates[0].sampleIndex <= (detector?.streamSamples ?? 0)) {
+    if (listenerActive && pendingCandidates.length > 0) {
       void processPendingCandidates();
     }
   }
 }
 
 function acceptNativeCandidate(candidate: V8Candidate): void {
-  if (!listenerActive || isGlassesCommandSessionActive() ||
+  if (!listenerActive || !wakeDetectionProcessingEnabled || commandCaptureTransition || isGlassesCommandSessionActive() ||
     !Number.isSafeInteger(candidate.sampleIndex) || candidate.sampleIndex < 0 ||
     (candidate.keyword !== 'hey_brain' && candidate.keyword !== 'okay_brain')) return;
   pendingCandidates.push(candidate);
@@ -367,43 +368,51 @@ function copyPcmBytes(pcm: ArrayBuffer | ArrayBufferView): ArrayBufferLike {
   return pcm.slice(0);
 }
 
-function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
+function handleCommandListeningFinished(command: { commandId: string; reason: string }): void {
+  debug('glasses_command_listening_finished', { command_id: command.commandId });
+  commandPcmTransitionChunks = null;
+  commandPcmUnsubscribe?.();
+  commandPcmUnsubscribe = null;
+  const resumeWakeDetection = command.reason === 'no_speech';
+  void GlassesAlertsNative?.stopV8WakeCommandCapture(resumeWakeDetection).catch((error) =>
+    debug('wake_command_capture_stop_failed', {
+      command_id: command.commandId,
+      resume_wake_detection: resumeWakeDetection,
+      error: wakeErrorMessage(error),
+    }),
+  );
+}
+
+function handleCommandTranscribed(transcript: Parameters<typeof dispatchGlassesCommand>[0]): void {
+  void dispatchGlassesCommand(transcript, {
+    pauseListening: () => pauseWakeWordListening('glasses_command'),
+    resumeListening: () => resumeWakeWordListening('glasses_command', 'command_finished'),
+  });
+}
+
+function feedCommandPcm(samples: Int16Array): void {
+  acceptGlassesCommandPcm(
+    samples,
+    handleCommandListeningFinished,
+    handleCommandTranscribed,
+    handleGlassesCommandTranscriptionFailure,
+  );
+}
+
+function acceptNativeCommandPcm(event: { pcm: Uint8Array }): void {
   if (!listenerActive) return;
-  const samples = new Int16Array(copyPcmBytes(pcm));
-  pcmCallbacksTotal += 1;
-  pcmSamplesTotal += samples.length;
-  pcmSamplesSinceSnapshot += samples.length;
-  lastPcmAt = Date.now();
-  for (const sample of samples) {
-    pcmSquaredAmplitudeSinceSnapshot += sample * sample;
-    pcmPeakSinceSnapshot = Math.max(pcmPeakSinceSnapshot, Math.abs(sample));
-  }
-  if (firstPcmForListener) {
-    firstPcmForListener = false;
-    debug('wake_pcm_first_valid', {
-      samples: samples.length,
-      pcm_peak: pcmPeakSinceSnapshot / 32768,
-    });
-  }
-  if (isGlassesCommandSessionActive()) {
-    acceptGlassesCommandPcm(
-      samples,
-      (command) => {
-        debug('glasses_command_listening_finished', { command_id: command.commandId });
-      },
-      (transcript) => {
-        void dispatchGlassesCommand(transcript, {
-          pauseListening: () => pauseWakeWordListening('glasses_command'),
-          resumeListening: () => resumeWakeWordListening('glasses_command', 'command_finished'),
-        });
-      },
-      handleGlassesCommandTranscriptionFailure,
-    );
+  const samples = new Int16Array(copyPcmBytes(event.pcm));
+  if (commandPcmTransitionChunks) {
+    commandPcmTransitionChunks.push(samples);
     return;
   }
-  observeGlassesAmbientPcm(samples);
-  detector?.acceptPcm16(samples);
-  if (pendingCandidates.length > 0) void processPendingCandidates();
+  if (isGlassesCommandSessionActive()) feedCommandPcm(samples);
+}
+
+function subscribeNativeCommandPcm(): void {
+  if (commandPcmUnsubscribe || !GlassesAlertsNative) return;
+  const subscription = GlassesAlertsNative.addListener('onV8CommandPcm', acceptNativeCommandPcm);
+  commandPcmUnsubscribe = () => subscription.remove();
 }
 
 async function activateListener(): Promise<void> {
@@ -427,8 +436,6 @@ async function activateListener(): Promise<void> {
       if (!shouldListen()) return;
       lastWakeStep = 'enabling_glasses_mic';
       debug('wake_listener_activating', { step: lastWakeStep });
-      const unsubscribe = subscribeMentraMicPcm((event) => acceptPcm(event.pcm));
-      pcmUnsubscribe = unsubscribe;
       const native = GlassesAlertsNative!;
       const candidateSubscription = native.addListener('onV8WakeCandidate', acceptNativeCandidate);
       candidateUnsubscribe = () => candidateSubscription.remove();
@@ -439,8 +446,6 @@ async function activateListener(): Promise<void> {
       });
       nativeWakeErrorUnsubscribe = () => errorSubscription.remove();
       if (!shouldListen()) {
-        unsubscribe();
-        pcmUnsubscribe = null;
         candidateUnsubscribe();
         candidateUnsubscribe = null;
         nativeWakeErrorUnsubscribe();
@@ -450,16 +455,17 @@ async function activateListener(): Promise<void> {
       await native.startV8WakeInput();
       listenerActive = true;
       await setMentraMicState(true);
-      if (!shouldListen() || pcmUnsubscribe !== unsubscribe) return;
-      firstPcmForListener = true;
+      if (!shouldListen() || !listenerActive) return;
       lastWakeStep = 'listening';
       lastWakeError = null;
       debug('wake_listener_started', { model: model.name });
       void warmGlassesCommandTranscription().catch(() => undefined);
     } catch (error) {
       listenerActive = false;
-      pcmUnsubscribe?.();
-      pcmUnsubscribe = null;
+      commandCaptureTransition = false;
+      commandPcmTransitionChunks = null;
+      commandPcmUnsubscribe?.();
+      commandPcmUnsubscribe = null;
       candidateUnsubscribe?.();
       candidateUnsubscribe = null;
       nativeWakeErrorUnsubscribe?.();
@@ -478,11 +484,13 @@ async function activateListener(): Promise<void> {
 
 async function deactivateListener(reason: string, disableMic: boolean): Promise<void> {
   cancelGlassesCommandTranscription(reason);
-  if (!listenerActive && !pcmUnsubscribe) return;
+  if (!listenerActive && !commandPcmUnsubscribe) return;
   lastWakeStep = `stopped:${reason}`;
   listenerActive = false;
-  pcmUnsubscribe?.();
-  pcmUnsubscribe = null;
+  commandCaptureTransition = false;
+  commandPcmTransitionChunks = null;
+  commandPcmUnsubscribe?.();
+  commandPcmUnsubscribe = null;
   candidateUnsubscribe?.();
   candidateUnsubscribe = null;
   nativeWakeErrorUnsubscribe?.();
@@ -529,6 +537,10 @@ export async function resumeWakeWordListening(
 
 export async function initializeWakeWordRuntime(): Promise<void> {
   if (initialized || Platform.OS !== 'android') return;
+  const wakeSettings = await GlassesAlertsNative?.getV8WakeVadSettings().catch(() => null);
+  wakeDetectionProcessingEnabled = wakeSettings?.detectionEnabled ?? true;
+  continuousGlassesListeningEnabled = wakeSettings?.continuousListeningEnabled ?? true;
+  if (!continuousGlassesListeningEnabled) pauseReasons.set('listening_disabled', false);
   initialized = true;
   lastWakeStep = 'runtime_initialized';
   debug('wake_runtime_initialized', { model: model.name, automatic: true });
@@ -574,6 +586,40 @@ export async function initializeWakeWordRuntime(): Promise<void> {
     lastWakeError = wakeErrorMessage(error);
     debug('wake_runtime_start_failed', { step: lastWakeStep, error: lastWakeError });
   });
+}
+
+export async function setWakeDetectionProcessingEnabled(enabled: boolean): Promise<void> {
+  if (Platform.OS !== 'android' || !GlassesAlertsNative) return;
+  const previous = wakeDetectionProcessingEnabled;
+  wakeDetectionProcessingEnabled = enabled;
+  detectorGeneration++;
+  pendingCandidates = [];
+  try {
+    await GlassesAlertsNative.setV8WakeDetectionEnabled(enabled);
+  } catch (error) {
+    wakeDetectionProcessingEnabled = previous;
+    detectorGeneration++;
+    throw error;
+  }
+  debug('wake_detection_processing_changed', { enabled, listener_active: listenerActive });
+}
+
+export async function setContinuousGlassesListeningEnabled(enabled: boolean): Promise<void> {
+  if (Platform.OS !== 'android' || !GlassesAlertsNative) return;
+  if (!enabled) {
+    continuousGlassesListeningEnabled = false;
+    pauseReasons.set('listening_disabled', false);
+    await GlassesAlertsNative.setV8WakeListeningEnabled(false);
+    await listenerActivation?.catch(() => undefined);
+    await deactivateListener('continuous_listening_disabled', true);
+    await GlassesAlertsNative.stopGlassesWakeRuntime().catch(() => undefined);
+  } else {
+    await GlassesAlertsNative.setV8WakeListeningEnabled(true);
+    continuousGlassesListeningEnabled = true;
+    pauseReasons.delete('listening_disabled');
+    await reconcile('continuous_listening_enabled');
+  }
+  debug('continuous_glasses_listening_changed', { enabled, listener_active: listenerActive });
 }
 
 export async function disposeWakeWordRuntime(): Promise<void> {

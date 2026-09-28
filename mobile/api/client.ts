@@ -64,6 +64,10 @@ export function setAuthRefreshHandler(provider: (() => Promise<string | null>) |
   authRefreshHandler = provider;
 }
 
+export function getAuthRefreshHandler(): (() => Promise<string | null>) | null {
+  return authRefreshHandler;
+}
+
 export function setAuthDiagnosticsProvider(
   provider: (() => Record<string, unknown> | Promise<Record<string, unknown>>) | null,
 ) {

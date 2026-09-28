@@ -739,103 +739,6 @@ new file mode 100644
 +        return false
 +    }
 +}
-diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
---- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
-+++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
-@@ -585,6 +585,8 @@
-     private var heartbeatHandler = Handler(Looper.getMainLooper())
-     private var heartbeatRunnable: Runnable? = null
-     private var heartbeatCounter = 0
-+    private val controlPlaneWatchdog = ControlPlaneWatchdog()
-+    @Volatile private var otaWatchdogSuppressedUntil = 0L
-     private var glassesReady = false
-
-     // RSSI tracking
-@@ -3257,9 +3259,10 @@
-                 val percent = json.optInt("percent", batteryLevel)
-                 updateBatteryStatus(percent, isCharging)
-             }
--            "pong" ->
--                    // Process heartbeat pong response
--                    Bridge.log("LIVE: Received pong response - connection healthy")
-+            "pong" -> {
-+                controlPlaneWatchdog.pong(SystemClock.elapsedRealtime())
-+                Bridge.log("LIVE: Received pong response - connection healthy")
-+            }
-             "imu_response",
-             "imu_stream_response",
-             "imu_gesture_response",
-@@ -3419,6 +3422,8 @@
-                 val osStepPercent = json.optInt("sp", json.optInt("step_percent", 0))
-                 val osOverallPercent = json.optInt("op", json.optInt("overall_percent", 0))
-                 val osStatus = json.optString("status", "idle")
-+                otaWatchdogSuppressedUntil = if (osStatus in setOf("in_progress", "step_complete"))
-+                    SystemClock.elapsedRealtime() + 600_000L else 0L
-                 val osErrorMessage: String? =
-                         json.optString("err", json.optString("error_message", null))
-
-@@ -3658,6 +3663,13 @@
-                 resetWireNegotiationState()
-                 parsePeerWireCaps(json)
-                 maybeSendWireHandshake()
-+                val incomingSessionId = json.optString("sid", "")
-+                val previousSessionId = glassesSessionId
-+                if (readinessCompletedThisBleSession && incomingSessionId.isNotEmpty() && incomingSessionId != previousSessionId) {
-+                    Bridge.sendTypedMessage("glasses_session_changed", hashMapOf<String, Any>(
-+                        "previous_sid" to (previousSessionId ?: ""), "sid" to incomingSessionId,
-+                    ))
-+                }
-                 // Record the session id BEFORE marking ready: an unsolicited glasses_ready
-                 // already runs this full remote-reset flow, so recording (not re-triggering)
-                 // is correct here; version_info detection covers the restart case.
-@@ -3738,6 +3750,10 @@
-                 }
-
-                 // startDebugVideoCommandLoop();
-+
-+                Bridge.sendTypedMessage("glasses_control_ready", hashMapOf<String, Any>(
-+                    "hasSessionId" to json.optString("sid", "").isNotEmpty(),
-+                ))
-
-                 // Start the heartbeat mechanism now that glasses are ready
-                 try {
-@@ -5025,6 +5041,8 @@
-     fun sendOtaStart(otaVersionUrl: String? = null) {
-         try {
-             val json = JSONObject()
-+            otaWatchdogSuppressedUntil = SystemClock.elapsedRealtime() + 600_000L
-+            controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
-             json.put("type", "ota_start")
-             if (otaVersionUrl != null) {
-                 json.put("ota_version_url", otaVersionUrl)
-@@ -5092,7 +5110,18 @@
-             Bridge.log("LIVE: Skipping heartbeat - glasses not ready or not connected")
-             return
-         }
--        if (besOtaHeartbeatGuard.shouldSuppress(SystemClock.elapsedRealtime())) {
-+        val now = SystemClock.elapsedRealtime()
-+        val besOwnsUart = besOtaHeartbeatGuard.shouldSuppress(now)
-+        if (controlPlaneWatchdog.probe(now, besOwnsUart || now < otaWatchdogSuppressedUntil)) {
-+            Bridge.log("LIVE: ASG control plane stopped answering heartbeat probes; requesting one app-owned recovery")
-+            Bridge.sendTypedMessage("glasses_link_unhealthy", hashMapOf<String, Any>(
-+                "reason" to "heartbeat_timeout", "timeoutMs" to 90_000,
-+            ))
-+            // The app's single connection owner performs recovery. Never
-+            // reboot the glasses or start a competing native reconnect loop.
-+            return
-+        }
-+        if (besOwnsUart) {
-             Bridge.log("LIVE: Skipping heartbeat while BES OTA owns the UART")
-             return
-         }
-@@ -5126,6 +5155,7 @@
-     private fun startHeartbeat() {
-         // Bridge.log("LIVE: 💓 Starting heartbeat mechanism");
-         heartbeatCounter = 0
-+        controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
-         heartbeatHandler.removeCallbacks(heartbeatRunnable!!) // Remove any existing callbacks
-         heartbeatHandler.postDelayed(heartbeatRunnable!!, HEARTBEAT_INTERVAL_MS.toLong())
-
 diff --git a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
 --- a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
 +++ b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
@@ -926,7 +829,19 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/src/index.ts b/node_modules/@men
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
-@@ -564,79 +564,24 @@
+@@ -343,8 +343,10 @@
+
+         // When no frame has ever been received, treat elapsed as "forever" so we
+         // actually attempt recovery (was 0 before, which made the watchdog a no-op).
++        val live = sgc as? MentraLive
+         val timeSinceLastLc3Event = System.currentTimeMillis() - (lastLc3Event ?: 0L)
+-        if (timeSinceLastLc3Event > 5000) {
++        val needsRecovery = live?.shouldRecoverMic() ?: (timeSinceLastLc3Event > 5000)
++        if (needsRecovery) {
+             Bridge.log("MAN: No audio activity in the last 5 seconds from glasses, reinitializing glasses mic")
+             sgc?.setMicEnabled(true)
+         }
+@@ -564,79 +566,24 @@
      }
 
      private fun startForegroundService() {
@@ -1018,7 +933,23 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
 
      private fun initializeViewStates() {
          viewStates.clear()
-@@ -1962,6 +1907,7 @@
+@@ -743,6 +690,7 @@
+      */
+     fun reportGlassesAudioActivity() {
+         lastLc3Event = System.currentTimeMillis()
++        (sgc as? MentraLive)?.recordMicPacket()
+     }
+
+     /**
+@@ -752,6 +700,7 @@
+      */
+     fun handleGlassesMicData(rawLC3Data: ByteArray, frameSize: Int = 40) {
+         lastLc3Event = System.currentTimeMillis()
++        (sgc as? MentraLive)?.recordMicPacket()
+         val pcmData: ByteArray?
+         synchronized(lc3Lock) {
+             if (lc3DecoderPtr == 0L) {
+@@ -1962,6 +1911,7 @@
          }
          initSGC(defaultWearable)
          searching = true
@@ -1026,7 +957,7 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
          sgc?.connectById(reconnectTarget)
          connectDefaultController()
      }
-@@ -2019,6 +1965,7 @@
+@@ -2019,6 +1969,7 @@
          deviceName = name
 
          initSGC(pendingWearable)
@@ -1034,7 +965,7 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
          sgc?.connectById(deviceName)
      }
 
-@@ -2027,7 +1974,8 @@
+@@ -2027,7 +1978,8 @@
          if (DeviceTypes.ALL.contains(deviceModel)) {
              pendingWearable = deviceModel
              initSGC(pendingWearable)
@@ -1044,7 +975,7 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
              return
          }
          if (ControllerTypes.ALL.contains(deviceModel)) {
-@@ -2047,6 +1995,8 @@
+@@ -2047,6 +1999,8 @@
      }
 
      fun disconnect() {
@@ -1053,3 +984,324 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
          sgc?.clearDisplay()
          sgc?.disconnect()
          sgc = null // Clear the SGC reference after disconnect
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
+@@ -585,6 +585,8 @@
+     private var heartbeatHandler = Handler(Looper.getMainLooper())
+     private var heartbeatRunnable: Runnable? = null
+     private var heartbeatCounter = 0
++    private val controlPlaneWatchdog = ControlPlaneWatchdog()
++    @Volatile private var otaWatchdogSuppressedUntil = 0L
+     private var glassesReady = false
+
+     // RSSI tracking
+@@ -613,6 +615,7 @@
+     // Micbeat tracking - periodically enable custom audio TX
+     private var micBeatHandler = Handler(Looper.getMainLooper())
+     private var micBeatRunnable: Runnable? = null
++    private val micRecovery = MentraMicRecovery()
+     private var micBeatCount = 0
+
+     // Message tracking for reliable delivery
+@@ -3257,9 +3260,10 @@
+                 val percent = json.optInt("percent", batteryLevel)
+                 updateBatteryStatus(percent, isCharging)
+             }
+-            "pong" ->
+-                    // Process heartbeat pong response
+-                    Bridge.log("LIVE: Received pong response - connection healthy")
++            "pong" -> {
++                controlPlaneWatchdog.pong(SystemClock.elapsedRealtime())
++                Bridge.log("LIVE: Received pong response - connection healthy")
++            }
+             "imu_response",
+             "imu_stream_response",
+             "imu_gesture_response",
+@@ -3419,6 +3423,8 @@
+                 val osStepPercent = json.optInt("sp", json.optInt("step_percent", 0))
+                 val osOverallPercent = json.optInt("op", json.optInt("overall_percent", 0))
+                 val osStatus = json.optString("status", "idle")
++                otaWatchdogSuppressedUntil = if (osStatus in setOf("in_progress", "step_complete"))
++                    SystemClock.elapsedRealtime() + 600_000L else 0L
+                 val osErrorMessage: String? =
+                         json.optString("err", json.optString("error_message", null))
+
+@@ -3658,6 +3664,13 @@
+                 resetWireNegotiationState()
+                 parsePeerWireCaps(json)
+                 maybeSendWireHandshake()
++                val incomingSessionId = json.optString("sid", "")
++                val previousSessionId = glassesSessionId
++                if (readinessCompletedThisBleSession && incomingSessionId.isNotEmpty() && incomingSessionId != previousSessionId) {
++                    Bridge.sendTypedMessage("glasses_session_changed", hashMapOf<String, Any>(
++                        "previous_sid" to (previousSessionId ?: ""), "sid" to incomingSessionId,
++                    ))
++                }
+                 // Record the session id BEFORE marking ready: an unsolicited glasses_ready
+                 // already runs this full remote-reset flow, so recording (not re-triggering)
+                 // is correct here; version_info detection covers the restart case.
+@@ -3738,6 +3751,10 @@
+                 }
+
+                 // startDebugVideoCommandLoop();
++
++                Bridge.sendTypedMessage("glasses_control_ready", hashMapOf<String, Any>(
++                    "hasSessionId" to json.optString("sid", "").isNotEmpty(),
++                ))
+
+                 // Start the heartbeat mechanism now that glasses are ready
+                 try {
+@@ -4847,6 +4864,7 @@
+             return
+         }
+         Bridge.log("LIVE: Speaking status " + (if (speaking) "speaking" else "not speaking"))
++        micRecovery.speech(speaking, SystemClock.elapsedRealtime())
+         Bridge.sendSpeakingStatus(speaking)
+     }
+
+@@ -5025,6 +5043,8 @@
+     fun sendOtaStart(otaVersionUrl: String? = null) {
+         try {
+             val json = JSONObject()
++            otaWatchdogSuppressedUntil = SystemClock.elapsedRealtime() + 600_000L
++            controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
+             json.put("type", "ota_start")
+             if (otaVersionUrl != null) {
+                 json.put("ota_version_url", otaVersionUrl)
+@@ -5092,7 +5112,18 @@
+             Bridge.log("LIVE: Skipping heartbeat - glasses not ready or not connected")
+             return
+         }
+-        if (besOtaHeartbeatGuard.shouldSuppress(SystemClock.elapsedRealtime())) {
++        val now = SystemClock.elapsedRealtime()
++        val besOwnsUart = besOtaHeartbeatGuard.shouldSuppress(now)
++        if (controlPlaneWatchdog.probe(now, besOwnsUart || now < otaWatchdogSuppressedUntil)) {
++            Bridge.log("LIVE: ASG control plane stopped answering heartbeat probes; requesting one app-owned recovery")
++            Bridge.sendTypedMessage("glasses_link_unhealthy", hashMapOf<String, Any>(
++                "reason" to "heartbeat_timeout", "timeoutMs" to 90_000,
++            ))
++            // The app's single connection owner performs recovery. Never
++            // reboot the glasses or start a competing native reconnect loop.
++            return
++        }
++        if (besOwnsUart) {
+             Bridge.log("LIVE: Skipping heartbeat while BES OTA owns the UART")
+             return
+         }
+@@ -5126,6 +5157,7 @@
+     private fun startHeartbeat() {
+         // Bridge.log("LIVE: 💓 Starting heartbeat mechanism");
+         heartbeatCounter = 0
++        controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
+         heartbeatHandler.removeCallbacks(heartbeatRunnable!!) // Remove any existing callbacks
+         heartbeatHandler.postDelayed(heartbeatRunnable!!, HEARTBEAT_INTERVAL_MS.toLong())
+
+@@ -5185,8 +5217,33 @@
+         Bridge.log("LIVE: 📶 RSSI: " + rssi + " dBm")
+     }
+
++    /** App-owned experiment; disable before command capture and microphone handoff. */
++    fun setWakeVadEnabled(enabled: Boolean) {
++        micRecovery.requestVad(enabled, SystemClock.elapsedRealtime())
++        val previous = DeviceStore.get("bluetooth", "voice_activity_detection_enabled")
++        DeviceStore.set("bluetooth", "voice_activity_detection_enabled", enabled)
++        if (previous != enabled) sendVoiceActivityDetectionSetting()
++    }
++
++    fun recordMicPacket() = micRecovery.audio(SystemClock.elapsedRealtime())
++
++    fun shouldRecoverMic(): Boolean {
++        val now = SystemClock.elapsedRealtime()
++        micRecovery.takeVadFallback(now)?.let { reason ->
++            DeviceStore.set("bluetooth", "voice_activity_detection_enabled", false)
++            sendVoiceActivityDetectionSetting()
++            Bridge.log("LIVE: Wake VAD fallback to continuous audio: " + reason)
++        }
++        return micRecovery.shouldRecover(now)
++    }
++
++    fun micRecoveryStats(): Map<String, Any> = micRecovery.stats(SystemClock.elapsedRealtime())
++
+     /** Start the micbeat mechanism - periodically enable custom audio TX */
++    @Synchronized
+     private fun startMicBeat() {
++        micBeatRunnable?.let(micBeatHandler::removeCallbacks)
++        micRecovery.start(SystemClock.elapsedRealtime())
+         micOnCount++
+         Bridge.log("LIVE: 🎤 Mic ON/OFF count: " + micOnCount + " on, " + micOffCount + " off")
+         micBeatCount = 0
+@@ -5197,28 +5254,29 @@
+         micBeatRunnable =
+                 object : Runnable {
+                     override fun run() {
+-                        Bridge.log("LIVE: 🎤 Sending micbeat - enabling custom audio TX")
+-
+-                        sendEnableCustomAudioTxMessage(true)
+-                        micBeatCount++
+-
+-                        // Schedule next micbeat
+-                        micBeatHandler.postDelayed(this, MICBEAT_INTERVAL_MS)
++                        synchronized(this@MentraLive) {
++                            if (micBeatRunnable !== this || !isConnected ||
++                                    !micIntentEnabled || micSuspendedForAudio) return
++                            Bridge.log("LIVE: 🎤 Sending micbeat - enabling custom audio TX")
++                            sendEnableCustomAudioTxMessage(true)
++                            micBeatCount++
++                            micBeatHandler.postDelayed(this, MICBEAT_INTERVAL_MS)
++                        }
+                     }
+                 }
+
+-        micBeatHandler.removeCallbacks(micBeatRunnable!!) // Remove any existing callbacks
+         micBeatHandler.postDelayed(micBeatRunnable!!, MICBEAT_INTERVAL_MS)
+     }
+
+     /** Stop the micbeat mechanism */
++    @Synchronized
+     private fun stopMicBeat() {
++        micBeatRunnable?.let(micBeatHandler::removeCallbacks)
++        micBeatRunnable = null
++        micRecovery.stop()
+         micOffCount++
+         Bridge.log("LIVE: 🎤 Mic ON/OFF count: " + micOnCount + " on, " + micOffCount + " off")
+         sendEnableCustomAudioTxMessage(false)
+-        if (micBeatRunnable != null) {
+-            micBeatHandler.removeCallbacks(micBeatRunnable!!)
+-        }
+         micBeatCount = 0
+     }
+
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraMicRecovery.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraMicRecovery.kt
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraMicRecovery.kt
+@@ -0,0 +1,128 @@
++package com.mentra.bluetoothsdk.sgcs
++
++/** Connection-scoped mic liveness. All times are monotonic milliseconds. */
++internal class MentraMicRecovery {
++    private var active = false
++    private var startedAt = 0L
++    private var lastAudioAt: Long? = null
++    private var vadRequested = false
++    private var vadRequestedAt = 0L
++    private var vadFallbackReason = ""
++    private var speaking: Boolean? = null
++    private var lastVadAt: Long? = null
++    private var silenceStartedAt: Long? = null
++    private var nextRecoveryAt = 0L
++    private var retryDelayMs = 30_000L
++    private var recoveries = 0L
++    private var packets = 0L
++    private var packetsDuringSilence = 0L
++    private var vadEvents = 0L
++    private var silenceDeferrals = 0L
++    private var audioResumes = 0L
++    private var lastResumeGapMs = 0L
++
++    @Synchronized fun start(now: Long) {
++        if (active) return
++        active = true
++        startedAt = now
++        lastAudioAt = null
++        clearSpeechState()
++        resetBackoff()
++    }
++
++    @Synchronized fun stop() {
++        active = false
++        lastAudioAt = null
++        clearSpeechState()
++        resetBackoff()
++    }
++
++    @Synchronized fun requestVad(enabled: Boolean, now: Long) {
++        if (vadRequested == enabled) return
++        vadRequested = enabled
++        vadRequestedAt = now
++        if (enabled) vadFallbackReason = ""
++        clearSpeechState()
++        resetBackoff()
++    }
++
++    @Synchronized fun takeVadFallback(now: Long): String? {
++        if (!active || !vadRequested) return null
++        val reason = when {
++            lastVadAt == null && now - maxOf(startedAt, vadRequestedAt) >= 15_000L -> "no_vad_events"
++            speaking == true && now - maxOf(lastAudioAt ?: startedAt, lastVadAt ?: startedAt) > 5_000L -> "speech_without_audio"
++            else -> return null
++        }
++        requestVad(false, now)
++        vadFallbackReason = reason
++        return reason
++    }
++
++    @Synchronized fun speech(value: Boolean, now: Long) {
++        if (!active || !vadRequested) return
++        vadEvents++
++        lastVadAt = now
++        if (speaking != value) {
++            if (value) resetBackoff()
++            silenceStartedAt = if (value) null else now
++        }
++        speaking = value
++    }
++
++    @Synchronized fun audio(now: Long) {
++        if (!active) return
++        packets++
++        if (speaking == false) packetsDuringSilence++
++        val gap = now - (lastAudioAt ?: startedAt)
++        if (gap >= 1_000L) {
++            audioResumes++
++            lastResumeGapMs = gap
++        }
++        lastAudioAt = now
++        resetBackoff()
++    }
++
++    @Synchronized fun shouldRecover(now: Long): Boolean {
++        if (!active || now - (lastAudioAt ?: startedAt) <= 5_000L) return false
++        // Experimental VAD is not proof of mic health. Silence gets one bounded
++        // grace, never extended by repeated off events, then ordinary probes.
++        val silenceAt = silenceStartedAt
++        if (vadRequested && speaking == false && silenceAt != null && now - silenceAt < 30_000L) {
++            silenceDeferrals++
++            return false
++        }
++        if (now < nextRecoveryAt) return false
++        recoveries++
++        nextRecoveryAt = now + retryDelayMs
++        retryDelayMs = minOf(retryDelayMs * 2L, 300_000L)
++        return true
++    }
++
++    @Synchronized fun stats(now: Long): Map<String, Any> = mapOf(
++        "active" to active,
++        "vadRequested" to vadRequested,
++        "vadFallbackReason" to vadFallbackReason,
++        "speaking" to (speaking?.toString() ?: "unknown"),
++        "lastVadAgeMs" to (lastVadAt?.let { now - it } ?: -1L),
++        "lastAudioAgeMs" to (lastAudioAt?.let { now - it } ?: -1L),
++        "nextRecoveryInMs" to maxOf(0L, nextRecoveryAt - now),
++        "recoveries" to recoveries,
++        "packets" to packets,
++        "packetsDuringReportedSilence" to packetsDuringSilence,
++        "vadEvents" to vadEvents,
++        "silenceDeferrals" to silenceDeferrals,
++        "audioResumes" to audioResumes,
++        "lastResumeGapMs" to lastResumeGapMs,
++    )
++
++    private fun clearSpeechState() {
++        speaking = null
++        lastVadAt = null
++        silenceStartedAt = null
++    }
++
++    private fun resetBackoff() {
++        nextRecoveryAt = 0L
++        retryDelayMs = 30_000L
++    }
++}

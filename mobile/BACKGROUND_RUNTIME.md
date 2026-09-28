@@ -25,6 +25,12 @@ It never prompts for Bluetooth permission from headless work. Location handoff
 failures do not block glasses recovery; the worker rechecks ownership after
 uploads and permission checks before reconnecting.
 
+Wake-command API and speech-audio requests can run before React mounts. They
+resolve the bearer token from the live AuthProvider when available, then fall
+back to the token in SecureStore. A 401 uses the live auth refresh callback or
+the existing SecureStore-backed Google sign-in refresh path and retries once;
+requests without a token fail locally instead of reaching the proxy unauthenticated.
+
 The active mask contains `location` only for enabled location with location
 services and required permissions. Starting from background also requires
 background location permission unless the existing location foreground session

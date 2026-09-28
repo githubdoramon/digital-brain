@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
+  Platform,
   StyleProp,
   StyleSheet,
   View,
@@ -14,6 +15,7 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 type BottomSheetProps = {
   visible: boolean;
   onClose: () => void;
+  onAfterClose?: () => void;
   children: React.ReactNode;
   sheetStyle?: StyleProp<ViewStyle>;
   backdropStyle?: StyleProp<ViewStyle>;
@@ -30,6 +32,7 @@ const ENTER_TRANSLATE_Y = 360;
 export function BottomSheet({
   visible,
   onClose,
+  onAfterClose,
   children,
   sheetStyle,
   backdropStyle,
@@ -43,6 +46,11 @@ export function BottomSheet({
   const translateY = useRef(new Animated.Value(ENTER_TRANSLATE_Y)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const animationCycleRef = useRef(0);
+  const onAfterCloseRef = useRef(onAfterClose);
+
+  useEffect(() => {
+    onAfterCloseRef.current = onAfterClose;
+  }, [onAfterClose]);
 
   useEffect(() => {
     animationCycleRef.current += 1;
@@ -88,6 +96,13 @@ export function BottomSheet({
       }
       if (!visible) {
         setRendered(false);
+        if (Platform.OS !== 'ios') {
+          requestAnimationFrame(() => {
+            if (animationCycleRef.current === cycle) {
+              onAfterCloseRef.current?.();
+            }
+          });
+        }
       }
     });
   }, [backdropOpacity, rendered, translateY, visible]);
@@ -97,7 +112,13 @@ export function BottomSheet({
   }
 
   return (
-    <Modal transparent visible animationType="none" onRequestClose={onClose}>
+    <Modal
+      transparent
+      visible
+      animationType="none"
+      onRequestClose={onClose}
+      onDismiss={Platform.OS === 'ios' ? onAfterClose : undefined}
+    >
       <Animated.View style={[styles.backdrop, backdropStyle, { opacity: backdropOpacity }]}>
         <Pressable
           style={StyleSheet.absoluteFill}

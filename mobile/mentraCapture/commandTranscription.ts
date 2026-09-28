@@ -114,7 +114,6 @@ export type GlassesCommandTranscriptionFailed = {
 let state: CommandSessionState = 'idle';
 let activeSession: CommandSession | null = null;
 let commandModelWarmup: Promise<void> | null = null;
-const ambientRmsHistory: number[] = [];
 
 function debug(event: string, payload?: Record<string, unknown>): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
@@ -214,8 +213,6 @@ export class AudioBandPassFilter {
     return filtered;
   }
 }
-
-const ambientFilter = new AudioBandPassFilter();
 
 function percentile(values: number[], quantile: number): number | null {
   if (values.length === 0) return null;
@@ -430,14 +427,6 @@ function whisperContextIdentity(context: unknown): {
     native_context_id: typeof nativeContext.id === 'number' ? nativeContext.id : null,
     native_context_pointer: typeof nativeContext.ptr === 'number' ? nativeContext.ptr : null,
   };
-}
-
-/** Keeps only aggregate sound levels; command audio itself is never retained here. */
-export function observeGlassesAmbientPcm(samples: Int16Array): void {
-  const level = rms(ambientFilter.process(samples));
-  if (level < MIN_AMBIENT_RMS) return;
-  ambientRmsHistory.push(level);
-  if (ambientRmsHistory.length > AMBIENT_RMS_HISTORY_SIZE) ambientRmsHistory.shift();
 }
 
 function clearMaximumTimer(session: CommandSession): void {
@@ -826,6 +815,7 @@ export function startGlassesCommandTranscription(
   onTranscribed?: (event: GlassesCommandTranscribed) => void,
   onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
   commandId?: string,
+  initialAmbientRms: number[] = [],
 ): void {
   if (state !== 'idle') {
     debug('glasses_command_start_ignored', { command_id: commandId, state });
@@ -845,12 +835,12 @@ export function startGlassesCommandTranscription(
     filteredChunks: [],
     filter: new AudioBandPassFilter(),
     samples: 0,
-    ambientRms: [...ambientRmsHistory],
+    ambientRms: [...initialAmbientRms],
     minimumRms: null,
     maximumRms: null,
     minimumRawRms: null,
     maximumRawRms: null,
-    currentThreshold: speechThreshold(ambientRmsHistory),
+    currentThreshold: speechThreshold(initialAmbientRms),
     strongSpeechChunkCount: 0,
     weakAudioChunkCount: 0,
     maximumTimer: null,

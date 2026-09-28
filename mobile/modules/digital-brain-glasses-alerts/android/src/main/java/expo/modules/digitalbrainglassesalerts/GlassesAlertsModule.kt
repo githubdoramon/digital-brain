@@ -12,6 +12,9 @@ import android.os.SystemClock
 import com.mentra.bluetoothsdk.Bridge
 import android.service.notification.NotificationListenerService
 import expo.modules.kotlin.modules.Module
+import expo.modules.kotlin.functions.Coroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.lang.ref.WeakReference
 import java.util.concurrent.ArrayBlockingQueue
@@ -20,13 +23,22 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
 
 class GlassesAlertsModule : Module() {
+  private enum class WakeInputMode { STOPPED, LISTENING_ONLY, DETECTION, COMMAND_CAPTURE }
+
   private var wakeSpotter: V8KeywordSpotter? = null
   private val wakeSpotterLock = Any()
   private val wakeExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(64))
   private var wakeSinkId: String? = null
+  private var wakeVadDetection = false
+  @Volatile private var wakeInputMode = WakeInputMode.STOPPED
+  private val commandPcmBatch = ByteArray(2_560) // 80 ms at 16 kHz mono PCM16.
+  private var commandPcmBatchSize = 0
   private var wakeIngestFailed = false
   private var wakePcmCallbacks = 0L
   private var wakePcmBytes = 0L
+  private var wakePcmCallbacksSinceSnapshot = 0L
+  private var wakePcmBytesSinceSnapshot = 0L
+  private var wakeLastPcmAtMs = 0L
   private var wakeMaxQueuedChunks = 0
   private var wakeQueueOverflows = 0L
   private var wakeCandidateEvents = 0L
@@ -55,6 +67,7 @@ class GlassesAlertsModule : Module() {
       "onSpeechPlaybackFinished",
       "onV8WakeCandidate",
       "onV8WakeError",
+      "onV8CommandPcm",
     )
 
     OnCreate {
@@ -184,48 +197,153 @@ class GlassesAlertsModule : Module() {
       GlassesImageEnhancementService.runtimeStatus(context())
     }
 
-    AsyncFunction("initializeV8WakeSpotter") {
-      synchronized(wakeSpotterLock) {
-        if (wakeSpotter == null) wakeSpotter = V8KeywordSpotter(context())
+    AsyncFunction("initializeV8WakeSpotter") Coroutine { ->
+      withContext(Dispatchers.IO) {
+        synchronized(wakeSpotterLock) {
+          if (wakeSpotter == null) wakeSpotter = V8KeywordSpotter(context())
+        }
       }
+    }
+
+    AsyncFunction("getV8WakeVadSettings") {
+      GlassesWakeVad.stats(context())
+    }
+
+    AsyncFunction("setV8WakeVadEnabled") { enabled: Boolean ->
+      synchronized(this@GlassesAlertsModule) {
+        GlassesWakeVad.save(context(), enabled)
+        GlassesWakeVad.apply(context(), wakeVadDetection)
+        GlassesWakeVad.stats(context())
+      }
+    }
+
+    AsyncFunction("setV8WakeDetectionEnabled") Coroutine { enabled: Boolean ->
+      GlassesWakeVad.saveDetectionEnabled(context(), enabled)
+      if (wakeInputMode == WakeInputMode.DETECTION || wakeInputMode == WakeInputMode.LISTENING_ONLY) {
+        synchronized(this@GlassesAlertsModule) {
+          wakeInputMode = WakeInputMode.LISTENING_ONLY
+        }
+        wakeExecutor.submit {
+          synchronized(wakeSpotterLock) { wakeSpotter?.reset() }
+          synchronized(this@GlassesAlertsModule) {
+            if (wakeSinkId != null && wakeInputMode != WakeInputMode.COMMAND_CAPTURE) {
+              wakeInputMode = if (enabled) WakeInputMode.DETECTION else WakeInputMode.LISTENING_ONLY
+              setWakeVadDetection(wakeInputMode == WakeInputMode.DETECTION)
+            }
+          }
+        }.get()
+      }
+      GlassesWakeVad.stats(context())
+    }
+
+    AsyncFunction("setV8WakeListeningEnabled") { enabled: Boolean ->
+      GlassesWakeVad.saveListeningEnabled(context(), enabled)
+      GlassesWakeVad.stats(context())
     }
 
     AsyncFunction("startV8WakeInput") {
       startNativeWakeInput()
     }
 
+    AsyncFunction("getV8WakeAudio") Coroutine { startSampleIndex: Double, endSampleIndex: Double ->
+      withContext(Dispatchers.IO) {
+        wakeExecutor.submit<ByteArray> {
+          synchronized(wakeSpotterLock) {
+            wakeSpotter?.wakeAudioRange(startSampleIndex.toLong(), endSampleIndex.toLong())
+              ?: throw IllegalStateException("V8 wake spotter is not initialized")
+          }
+        }.get()
+      }
+    }
+
+    AsyncFunction("startV8WakeCommandCapture") Coroutine { startSampleIndex: Double ->
+      withContext(Dispatchers.IO) {
+        setWakeVadDetection(false)
+        wakeExecutor.submit<Map<String, Any>> {
+          val capture = synchronized(wakeSpotterLock) {
+            wakeSpotter?.beginCommandCapture(startSampleIndex.toLong())
+              ?: throw IllegalStateException("V8 wake spotter is not initialized")
+          }
+          commandPcmBatchSize = 0
+          wakeInputMode = WakeInputMode.COMMAND_CAPTURE
+          mapOf(
+            "pcm" to capture.pcm,
+            "startSampleIndex" to capture.startSampleIndex.toDouble(),
+            "endSampleIndex" to capture.endSampleIndex.toDouble(),
+            "ambientRms" to capture.ambientRms,
+          )
+        }.get()
+      }
+    }
+
+    AsyncFunction("stopV8WakeCommandCapture") Coroutine { resumeWakeDetection: Boolean ->
+      withContext(Dispatchers.IO) {
+        wakeInputMode = WakeInputMode.STOPPED
+        wakeExecutor.submit {
+          commandPcmBatchSize = 0
+          synchronized(wakeSpotterLock) { wakeSpotter?.reset() }
+          val canResume = synchronized(this@GlassesAlertsModule) {
+            wakeSinkId != null && !wakeIngestFailed
+          }
+          if (resumeWakeDetection && canResume) {
+            wakeInputMode = if (GlassesWakeVad.detectionEnabled(context())) {
+              WakeInputMode.DETECTION
+            } else {
+              WakeInputMode.LISTENING_ONLY
+            }
+            setWakeVadDetection(wakeInputMode == WakeInputMode.DETECTION)
+          }
+        }.get()
+      }
+    }
+
     AsyncFunction("stopV8WakeInput") {
       stopNativeWakeInput()
     }
 
-    AsyncFunction("getV8WakeSpotterStats") {
-      val spotterStats = synchronized(wakeSpotterLock) { wakeSpotter?.stats() }
-      synchronized(this@GlassesAlertsModule) {
-        spotterStats?.plus(mapOf(
-          "nativeInputActive" to (wakeSinkId != null),
-          "nativeInputFailed" to wakeIngestFailed,
-          "pcmCallbacksTotal" to wakePcmCallbacks.toDouble(),
-          "pcmBytesTotal" to wakePcmBytes.toDouble(),
-          "queuedChunks" to wakeExecutor.queue.size,
-          "maxQueuedChunks" to wakeMaxQueuedChunks,
-          "queueOverflows" to wakeQueueOverflows.toDouble(),
-          "candidateEventsTotal" to wakeCandidateEvents.toDouble(),
-          "queueDelayMsTotal" to wakeQueueDelayMsTotal,
-          "queueDelayMsMax" to wakeQueueDelayMsMax,
-        ))
+    AsyncFunction("getV8WakeSpotterStats") Coroutine { ->
+      withContext(Dispatchers.IO) {
+        val spotterStats = synchronized(wakeSpotterLock) { wakeSpotter?.stats() }
+        synchronized(this@GlassesAlertsModule) {
+          val result = spotterStats?.plus(mapOf(
+            "glassesVad" to GlassesWakeVad.stats(context()),
+            "nativeInputActive" to (wakeSinkId != null),
+            "nativeInputFailed" to wakeIngestFailed,
+            "wakeInputMode" to wakeInputMode.name,
+            "pcmCallbacksTotal" to wakePcmCallbacks.toDouble(),
+            "pcmBytesTotal" to wakePcmBytes.toDouble(),
+            "pcmSamplesTotal" to (wakePcmBytes / 2.0),
+            "pcmCallbacksSinceSnapshot" to wakePcmCallbacksSinceSnapshot.toDouble(),
+            "pcmSamplesSinceSnapshot" to (wakePcmBytesSinceSnapshot / 2.0),
+            "lastPcmAtMs" to wakeLastPcmAtMs.toDouble(),
+            "queuedChunks" to wakeExecutor.queue.size,
+            "maxQueuedChunks" to wakeMaxQueuedChunks,
+            "queueOverflows" to wakeQueueOverflows.toDouble(),
+            "candidateEventsTotal" to wakeCandidateEvents.toDouble(),
+            "queueDelayMsTotal" to wakeQueueDelayMsTotal,
+            "queueDelayMsMax" to wakeQueueDelayMsMax,
+          ))
+          wakePcmCallbacksSinceSnapshot = 0L
+          wakePcmBytesSinceSnapshot = 0L
+          result
+        }
       }
     }
 
-    AsyncFunction("resetV8WakeSpotter") {
-      wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
+    AsyncFunction("resetV8WakeSpotter") Coroutine { ->
+      withContext(Dispatchers.IO) {
+        wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
+      }
     }
 
-    AsyncFunction("releaseV8WakeSpotter") {
-      stopNativeWakeInput()
-      wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
-      synchronized(wakeSpotterLock) {
-        wakeSpotter?.release()
-        wakeSpotter = null
+    AsyncFunction("releaseV8WakeSpotter") Coroutine { ->
+      withContext(Dispatchers.IO) {
+        stopNativeWakeInput()
+        wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
+        synchronized(wakeSpotterLock) {
+          wakeSpotter?.release()
+          wakeSpotter = null
+        }
       }
     }
 
@@ -354,11 +472,24 @@ class GlassesAlertsModule : Module() {
     }
   }
 
+  private fun setWakeVadDetection(detecting: Boolean) {
+    synchronized(this) {
+      wakeVadDetection = detecting
+      appContext.reactContext?.let { GlassesWakeVad.apply(it, detecting) }
+    }
+  }
+
   private fun startNativeWakeInput() {
     synchronized(this) {
       if (wakeSinkId != null) return
       check(synchronized(wakeSpotterLock) { wakeSpotter != null }) { "V8 wake spotter is not initialized" }
       wakeIngestFailed = false
+      wakeInputMode = if (GlassesWakeVad.detectionEnabled(context())) {
+        WakeInputMode.DETECTION
+      } else {
+        WakeInputMode.LISTENING_ONLY
+      }
+      setWakeVadDetection(wakeInputMode == WakeInputMode.DETECTION)
       wakeSinkId = Bridge.addEventSink { type, body ->
         if (type != "mic_pcm") return@addEventSink
         val bytes = body["pcm"] as? ByteArray ?: return@addEventSink
@@ -368,6 +499,10 @@ class GlassesAlertsModule : Module() {
           if (wakeIngestFailed || wakeSinkId == null) return@addEventSink
           wakePcmCallbacks += 1
           wakePcmBytes += bytes.size
+          wakePcmCallbacksSinceSnapshot += 1
+          wakePcmBytesSinceSnapshot += bytes.size
+          wakeLastPcmAtMs = System.currentTimeMillis()
+          if (wakeInputMode == WakeInputMode.LISTENING_ONLY) return@addEventSink
           val ownedBytes = bytes.copyOf()
           val queuedAt = SystemClock.elapsedRealtimeNanos()
           try {
@@ -378,12 +513,20 @@ class GlassesAlertsModule : Module() {
                   wakeQueueDelayMsTotal += delayMs
                   wakeQueueDelayMsMax = maxOf(wakeQueueDelayMsMax, delayMs)
                 }
-                val events = synchronized(wakeSpotterLock) {
-                  wakeSpotter?.acceptPcm16Bytes(ownedBytes) ?: emptyList()
+                val mode = wakeInputMode
+                val events = if (mode == WakeInputMode.DETECTION) {
+                  synchronized(wakeSpotterLock) {
+                    wakeSpotter?.acceptPcm16Bytes(ownedBytes) ?: emptyList()
+                  }
+                } else {
+                  emptyList()
                 }
                 for (event in events) {
                   synchronized(this@GlassesAlertsModule) { wakeCandidateEvents += 1 }
                   sendEvent("onV8WakeCandidate", event)
+                }
+                if (mode == WakeInputMode.COMMAND_CAPTURE && wakeInputMode == WakeInputMode.COMMAND_CAPTURE) {
+                  forwardCommandPcm(ownedBytes)
                 }
               } catch (error: Exception) {
                 failNativeWakeInput(error.message ?: error.javaClass.simpleName)
@@ -409,8 +552,24 @@ class GlassesAlertsModule : Module() {
 
   private fun stopNativeWakeInput() {
     synchronized(this) {
+      wakeInputMode = WakeInputMode.STOPPED
+      setWakeVadDetection(false)
       wakeSinkId?.let(Bridge::removeEventSink)
       wakeSinkId = null
+    }
+  }
+
+  private fun forwardCommandPcm(bytes: ByteArray) {
+    var sourceOffset = 0
+    while (sourceOffset < bytes.size) {
+      val count = minOf(commandPcmBatch.size - commandPcmBatchSize, bytes.size - sourceOffset)
+      bytes.copyInto(commandPcmBatch, commandPcmBatchSize, sourceOffset, sourceOffset + count)
+      commandPcmBatchSize += count
+      sourceOffset += count
+      if (commandPcmBatchSize == commandPcmBatch.size) {
+        sendEvent("onV8CommandPcm", mapOf("pcm" to commandPcmBatch.copyOf()))
+        commandPcmBatchSize = 0
+      }
     }
   }
 }

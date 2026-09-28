@@ -4,9 +4,11 @@ import { AppState } from 'react-native';
 import {
   API_BASE_URL,
   apiFetch,
+  getAuthRefreshHandler,
   getAuthRequestContext,
   getGlassesResponseTimingMetadata,
 } from '@/api/client';
+import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
 import GlassesAlertsNative from '@/modules/digital-brain-glasses-alerts/src';
 import { getClientContext } from '@/location/clientContext';
 
@@ -116,6 +118,21 @@ function errorMessage(error: unknown): string {
   return 'Glasses command failed.';
 }
 
+async function resolveGlassesCommandAuth(): Promise<{
+  token: string | null;
+  refreshToken: () => Promise<string | null>;
+  elapsedMs: number;
+}> {
+  const startedAt = monotonicNowMs();
+  const authContext = await getAuthRequestContext();
+  const token = authContext.token || (await getStoredGoogleIdToken());
+  return {
+    token,
+    refreshToken: getAuthRefreshHandler() ?? refreshStoredGoogleIdToken,
+    elapsedMs: monotonicNowMs() - startedAt,
+  };
+}
+
 export function responseOutcome(value: unknown): GlassesCommandResponse {
   if (!value || typeof value !== 'object')
     throw new Error('Glasses command returned an invalid response.');
@@ -182,6 +199,12 @@ function temporaryAudioUri(commandId: string): string {
   return `${base}glasses-command-${commandId}.audio`;
 }
 
+function getDownloadHttpStatus(error: unknown): number | null {
+  if (!(error instanceof Error)) return null;
+  const match = error.message.match(/status\s*:?\s*(\d{3})/i);
+  return match ? Number(match[1]) : null;
+}
+
 async function downloadSpeechAudio(
   command: ActiveCommand,
   response: GlassesCommandResponse,
@@ -201,26 +224,47 @@ async function downloadSpeechAudio(
   let responseContentType = '';
   let responseTimingMetadata: Record<string, unknown> = {};
   let destination: string | null = null;
+  let authRefreshMs = 0;
+  let authRetryCount = 0;
   try {
+    const auth = await resolveGlassesCommandAuth();
     let stageStartedAt = monotonicNowMs();
-    const { token } = await getAuthRequestContext();
-    authContextMs = monotonicNowMs() - stageStartedAt;
+    authContextMs = auth.elapsedMs;
+    let token = auth.token;
     if (!token) throw new Error('Authentication is unavailable for glasses audio.');
     stageStartedAt = monotonicNowMs();
     destination = temporaryAudioUri(command.commandId);
     await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
     destinationPrepareMs = monotonicNowMs() - stageStartedAt;
     stageStartedAt = monotonicNowMs();
-    const result = await FileSystem.downloadAsync(endpoint, destination, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'X-Glasses-Command-Id': command.commandId,
-      },
-    });
+    const download = (authToken: string) =>
+      FileSystem.downloadAsync(endpoint, destination!, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'X-Glasses-Command-Id': command.commandId,
+        },
+      });
+    let result: Awaited<ReturnType<typeof download>>;
+    try {
+      result = await download(token);
+      fileDownloadMs = monotonicNowMs() - stageStartedAt;
+    } catch (error) {
+      responseStatus = getDownloadHttpStatus(error);
+      if (responseStatus !== 401) throw error;
+      const refreshStartedAt = monotonicNowMs();
+      const refreshedToken = await auth.refreshToken();
+      authRefreshMs = monotonicNowMs() - refreshStartedAt;
+      if (!refreshedToken) throw error;
+      await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
+      token = refreshedToken;
+      authRetryCount = 1;
+      stageStartedAt = monotonicNowMs();
+      result = await download(token);
+      fileDownloadMs += monotonicNowMs() - stageStartedAt;
+    }
     responseStatus = result.status;
     responseContentType = result.headers?.['content-type'] ?? '';
     responseTimingMetadata = getGlassesResponseTimingMetadata(result.headers);
-    fileDownloadMs = monotonicNowMs() - stageStartedAt;
     if (!isCommandLive(command)) {
       await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
       throw new Error('Glasses command timed out before audio was ready.');
@@ -236,6 +280,8 @@ async function downloadSpeechAudio(
     debug('glasses_command_audio_download_ready', {
       command_id: command.commandId,
       auth_context_ms: Math.round(authContextMs),
+      auth_refresh_ms: Math.round(authRefreshMs),
+      auth_retry_count: authRetryCount,
       destination_prepare_ms: Math.round(destinationPrepareMs),
       file_download_ms: Math.round(fileDownloadMs),
       file_validation_ms: Math.round(fileValidationMs),
@@ -250,6 +296,8 @@ async function downloadSpeechAudio(
     debug('glasses_command_audio_download_failed', {
       command_id: command.commandId,
       auth_context_ms: Math.round(authContextMs),
+      auth_refresh_ms: Math.round(authRefreshMs),
+      auth_retry_count: authRetryCount,
       destination_prepare_ms: Math.round(destinationPrepareMs),
       file_download_ms: Math.round(fileDownloadMs),
       file_validation_ms: Math.round(fileValidationMs),
@@ -431,6 +479,17 @@ async function executeCommand(
     thread_id: session?.threadId ?? undefined,
     client_context: clientContext,
   };
+  const auth = await resolveGlassesCommandAuth();
+  if (!auth.token) {
+    debug('glasses_command_auth_missing', {
+      command_id: transcript.commandId,
+      auth_context_ms: Math.round(auth.elapsedMs),
+      app_state: AppState.currentState,
+    });
+    throw new Error('Authentication is unavailable for glasses commands.');
+  }
+  const token = auth.token;
+  const onAuthExpired = auth.refreshToken;
   debug('glasses_command_transport_started', {
     command_id: transcript.commandId,
     client_transport_started_at_ms: Date.now(),
@@ -439,6 +498,8 @@ async function executeCommand(
     client_context_ms: Math.round(clientContextMs),
     session_load_ms: Math.round(sessionLoadMs),
     local_command_check_ms: Math.round(localCommandCheckMs),
+    auth_context_ms: Math.round(auth.elapsedMs),
+    has_bearer: true,
     preparation_ms: Math.round(monotonicNowMs() - preparationStartedAt),
     app_state: AppState.currentState,
   });
@@ -446,6 +507,8 @@ async function executeCommand(
   try {
     const response = await apiFetch('/mobile/glasses/commands', {
       method: 'POST',
+      token,
+      onAuthExpired,
       headers: { 'X-Glasses-Command-Id': transcript.commandId },
       body: JSON.stringify({ ...body, client_timings: transcript.clientTimings }),
       onTiming: (phase, elapsedMs, metadata) => {

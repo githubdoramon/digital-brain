@@ -36,6 +36,13 @@ function readWav(filename) {
   return Int16Array.from({ length: audio.length / 2 }, (_, index) => audio.readInt16LE(index * 2));
 }
 
+function pcmBytes(pcm) {
+  const bytes = new Uint8Array(pcm.length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < pcm.length; index += 1) view.setInt16(index * 2, pcm[index], true);
+  return bytes;
+}
+
 async function main() {
   const ort = require(path.join(labRoot, 'node_modules', 'onnxruntime-node'));
   const { OpenWakeWordOnnxBackend } = require(path.join(mobileRoot, 'wakeWord', 'OpenWakeWordOnnxBackend.ts'));
@@ -57,8 +64,21 @@ async function main() {
   pcm.set(readWav(target.path), 4 * 16000);
 
   const candidateSample = Math.round(expected.candidates[0].time * 16000);
+  const nativePcm = pcm.subarray(0, candidateSample);
   const spotter = {
     async resetV8WakeSpotter() {},
+    async getV8WakeAudio(startSampleIndex, endSampleIndex) {
+      return pcmBytes(nativePcm.subarray(startSampleIndex, endSampleIndex));
+    },
+    async startV8WakeCommandCapture(startSampleIndex) {
+      return {
+        pcm: pcmBytes(nativePcm.subarray(startSampleIndex)),
+        startSampleIndex,
+        endSampleIndex: nativePcm.length,
+        ambientRms: [],
+      };
+    },
+    async stopV8WakeCommandCapture() {},
   };
   const backbone = await OpenWakeWordOnnxBackend.create(
     ort,
@@ -69,7 +89,6 @@ async function main() {
   const model = JSON.parse(fs.readFileSync(path.join(mobileRoot, 'assets', 'wake-word', 'hey-brain-v8.json')));
   const observed = [];
   const detector = new V8TwoStageWakeWordDetector(model, spotter, backbone, (row) => observed.push(row));
-  detector.acceptPcm16(pcm.subarray(0, candidateSample));
   await detector.acceptCandidate({ keyword: 'hey_brain', sampleIndex: candidateSample });
   assert.equal(observed.length, 1);
   assert(Math.abs(observed[0].score - expected.candidates[0].score) < 1e-4,

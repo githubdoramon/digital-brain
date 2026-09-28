@@ -51,10 +51,13 @@ import {
   setImageEnhancementEnabled,
   setImageEnhancementIntervalMinutes,
   subscribeImageEnhancementStatus,
+  setWakeDetectionProcessingEnabled,
+  setContinuousGlassesListeningEnabled,
   type MentraDevice,
   type MentraConnectionStatus,
 } from '@/mentraCapture';
 import { recordWakeDebugSnapshot } from '@/mentraCapture/wakeWord';
+import GlassesAlertsNative from '@/modules/digital-brain-glasses-alerts/src';
 import { theme } from '@/theme';
 import {
   copyToDigitalBrainStorage,
@@ -90,6 +93,11 @@ export default function GlassesCaptureScreen() {
     sizeBytes: 0,
   });
   const [wakeDebugSummary, setWakeDebugSummary] = React.useState<string | null>(null);
+  const [wakeVadEnabled, setWakeVadEnabled] = React.useState(true);
+  const [wakeVadReady, setWakeVadReady] = React.useState(false);
+  const [wakeVadSaving, setWakeVadSaving] = React.useState(false);
+  const [wakeDetectionEnabled, setWakeDetectionEnabled] = React.useState(true);
+  const [continuousListeningEnabled, setContinuousListeningEnabled] = React.useState(true);
   const [wakeCommandDebugInfo, setWakeCommandDebugInfo] = React.useState({
     exists: false,
     sizeBytes: 0,
@@ -118,6 +126,66 @@ export default function GlassesCaptureScreen() {
       setConnection({ hasSavedDevice: false, connected: false, fullyBooted: false, state: null });
     }
   }, []);
+
+  React.useEffect(() => {
+    let mounted = true;
+    if (Platform.OS === 'android' && GlassesAlertsNative) {
+      void GlassesAlertsNative.getV8WakeVadSettings()
+        .then((settings) => {
+          if (!mounted) return;
+          setWakeVadEnabled(settings.enabled);
+                  setWakeDetectionEnabled(settings.detectionEnabled);
+                  setContinuousListeningEnabled(settings.continuousListeningEnabled);
+          setWakeVadReady(true);
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const updateWakeVad = async (enabled: boolean) => {
+    if (!GlassesAlertsNative || wakeVadSaving) return;
+    setWakeVadSaving(true);
+    try {
+      const settings = await GlassesAlertsNative.setV8WakeVadEnabled(enabled);
+      setWakeVadEnabled(settings.enabled);
+      void recordWakeDebugSnapshot('vad_setting_changed').catch(() => undefined);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not update speech detection.');
+    } finally {
+      setWakeVadSaving(false);
+    }
+  };
+
+  const updateWakeDetection = async (enabled: boolean) => {
+    if (wakeVadSaving) return;
+    setWakeVadSaving(true);
+    try {
+      await setWakeDetectionProcessingEnabled(enabled);
+      setWakeDetectionEnabled(enabled);
+      void recordWakeDebugSnapshot('wake_detection_processing_setting_changed').catch(() => undefined);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not update wake-word processing.');
+    } finally {
+      setWakeVadSaving(false);
+    }
+  };
+
+  const updateContinuousListening = async (enabled: boolean) => {
+    if (wakeVadSaving) return;
+    setWakeVadSaving(true);
+    try {
+      await setContinuousGlassesListeningEnabled(enabled);
+      setContinuousListeningEnabled(enabled);
+      void recordWakeDebugSnapshot('continuous_glasses_listening_setting_changed').catch(() => undefined);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not update glasses listening.');
+    } finally {
+      setWakeVadSaving(false);
+    }
+  };
 
   React.useEffect(() => {
     const unsubscribe = subscribeCaptureSync(setStatus);
@@ -828,6 +896,65 @@ export default function GlassesCaptureScreen() {
                 <Text style={styles.sectionSubtitle}>Only needed when something goes wrong</Text>
               </View>
             </View>
+            {Platform.OS === 'android' && GlassesAlertsNative && (
+              <>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionCopy}>
+                    <Text style={styles.cardTitle}>Wake-word processing</Text>
+                    <Text style={styles.sectionSubtitle}>Run V8 detection on incoming glasses audio</Text>
+                  </View>
+                  <Switch
+                    accessibilityLabel="Wake-word processing"
+                    value={wakeDetectionEnabled}
+                    disabled={!wakeVadReady || wakeVadSaving}
+                    onValueChange={(enabled) => void updateWakeDetection(enabled)}
+                    trackColor={{ false: '#d8d1ca', true: theme.colors.paleTeal }}
+                    thumbColor={wakeDetectionEnabled ? theme.colors.teal : '#fff'}
+                  />
+                </View>
+                <Text style={styles.helperText}>
+                  Off keeps the glasses microphone stream active but skips wake detection. Wake
+                  commands will not trigger.
+                </Text>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionCopy}>
+                    <Text style={styles.cardTitle}>Continuous glasses listening</Text>
+                    <Text style={styles.sectionSubtitle}>Keep the glasses microphone active while idle</Text>
+                  </View>
+                  <Switch
+                    accessibilityLabel="Continuous glasses listening"
+                    value={continuousListeningEnabled}
+                    disabled={!wakeVadReady || wakeVadSaving}
+                    onValueChange={(enabled) => void updateContinuousListening(enabled)}
+                    trackColor={{ false: '#d8d1ca', true: theme.colors.paleTeal }}
+                    thumbColor={continuousListeningEnabled ? theme.colors.teal : '#fff'}
+                  />
+                </View>
+                <Text style={styles.helperText}>
+                  Off stops the glasses microphone listener and wake runtime. Wake commands are
+                  unavailable until you turn it back on.
+                </Text>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionCopy}>
+                    <Text style={styles.cardTitle}>Glasses speech detection</Text>
+                    <Text style={styles.sectionSubtitle}>Experimental battery saving</Text>
+                  </View>
+                  <Switch
+                    accessibilityLabel="Glasses speech detection"
+                    value={wakeVadEnabled}
+                    disabled={!wakeVadReady || wakeVadSaving}
+                    onValueChange={(enabled) => void updateWakeVad(enabled)}
+                    trackColor={{ false: '#d8d1ca', true: theme.colors.paleTeal }}
+                    thumbColor={wakeVadEnabled ? theme.colors.teal : '#fff'}
+                  />
+                </View>
+                <Text style={styles.helperText}>
+                  Asks Mentra Live to reduce audio during silence while waiting for a wake phrase.
+                  Turn this off if wake phrases are missed or clipped. Commands and recordings
+                  request continuous audio. Battery savings depend on the glasses firmware.
+                </Text>
+              </>
+            )}
             <Text style={styles.helperText}>
               Export a redacted support log when investigating a connection or sync problem.
             </Text>

@@ -41,6 +41,11 @@ it through transcription, mobile transport, proxy/backend requests, audio
 download, and playback. Mobile exports must include allow-listed proxy and
 backend response timing headers; the proxy logs downstream body completion,
 failure, or cancellation under that same ID.
+Mobile command and speech-download requests use the live AuthProvider token
+when available, then fall back to the SecureStore token for headless wake work
+that starts before React mounts. On HTTP 401, use the live refresh callback or
+the existing SecureStore-backed Google refresh path; never send an unauthenticated
+request.
 Each backend worker reports safe TTS configuration during application startup
 without contacting or warming the remote service. Reuse a pooled HTTP client
 and close it at shutdown. Keep per-command TTS provider, model, voice, HTTP
@@ -58,7 +63,9 @@ focus; a player completion event is not proof of audible output.
 
 **Mobile keyboard-input convention**: Every mobile screen with a keyboard-editable input must be keyboard-aware. Wrap its scrollable content in a flex `KeyboardAvoidingView` (`padding` on iOS and `height` on Android), keep Android `softwareKeyboardLayoutMode: "resize"`, and use a `ScrollView`/`FlatList` that adjusts iOS keyboard insets, preserves taps on in-form controls, and dismisses on drag. Its bottom content inset must keep the final field and any fixed action visible above the keyboard and safe-area inset.
 
-**Mobile voice input convention**: Chat dictation uses on-device Whisper in `mobile` with a long-press send gesture, swipe-up lock, and transcript insertion into the composer (never auto-send). This requires a native Expo dev build / prebuild workflow; do not assume it works in Expo Go.
+**Mobile native picker convention**: When launching the system camera or photo library from a custom native modal or bottom sheet, wait for the overlay to finish closing before resolving the source choice and presenting the system picker.
+
+**Mobile voice input convention**: Chat dictation uses on-device Whisper in `mobile` with a long-press send gesture, swipe-up lock, and transcript insertion into the composer (never auto-send). If Whisper reports a missing native context, recreate the shared context and retry the same recording once. This requires a native Expo dev build / prebuild workflow; do not assume it works in Expo Go.
 
 **Mobile background task convention**: Expo background task definitions must be imported from `mobile/index.js` before `expo-router/entry`, so headless/background launches register the tasks even when React navigation has not mounted.
 
@@ -700,7 +707,8 @@ for keyword candidates. Preserve the verifier's real preceding PCM context,
 bounded sequential ingress, and resets of both stages on reconnect/discontinuity.
 The app-owned `DigitalBrainRuntimeService` is the sole foreground notification owner for location, the Mentra connection, automatic capture, wake listening, glasses audio recording and call alerts. Each feature owns a separate claim; releasing one must not stop another. Keep location handoff/upload failures isolated from glasses recovery and recheck current ownership after asynchronous work before reconnecting. Persist only location, desired glasses connection and capture ownership, and restore transient recording/call/wake state from their real coordinators after restart. Enable the `location` type only for requested, permitted location work; glasses use `connectedDevice` and audio uses `mediaPlayback`. This service consumes glasses-delivered PCM and never acquires the phone microphone, so it does not declare or promote the while-in-use `microphone` type or use `dataSync` as an always-on fallback. Preserve permission checks and rejection diagnostics around foreground location startup. Keep SDK integration in the versioned patch and retain the fixed host adapter through R8 consumer rules.
 Manual audio recording and any glasses video recording have exclusive mic
-ownership: pause/reset the wake listener first and resume only after completion.
+ownership: stop/reset native wake PCM ingestion first and resume only after
+completion.
 For manual audio stop, shut down native capture before disabling the mic,
 release the UI after native capture stops, and keep SAF indexing and wake-word
 reactivation off the user-facing busy path; coalesce duplicate native
@@ -719,20 +727,45 @@ must be tested before documenting a specific internal/external light.
 Diagnostic clears must immediately switch to a fresh persisted log generation,
 so pending background writers can finish only in the prior file. Retain a fresh
 clear marker so an exported JSONL can prove where the new diagnostic window began.
+The V8 wake path keeps its continuous PCM ring, ambient filter/history, and
+wake PCM level counters in the Android native module. JavaScript receives only
+the four-second candidate range for verification; after acceptance, native
+code returns the 1.8-second pre-roll plus inference-time tail and forwards
+command PCM in 80 ms batches. Do not reintroduce a continuous JS `mic_pcm`
+subscription while idle. Keep the persisted Android Troubleshooting controls
+for wake-word processing and continuous glasses listening independent: turning
+processing off must retain PCM callbacks/counters while skipping packet copies,
+decode and verification; turning continuous listening off must stop the mic
+listener and wake runtime. Include both settings and native input mode in
+diagnostics so device freeze comparisons can distinguish these conditions.
+Mentra Live micbeat callbacks must be cancelled before replacement and must
+check ownership before sending/rescheduling. Its missing-audio watchdog uses
+monotonic time with 30-second to five-minute retry backoff; actual audio resets
+it. Glasses speech detection is a default-on Android experiment, with an explicit
+saved off choice respected:
+request BES VAD only during idle wake listening, request continuous audio for
+command/recording handoff, preserve every delivered PCM chunk, and never infer
+healthy silence from the requested setting alone. Speech/silence state is
+connection-scoped; silence grace is bounded to 30 seconds and missing VAD or
+speech without audio falls back to continuous audio. Export VAD/packet/recovery
+counters in wake snapshots. Firmware onset retention and battery savings need
+device evidence before claiming reliable wake accuracy or power savings. Keep blocking wake-model calls and
+worker waits on Dispatchers.IO, outside Expo's shared native function queue.
+See mobile/WAKE_WORD_V8.md for the experiment and diagnostics contract.
 The command-transcription POC begins immediately after a confirmed wake and
-retains the detector's 1.8-second pre-roll plus queued post-detection PCM in
-the bounded in-memory command window. Its speech gate ignores the first 350 ms
-of wake-word tail but retains those samples for Whisper, so the pause after the
-wake phrase cannot endpoint a command before it begins. It preserves an
-initial 3-second command window after wake before endpointing may begin, then
-endpoints after 1 second of sustained silence (or eight seconds total).
+retains the native pre-roll snapshot plus queued command batches in the bounded
+in-memory command window. Its speech gate ignores the first 350 ms of wake-word
+tail but retains those samples for Whisper, so the pause after the wake phrase
+cannot endpoint a command before it begins. It preserves an initial 3-second
+command window after wake before endpointing may begin, then endpoints after
+1 second of sustained silence (or eight seconds total).
 Run command PCM through a stateful 120 Hz–7 kHz band-pass copy for speech
-gating and Whisper while retaining the original PCM for debug WAVs. Use a
-permissive rolling ambient baseline on the filtered signal only to begin
-speech, and require a higher sustained continuation level (at least 0.075 RMS
-and 1.6× the measured noise floor) to prevent incidental room noise from
-keeping the session open; export raw/filtered levels, both thresholds, and
-their chunk counts.
+gating and Whisper while retaining the original PCM for debug WAVs. The ambient
+baseline is filtered and measured in native code before a wake; command-time
+speech gating still updates its rolling baseline from the filtered signal.
+Require a higher sustained continuation level (at least 0.075 RMS and 1.6× the
+measured noise floor) to prevent incidental room noise from keeping the session
+open; export raw/filtered levels, thresholds, and chunk counts.
 For this developer-only debugging POC, retain the exact post-wake command PCM
 as bounded app-private 16 kHz WAV clips (latest 40) and export them only via
 the dedicated focused wake-command investigation action. Its JSONL must be

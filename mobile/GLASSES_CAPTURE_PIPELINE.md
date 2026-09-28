@@ -222,12 +222,15 @@ after a saved Mentra Live connection becomes both connected and fully booted.
 The runtime is initialized from `mobile/index.js` before Expo Router. V8 runs a
 small native Sherpa keyword spotter continuously and invokes the packaged
 openWakeWord ONNX embedding models plus personalized classifier only when
-Sherpa proposes “hey brain” or “okay brain”. The verifier uses the preceding
-four seconds of untouched PCM and a frozen threshold; a rejected proposal does
-not acknowledge or start a command. Mentra delivers 16 kHz, mono, signed
-PCM16; the runtime serializes those chunks through a bounded queue and resets
-both stages after reconnects, errors, or a real audio-source handoff. See
-[WAKE_WORD_V8.md](WAKE_WORD_V8.md) for assets, tests, and device-test limits.
+Sherpa proposes “hey brain” or “okay brain”. Native code keeps an eight-second
+PCM history and ambient level meter; idle PCM does not cross to the JS event
+listener. The verifier requests only the candidate's aligned four-second range.
+After confirmation, native code atomically returns the 1.8-second pre-roll and
+audio accumulated during verification, then forwards command audio in 80 ms
+batches. A rejected proposal does not acknowledge or start a command. Mentra
+delivers 16 kHz mono PCM through a bounded native queue, reset on reconnects,
+errors, or real audio-source handoff. See [WAKE_WORD_V8.md](WAKE_WORD_V8.md)
+for assets, tests, and device-test limits.
 
 The app-owned foreground service shares one notification across location,
 Mentra connection, automatic capture, wake listening, recording and call alerts.
@@ -246,8 +249,8 @@ are never replayed. Force-stop and OEM termination still require device testing
 and may require reopening the app. See [BACKGROUND_RUNTIME.md](BACKGROUND_RUNTIME.md).
 
 Glasses audio recording and video recording own the microphone. The wake
-runtime releases its PCM subscription before either starts, resets its model
-state, and resumes only after the owner reports completion. A confirmed wake
+runtime stops its native PCM sink before either starts, resets its model state,
+and resumes only after the owner reports completion. A confirmed wake
 dispatches one short blue RGB LED blink through the SDK's non-blocking native
 path; diagnostics record the JS-to-native dispatch time rather than waiting
 for the glasses' optional response. Firmware exposes no separate target for an
@@ -264,12 +267,14 @@ cleared, so pending writers cannot restore an old trace to the new export.
 Each exported file includes a timestamp in its filename so a newly exported
 file cannot be mistaken for an earlier one.
 
-For the command-transcription POC, a confirmed wake immediately begins its
-bounded in-memory command stream and retains both the detector's 1.8-second
-pre-roll and any queued post-detection PCM. The speech-energy gate ignores the
-first 350 ms of wake-word tail when deciding whether speech has started, while
-still retaining that audio for Whisper. This prevents the pause after “hey
-brain” from ending a command before it begins.
+For the command-transcription POC, a confirmed wake atomically snapshots the
+native eight-second PCM ring from the detector's 1.8-second pre-roll through the
+audio accumulated during candidate verification. Native then forwards command
+PCM to the in-memory JS session in 80 ms batches. Its speech-energy gate ignores
+the first 350 ms of wake-word tail when deciding whether speech has started,
+while still retaining that audio for Whisper. The pre-wake ambient baseline is
+filtered and measured in native code; the command session seeds its threshold
+from that native history.
 It runs a stateful 120 Hz–7 kHz band-pass copy of each command chunk before
 voice activity detection and Whisper, removing handling rumble and high-
 frequency hiss while retaining the original PCM unchanged for investigation.
@@ -287,7 +292,10 @@ the command trace records the runtime-selected accelerator and the native
 reason when GPU is unavailable. If the native bridge reports that its Whisper
 context disappeared, the command path records the invalidation, recreates one
 context, and retries the same PCM exactly once; it records both native context
-identities and the recovery result. The retained PCM is never trimmed to remove the wake phrase:
+identities and the recovery result. Chat dictation uses this same cached
+Whisper context; if file transcription reports a missing native context, it
+recreates the handle and retries that recording once. The retained PCM is never
+trimmed to remove the wake phrase:
 the detector records its source-audio decision and pre-roll time bounds, but a
 decision is not an exact phonetic boundary and cannot safely crop an immediate
 command. After transcription, the POC uses the wake model label's final word
@@ -431,6 +439,19 @@ Epoch timestamps are useful for correlation, while durations are authoritative
 when host clocks are not synchronized. Wake inference performance is summarized
 in each ten-second diagnostic snapshot so logging does not rewrite the full file
 for every microphone chunk.
+
+Android's **Glasses speech detection** troubleshooting setting requests
+Mentra Live BES VAD only during idle wake listening and continuous audio during
+command capture or microphone handoff. It defaults on and respects an explicit
+saved off choice. Firmware silence suppression and wake-phrase onset retention
+still require device measurement. Delivered PCM
+is never filtered by a speech-status event. The native mic watchdog uses bounded
+silence grace and retry backoff, clears state on pause/disconnect, and falls back
+to continuous audio when VAD events are absent or speech has no audio. Wake
+snapshots include its request, speech, packet and recovery counters. Micbeat
+callbacks have single ownership, and blocking model/worker calls run outside
+Expo's shared native function queue. See `WAKE_WORD_V8.md` for timing and the
+production-device evaluation procedure.
 
 The Android `DigitalBrainGlassesAlerts` module owns file-based speech playback,
 audio focus, explicit preferred-device routing, completion/error events, and

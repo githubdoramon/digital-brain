@@ -201,26 +201,39 @@ export function isMissingNativeWhisperContextError(error: unknown): boolean {
         : error && typeof error === 'object' && 'message' in error
           ? String(error.message)
           : '';
-  return /context not found/iu.test(message);
+  return /(?:context not found|no context)/iu.test(message);
 }
 
 export async function transcribeAudioFile(
   fileUri: string,
   onStatus?: (status: LocalTranscriptionStatus) => void,
 ): Promise<LocalTranscriptionSuccess> {
-  const whisperContext = await getWhisperContext(onStatus);
+  let whisperContext = await getWhisperContext(onStatus);
   onStatus?.({ stage: 'transcribing', progress: 0 });
 
   try {
     const normalizedFilePath = normalizeWhisperFilePath(fileUri);
-    const { promise } = whisperContext.transcribe(normalizedFilePath, {
-      language: 'en',
-      maxThreads: 4,
-      onProgress: (progress: number) => {
-        onStatus?.({ stage: 'transcribing', progress });
-      },
-    });
-    const result = await promise;
+    const transcribe = () =>
+      whisperContext.transcribe(normalizedFilePath, {
+        language: 'en',
+        maxThreads: 4,
+        onProgress: (progress: number) => {
+          onStatus?.({ stage: 'transcribing', progress });
+        },
+      }).promise;
+
+    let result: Awaited<ReturnType<typeof transcribe>>;
+    try {
+      result = await transcribe();
+    } catch (error) {
+      if (!isMissingNativeWhisperContextError(error)) {
+        throw error;
+      }
+
+      invalidateEnglishWhisperContext();
+      whisperContext = await getWhisperContext(onStatus);
+      result = await transcribe();
+    }
     const text = normalizeTranscriptText(result.result);
 
     await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
@@ -262,9 +275,11 @@ export async function transcribeAudioFile(
 
     throw new LocalTranscriptionError(
       'transcription_failed',
-      error instanceof Error
-        ? error.message
-        : 'The on-device transcription failed before a result was returned.',
+      isMissingNativeWhisperContextError(error)
+        ? 'Voice transcription lost its on-device context. Please record again.'
+        : error instanceof Error
+          ? error.message
+          : 'The on-device transcription failed before a result was returned.',
     );
   }
 }

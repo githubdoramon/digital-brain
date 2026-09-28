@@ -1,15 +1,24 @@
 import type { SpeechEmbeddingBackend } from './OpenWakeWordOnnxBackend';
-import type { DetectionEvent, EmbeddingWakeWordModel } from './types';
+import type { EmbeddingWakeWordModel } from './types';
 
 const SAMPLE_RATE = 16_000;
-const HISTORY_SAMPLES = 8 * SAMPLE_RATE;
 const VERIFIER_THRESHOLD = 0.7614435404638955;
 
 export type V8Keyword = 'hey_brain' | 'okay_brain';
 export type V8Candidate = { keyword: V8Keyword; sampleIndex: number };
 
+export type V8NativeCommandCapture = {
+  pcm: Uint8Array;
+  startSampleIndex: number;
+  endSampleIndex: number;
+  ambientRms: number[];
+};
+
 export interface V8NativeSpotter {
   resetV8WakeSpotter(): Promise<void>;
+  getV8WakeAudio(startSampleIndex: number, endSampleIndex: number): Promise<Uint8Array>;
+  startV8WakeCommandCapture(startSampleIndex: number): Promise<V8NativeCommandCapture>;
+  stopV8WakeCommandCapture(resumeWakeDetection: boolean): Promise<void>;
 }
 
 export type V8CandidateEvaluation = {
@@ -20,10 +29,33 @@ export type V8CandidateEvaluation = {
   passed: boolean;
 };
 
-/** Native Sherpa runs continuously; JS retains PCM only for candidate verification. */
+export type V8DetectionEvent = {
+  modelName: string;
+  score: number;
+  threshold: number;
+  audioTimeMs: number;
+  preRollStartAudioTimeMs: number;
+  preRollEndAudioTimeMs: number;
+  preRollStartSampleIndex: number;
+};
+
+function pcm16FromLittleEndianBytes(bytes: Uint8Array): Int16Array {
+  if (bytes.byteLength % Int16Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error('Native wake audio is not aligned to PCM16 samples');
+  }
+  if (bytes.byteOffset % Int16Array.BYTES_PER_ELEMENT === 0) {
+    return new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const samples = new Int16Array(bytes.byteLength / 2);
+  for (let index = 0; index < samples.length; index += 1) {
+    samples[index] = view.getInt16(index * 2, true);
+  }
+  return samples;
+}
+
+/** Native Sherpa owns the continuous PCM ring; JS only reads audio for a candidate. */
 export class V8TwoStageWakeWordDetector {
-  private readonly pcmRing = new Int16Array(HISTORY_SAMPLES);
-  private processedSamples = 0;
   private verificationQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -52,26 +84,23 @@ export class V8TwoStageWakeWordDetector {
     }
   }
 
-  get streamSamples(): number {
-    return this.processedSamples;
-  }
-
-  acceptPcm16(chunk: Int16Array): void {
-    this.appendPcm(chunk);
-  }
-
-  acceptCandidate(candidate: V8Candidate): Promise<DetectionEvent | null> {
+  acceptCandidate(candidate: V8Candidate): Promise<V8DetectionEvent | null> {
     const result = this.verificationQueue.then(() => this.verifyCandidate(candidate));
     this.verificationQueue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  startCommandCapture(candidate: V8Candidate): Promise<V8NativeCommandCapture> {
+    const preRollSamples = Math.round((this.model.detectorConfig.preRollMs * SAMPLE_RATE) / 1_000);
+    return this.spotter.startV8WakeCommandCapture(
+      Math.max(0, candidate.sampleIndex - preRollSamples),
+    );
   }
 
   reset(): Promise<void> {
     const result = this.verificationQueue.then(async () => {
       await this.spotter.resetV8WakeSpotter();
       this.verifierBackend.reset();
-      this.processedSamples = 0;
-      this.pcmRing.fill(0);
     });
     this.verificationQueue = result.then(
       () => undefined,
@@ -80,9 +109,9 @@ export class V8TwoStageWakeWordDetector {
     return result;
   }
 
-  private async verifyCandidate(candidate: V8Candidate): Promise<DetectionEvent | null> {
-    if (candidate.sampleIndex > this.processedSamples || candidate.sampleIndex < 0) {
-      throw new Error('V8 candidate is outside JS audio history');
+  private async verifyCandidate(candidate: V8Candidate): Promise<V8DetectionEvent | null> {
+    if (!Number.isSafeInteger(candidate.sampleIndex) || candidate.sampleIndex < 0) {
+      throw new Error('V8 candidate has an invalid sample index');
     }
     const score = await this.scoreCandidate(candidate.sampleIndex);
     const passed = score !== null && score >= VERIFIER_THRESHOLD;
@@ -95,35 +124,16 @@ export class V8TwoStageWakeWordDetector {
     });
     if (!passed || score === null) return null;
     const preRollSamples = Math.round((this.model.detectorConfig.preRollMs * SAMPLE_RATE) / 1_000);
-    const preRollStart = Math.max(0, candidate.sampleIndex - preRollSamples);
     return {
       modelName: candidate.keyword.replace('_', '-'),
       score,
       threshold: VERIFIER_THRESHOLD,
       audioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
-      preRollStartAudioTimeMs: (preRollStart * 1_000) / SAMPLE_RATE,
+      preRollStartAudioTimeMs:
+        (Math.max(0, candidate.sampleIndex - preRollSamples) * 1_000) / SAMPLE_RATE,
       preRollEndAudioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
-      preRollPcm16: this.history(preRollStart, candidate.sampleIndex),
-      postDetectionPcm16: this.history(candidate.sampleIndex, this.processedSamples),
+      preRollStartSampleIndex: Math.max(0, candidate.sampleIndex - preRollSamples),
     };
-  }
-
-  private appendPcm(chunk: Int16Array): void {
-    for (const sample of chunk) {
-      this.pcmRing[this.processedSamples % HISTORY_SAMPLES] = sample;
-      this.processedSamples += 1;
-    }
-  }
-
-  private history(start: number, end: number): Int16Array {
-    if (start < Math.max(0, this.processedSamples - HISTORY_SAMPLES) || end > this.processedSamples) {
-      throw new Error('V8 candidate history fell out of the rolling PCM buffer');
-    }
-    const output = new Int16Array(end - start);
-    for (let index = start; index < end; index += 1) {
-      output[index - start] = this.pcmRing[index % HISTORY_SAMPLES];
-    }
-    return output;
   }
 
   private async scoreCandidate(eventSamples: number): Promise<number | null> {
@@ -131,7 +141,8 @@ export class V8TwoStageWakeWordDetector {
     // Same phase alignment as training.evaluate_two_stage.candidate_score.
     const first = Math.max(0, Math.floor((eventSamples - 4 * SAMPLE_RATE) / hop) * hop);
     this.verifierBackend.reset();
-    const embeddings = await this.verifierBackend.acceptPcm16(this.history(first, eventSamples));
+    const bytes = await this.spotter.getV8WakeAudio(first, eventSamples);
+    const embeddings = await this.verifierBackend.acceptPcm16(pcm16FromLittleEndianBytes(bytes));
     const { audioConfig, classifier } = this.model;
     if (embeddings.length < audioConfig.embeddingFrames) return null;
     const window = embeddings.slice(-audioConfig.embeddingFrames);

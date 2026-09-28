@@ -55,6 +55,21 @@ export type AppRuntimeStatus = {
   foregroundTypes: number;
 };
 
+export type V8WakeCommandCapture = {
+  pcm: Uint8Array;
+  startSampleIndex: number;
+  endSampleIndex: number;
+  ambientRms: number[];
+};
+
+export type WakeVadSettings = {
+  enabled: boolean;
+  detectionEnabled: boolean;
+  continuousListeningEnabled: boolean;
+  supportedDevice: boolean;
+  micRecovery: Record<string, unknown>;
+};
+
 export type RuntimeLocationSample = {
   id: string;
   latitude: number;
@@ -68,6 +83,7 @@ type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
   onV8WakeCandidate(event: { keyword: 'hey_brain' | 'okay_brain'; sampleIndex: number }): void;
   onV8WakeError(event: { message: string }): void;
+  onV8CommandPcm(event: { pcm: Uint8Array }): void;
   onSpeechPlaybackStarted(event: SpeechPlaybackTelemetry & {
     commandId: string;
   }): void;
@@ -130,7 +146,14 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   stopGlassesWakeRuntime(): Promise<void>;
   getGlassesRuntimeForegroundServiceStatus(): Promise<GlassesRuntimeForegroundServiceStatus>;
   initializeV8WakeSpotter(): Promise<void>;
+  getV8WakeVadSettings(): Promise<WakeVadSettings>;
+  setV8WakeVadEnabled(enabled: boolean): Promise<WakeVadSettings>;
+  setV8WakeDetectionEnabled(enabled: boolean): Promise<WakeVadSettings>;
+  setV8WakeListeningEnabled(enabled: boolean): Promise<WakeVadSettings>;
   startV8WakeInput(): Promise<void>;
+  getV8WakeAudio(startSampleIndex: number, endSampleIndex: number): Promise<Uint8Array>;
+  startV8WakeCommandCapture(startSampleIndex: number): Promise<V8WakeCommandCapture>;
+  stopV8WakeCommandCapture(resumeWakeDetection: boolean): Promise<void>;
   stopV8WakeInput(): Promise<void>;
   getV8WakeSpotterStats(): Promise<{
     streamSamples: number;
@@ -141,9 +164,18 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
     rejectResultsTotal: number;
     lastKeywordResult: string;
     nativeInputActive: boolean;
+    glassesVad: WakeVadSettings;
     nativeInputFailed: boolean;
     pcmCallbacksTotal: number;
     pcmBytesTotal: number;
+    pcmSamplesTotal: number;
+    pcmCallbacksSinceSnapshot: number;
+    pcmSamplesSinceSnapshot: number;
+    wakeDetectorSamplesSinceSnapshot: number;
+    wakeDetectorRmsSinceSnapshot: number;
+    wakeDetectorPeakSinceSnapshot: number;
+    ambientRmsCount: number;
+    lastPcmAtMs: number;
     queuedChunks: number;
     maxQueuedChunks: number;
     queueOverflows: number;

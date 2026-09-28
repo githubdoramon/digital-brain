@@ -12,6 +12,7 @@ type Props = {
   visible: boolean;
   onSelect: (source: ImagePickSource) => void;
   onClose: () => void;
+  onAfterClose: () => void;
 };
 
 const OPTIONS: {
@@ -34,9 +35,14 @@ const OPTIONS: {
   },
 ];
 
-export function ImageSourceSheet({ visible, onSelect, onClose }: Props) {
+export function ImageSourceSheet({ visible, onSelect, onClose, onAfterClose }: Props) {
   return (
-    <BottomSheet visible={visible} onClose={onClose} baseBottomPadding={20}>
+    <BottomSheet
+      visible={visible}
+      onClose={onClose}
+      onAfterClose={onAfterClose}
+      baseBottomPadding={20}
+    >
       <Text style={styles.title}>Add photo</Text>
       <Text style={styles.subtitle}>Choose where to get the picture from.</Text>
 

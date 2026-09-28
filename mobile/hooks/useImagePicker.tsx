@@ -10,11 +10,23 @@ function useImageSourceSheet(): {
 } {
   const [visible, setVisible] = React.useState(false);
   const resolverRef = React.useRef<((value: ImagePickSource | null) => void) | null>(null);
+  const pendingSourceRef = React.useRef<ImagePickSource | null>(null);
 
   const closeWithValue = React.useCallback((value: ImagePickSource | null) => {
-    resolverRef.current?.(value);
-    resolverRef.current = null;
+    pendingSourceRef.current = value;
     setVisible(false);
+  }, []);
+
+  const resolveAfterClose = React.useCallback(() => {
+    const resolve = resolverRef.current;
+    if (!resolve) {
+      return;
+    }
+
+    resolverRef.current = null;
+    const source = pendingSourceRef.current;
+    pendingSourceRef.current = null;
+    resolve(source);
   }, []);
 
   React.useEffect(() => {
@@ -27,6 +39,7 @@ function useImageSourceSheet(): {
   const chooseSource = React.useCallback(() => {
     return new Promise<ImagePickSource | null>((resolve) => {
       resolverRef.current = resolve;
+      pendingSourceRef.current = null;
       setVisible(true);
     });
   }, []);
@@ -40,6 +53,7 @@ function useImageSourceSheet(): {
       onClose={() => {
         closeWithValue(null);
       }}
+      onAfterClose={resolveAfterClose}
     />
   );
 
