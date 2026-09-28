@@ -529,6 +529,7 @@ def _post_chat_completion_stream(
     accumulated_content = ""
     accumulated_reasoning = ""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
+    accumulated_usage: dict[str, Any] | None = None
 
     logger.info(
         "[llm_helpers] LLM outbound request (stream): %s",
@@ -567,6 +568,10 @@ def _post_chat_completion_stream(
             chunk = json.loads(line)
         except json.JSONDecodeError:
             continue
+
+        chunk_usage = chunk.get("usage")
+        if isinstance(chunk_usage, dict):
+            accumulated_usage = chunk_usage
 
         delta = chunk.get("choices", [{}])[0].get("delta", {})
         accumulated_content += str(delta.get("content", "") or "")
@@ -613,6 +618,8 @@ def _post_chat_completion_stream(
             }
         ]
     }
+    if accumulated_usage is not None:
+        content["usage"] = accumulated_usage
     logger.info("[llm_helpers] LLM response (stream final sync): %s", json.dumps(content, ensure_ascii=False))
     return content
 

@@ -27,6 +27,8 @@ services:
       db:
         condition: service_healthy
     env_file:
+      - path: ${MIRADOR_ENV_FILE:-${HOME}/.config/digital-brain/mirador.env}
+        required: false
       - ./backend/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"

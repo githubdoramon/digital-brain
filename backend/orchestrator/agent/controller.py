@@ -35,7 +35,7 @@ from llm_config import get_smart_model
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
-from observability.mirador import traced_agent_run
+from observability.mirador import record_agent_run_metrics, traced_agent_run
 from search_normalization import normalize_search_text
 from tools.action_enums import GetEventsAction
 
@@ -2094,6 +2094,15 @@ class AgentController:
         message = self.limit_checker.format_stop_message(state, violation)
         duration_ms = (perf_counter() - total_start) * 1000
 
+        record_agent_run_metrics(
+            profile=state.conversational_profile,
+            outcome="limit",
+            duration_seconds=duration_ms / 1000,
+            rounds=state.step_count,
+            tool_calls=state.tool_calls_count,
+            repairs=state.repair_count,
+        )
+
         # Trace limit violation
         trace.trace_limit_violation(
             violation.limit_type.value,
@@ -2185,6 +2194,15 @@ class AgentController:
                 {"tool_calls": state.tool_calls_count, "reason": reason},
             )
             answer = self._format_unable_to_complete_message(reason)
+
+        record_agent_run_metrics(
+            profile=state.conversational_profile,
+            outcome="completed" if has_content else "unable_to_complete",
+            duration_seconds=duration_ms / 1000,
+            rounds=state.step_count,
+            tool_calls=state.tool_calls_count,
+            repairs=state.repair_count,
+        )
 
         # Log completion
         self.logger.complete_run(run_id, success=True, final_answer=answer)
