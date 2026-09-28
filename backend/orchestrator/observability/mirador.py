@@ -24,6 +24,8 @@ _agent_run_duration: Any | None = None
 _agent_run_rounds: Any | None = None
 _agent_run_tool_calls: Any | None = None
 _agent_run_repairs: Any | None = None
+_tool_call_count: Any | None = None
+_tool_call_duration: Any | None = None
 
 
 def configure_mirador() -> None:
@@ -32,6 +34,7 @@ def configure_mirador() -> None:
     global _llm_request_count, _llm_duration, _llm_token_usage
     global _agent_run_count, _agent_run_duration, _agent_run_rounds
     global _agent_run_tool_calls, _agent_run_repairs
+    global _tool_call_count, _tool_call_duration
     if _configured:
         return
 
@@ -126,6 +129,16 @@ def configure_mirador() -> None:
             "digital_brain.agent.run.repairs",
             unit="{attempt}",
             description="Validation repair attempts used by an agent run",
+        )
+        _tool_call_count = meter.create_counter(
+            "digital_brain.tool.calls",
+            unit="{call}",
+            description="Individual agent tool calls by tool and outcome",
+        )
+        _tool_call_duration = meter.create_histogram(
+            "digital_brain.tool.duration",
+            unit="s",
+            description="Duration of an individual agent tool call",
         )
         _meter_provider = meter_provider
         logger.info(
@@ -272,6 +285,28 @@ def record_agent_run_metrics(
         logger.debug("Could not record agent-run metrics", exc_info=True)
 
 
+def _record_tool_call_metrics(
+    *,
+    tool_name: str,
+    outcome: str,
+    duration_seconds: float,
+    parallel: bool,
+) -> None:
+    """Record an individual tool call using only bounded, non-content dimensions."""
+    if _tool_call_count is None or _tool_call_duration is None:
+        return
+    attributes = {
+        "gen_ai.tool.name": tool_name,
+        "tool.outcome": outcome,
+        "tool.execution.parallel": parallel,
+    }
+    try:
+        _tool_call_count.add(1, attributes)
+        _tool_call_duration.record(max(0.0, duration_seconds), attributes)
+    except Exception:
+        logger.debug("Could not record tool-call metrics", exc_info=True)
+
+
 def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitable[_T]]:
     """Trace an agent run without exporting user, prompt, or response content."""
 
@@ -330,6 +365,73 @@ def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
                 span.set_attribute("agent.outcome", "error")
                 span.set_attribute("error.type", type(exc).__name__)
                 raise
+
+    return wrapped
+
+
+def traced_tool_call(function: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitable[_T]]:
+    """Create a safe child span around one registered agent tool invocation."""
+
+    @wraps(function)
+    async def wrapped(self: Any, call: dict[str, Any], *args: Any, **kwargs: Any) -> _T:
+        function_data = call.get("function", {})
+        requested_name = (
+            function_data.get("name", "") if isinstance(function_data, dict) else ""
+        )
+        tool_name = "unknown"
+        if isinstance(requested_name, str):
+            try:
+                from tools.registry import get_registry
+
+                if get_registry().has_tool(requested_name):
+                    tool_name = requested_name
+            except Exception:
+                # Observability must not change tool registry or execution behavior.
+                pass
+
+        try:
+            from opentelemetry import trace
+            from opentelemetry.trace import Status, StatusCode
+        except ImportError:
+            return await function(self, call, *args, **kwargs)
+
+        parallel = bool(kwargs.get("allow_parallel_execution", False))
+        tracer = trace.get_tracer("digital-brain.agent")
+        started = time.perf_counter()
+        with tracer.start_as_current_span(f"execute_tool {tool_name}") as span:
+            span.set_attribute("gen_ai.operation.name", "execute_tool")
+            span.set_attribute("gen_ai.tool.name", tool_name)
+            span.set_attribute("gen_ai.tool.type", "function")
+            span.set_attribute("tool.execution.parallel", parallel)
+            outcome = "error"
+            try:
+                result = await function(self, call, *args, **kwargs)
+                if isinstance(result, dict) and result.get("valid") is False:
+                    outcome = "validation_error"
+                elif isinstance(result, dict) and (
+                    "error" in result or result.get("success") is False
+                ):
+                    outcome = "error"
+                else:
+                    outcome = "success"
+                span.set_attribute("tool.outcome", outcome)
+                if outcome in {"error", "validation_error"}:
+                    span.set_status(Status(StatusCode.ERROR))
+                return result
+            except BaseException as exc:
+                span.set_attribute("tool.outcome", "error")
+                span.set_attribute("error.type", type(exc).__name__)
+                span.set_status(Status(StatusCode.ERROR))
+                raise
+            finally:
+                duration_seconds = time.perf_counter() - started
+                span.set_attribute("tool.duration_ms", duration_seconds * 1000)
+                _record_tool_call_metrics(
+                    tool_name=tool_name,
+                    outcome=outcome,
+                    duration_seconds=duration_seconds,
+                    parallel=parallel,
+                )
 
     return wrapped
 

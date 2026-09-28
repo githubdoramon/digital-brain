@@ -78,13 +78,15 @@ focus; a player completion event is not proof of audible output.
 ## Architecture Documentation
 
 **Mirador AI observability**: The Python orchestrator exports privacy-conscious
-OpenTelemetry request, agent-run, and LLM-call traces plus LLM request, duration,
-token, agent-run duration, LLM-round, tool-call, and validation-repair metrics to
-Mirador only when `MIRADOR_API_KEY` is configured in
+OpenTelemetry request, agent-run, LLM-call, and per-tool-call spans plus LLM
+request, duration, token, agent-run duration, round, tool-call, validation-repair,
+and registered-tool call/duration metrics to Mirador only when
+`MIRADOR_API_KEY` is configured in
 `backend/.env` or the optional user-private Compose env file. Never export
 prompt/output text, tool arguments/results, user or conversation identifiers,
-or credentials. Keep the HTTP span active through the complete ASGI response
-stream so streamed agent and LLM work remains on the request trace. Do not
+or credentials. Add one privacy-conscious child span per registered tool call
+under the active agent span. Keep the HTTP span active through the complete ASGI
+response stream so streamed agent and LLM work remains on the request trace. Do not
 enable blanket HTTP, SQL, or application-log export. See
 `backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
 

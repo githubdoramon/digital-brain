@@ -48,12 +48,20 @@ providers flush queued telemetry during graceful shutdown.
   parallel batch can contribute multiple calls in one round.
 - Safe per-run counts (`agent.rounds`, `agent.tool_calls`, and `agent.repairs`)
   on the `agent.run` span for inspecting an individual trace.
+- `execute_tool {tool_name}` child spans under `agent.run`, with the registered
+  tool name, success/validation-error/error outcome, parallel-execution flag,
+  and duration. Tool arguments and results are deliberately omitted.
+- `digital_brain.tool.calls` counter and `digital_brain.tool.duration`
+  histogram, tagged by registered tool name, bounded outcome, and whether the
+  call ran in a parallel batch.
 
 Prompts, completions, tool arguments/results, user identifiers, conversation
 identifiers, LLM URLs, and authorization values are not added to these spans
-or metrics. Metric dimensions are limited to the configured model, operation,
-profile, outcome, and token type. Per-run IDs are not metric dimensions. The
-integration does not export application logs, SQL
+or metrics. Tool names come from the registered tool set; tool arguments and
+results are excluded. Metric dimensions are limited to the configured model,
+operation, registered tool name, profile, outcome, execution mode, and token
+type. Per-run IDs are not metric dimensions. The integration does not export
+application logs, SQL
 statements, or outbound HTTP auto-instrumentation. Existing application logs
 remain governed by the local logging configuration.
 
