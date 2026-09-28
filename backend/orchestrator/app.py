@@ -22,6 +22,11 @@ from glasses_tts import close_tts_http_client, get_tts_provider_status
 from llm_helpers import warm_configured_chat_models
 from observability.log_stream import configure_logging, install_stdout_logger
 from observability.logger import get_runtime_logger
+from observability.mirador import (
+    configure_mirador,
+    install_request_middleware,
+    shutdown_mirador,
+)
 from routes.automation import create_automation_router
 from routes.chat import create_chat_router
 from routes.contacts import create_contacts_router
@@ -117,6 +122,7 @@ def _resolve_session_context(
 async def lifespan(_app: FastAPI):
     configure_logging()
     install_stdout_logger()
+    configure_mirador()
     try:
         run_pending_migrations()
     except Exception:
@@ -158,9 +164,11 @@ async def lifespan(_app: FastAPI):
         event_tag_jobs.stop_worker()
         meeting_transcript_jobs.stop_worker()
         close_tts_http_client()
+        shutdown_mirador()
 
 
 api = FastAPI(title="Personal Memory Orchestrator", version="0.3.1", lifespan=lifespan)
+install_request_middleware(api)
 
 api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())

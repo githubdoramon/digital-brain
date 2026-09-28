@@ -35,6 +35,7 @@ from llm_config import get_smart_model
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
+from observability.mirador import traced_agent_run
 from search_normalization import normalize_search_text
 from tools.action_enums import GetEventsAction
 
@@ -320,6 +321,14 @@ class AgentController:
         self._agent_interface_context.set(base_interface)
         self.agent_profile = base_interface.profile
         self.runtime_profile = base_interface.profile.runtime
+        try:
+            from opentelemetry import trace as otel_trace
+
+            otel_trace.get_current_span().set_attribute(
+                "agent.profile", str(self.runtime_profile.name)
+            )
+        except ImportError:
+            pass
         run_id = self.logger.start_run(question, user_id, session_id)
         self._active_llm_policy = None
         self._last_llm_policy = None
@@ -449,6 +458,7 @@ class AgentController:
 
         return None
 
+    @traced_agent_run
     async def run(
         self,
         question: str,
@@ -731,6 +741,7 @@ class AgentController:
             self.logger.complete_run(run_id, success=False, error=str(e))
             raise
 
+    @traced_agent_run
     async def run_stream(
         self,
         question: str,

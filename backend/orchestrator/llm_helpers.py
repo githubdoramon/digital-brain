@@ -24,6 +24,7 @@ from llm_config import (
     resolve_chat_model,
 )
 from observability.logger import get_runtime_logger
+from observability.mirador import traced_llm_request
 
 logger = get_runtime_logger(__name__)
 
@@ -374,6 +375,7 @@ def _is_retryable_status(status_code: int) -> bool:
     return status_code >= 500 or status_code == 429
 
 
+@traced_llm_request
 def _post_chat_completion(
     payload: dict[str, Any],
     *,
@@ -515,6 +517,7 @@ def _post_chat_completion(
     raise last_exception
 
 
+@traced_llm_request
 def _post_chat_completion_stream(
     payload: dict[str, Any],
     *,
