@@ -56,8 +56,8 @@ def install_request_middleware(app: Any) -> None:
     """Trace the complete ASGI exchange, including streaming response bodies."""
 
     class RequestTracingMiddleware:
-        def __init__(self, downstream_app: Any) -> None:
-            self.downstream_app = downstream_app
+        def __init__(self, app: Any) -> None:
+            self.downstream_app = app
 
         async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
             if scope.get("type") != "http":
