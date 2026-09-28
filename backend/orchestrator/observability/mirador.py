@@ -53,27 +53,40 @@ def configure_mirador() -> None:
 
 
 def install_request_middleware(app: Any) -> None:
-    """Add a minimal request span that avoids paths, headers, and exception text."""
-    from starlette.requests import Request
+    """Trace the complete ASGI exchange, including streaming response bodies."""
 
-    @app.middleware("http")
-    async def trace_request(request: Request, call_next: Callable[..., Any]) -> Any:
-        try:
-            from opentelemetry import trace
-        except ImportError:
-            return await call_next(request)
+    class RequestTracingMiddleware:
+        def __init__(self, downstream_app: Any) -> None:
+            self.downstream_app = downstream_app
 
-        tracer = trace.get_tracer("digital-brain.http")
-        with tracer.start_as_current_span("http.server") as span:
-            span.set_attribute("http.request.method", request.method)
+        async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+            if scope.get("type") != "http":
+                await self.downstream_app(scope, receive, send)
+                return
+
             try:
-                response = await call_next(request)
-                span.set_attribute("http.response.status_code", response.status_code)
-                return response
-            except Exception as exc:
-                span.set_attribute("http.response.status_code", 500)
-                span.set_attribute("error.type", type(exc).__name__)
-                raise
+                from opentelemetry import trace
+            except ImportError:
+                await self.downstream_app(scope, receive, send)
+                return
+
+            tracer = trace.get_tracer("digital-brain.http")
+            with tracer.start_as_current_span("http.server") as span:
+                span.set_attribute("http.request.method", scope.get("method", ""))
+
+                async def capture_status(message: dict[str, Any]) -> None:
+                    if message.get("type") == "http.response.start":
+                        span.set_attribute("http.response.status_code", message.get("status", 0))
+                    await send(message)
+
+                try:
+                    await self.downstream_app(scope, receive, capture_status)
+                except Exception as exc:
+                    span.set_attribute("http.response.status_code", 500)
+                    span.set_attribute("error.type", type(exc).__name__)
+                    raise
+
+    app.add_middleware(RequestTracingMiddleware)
 
 
 def shutdown_mirador() -> None:

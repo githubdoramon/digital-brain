@@ -22,7 +22,8 @@ protobuf and flushes queued spans during graceful shutdown.
 
 ## What is exported
 
-- HTTP server request spans with method and response status.
+- HTTP server request spans with method and response status, held through the
+  complete response stream so child agent and LLM work remains on the same trace.
 - `agent.run` spans with the conversational profile, streaming flag, and outcome.
 - `llm.chat_completion` spans with model, request message count, streaming flag,
   duration, outcome, and provider token counts when returned.

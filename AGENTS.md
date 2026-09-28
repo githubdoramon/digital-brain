@@ -81,7 +81,9 @@ focus; a player completion event is not proof of audible output.
 OpenTelemetry request, agent-run, and LLM-call traces to Mirador only when
 `MIRADOR_API_KEY` is configured in `backend/.env`. Never export prompt/output
 text, tool arguments/results, user or conversation identifiers, or credentials.
-Do not enable blanket HTTP, SQL, or application-log export. See
+Keep the HTTP span active through the complete ASGI response stream so streamed
+agent and LLM work remains on the request trace. Do not enable blanket HTTP,
+SQL, or application-log export. See
 `backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
 
 **Mobile SDK event convention**: The public Mentra SDK rejects events outside its allowlist. Subscribe to the app-patched `glasses_audio_playback_finished` event through the existing internal SDK adapter; do not route it through the public facade during recordings initialization. Regression tests must retain the real public-event restrictions.
