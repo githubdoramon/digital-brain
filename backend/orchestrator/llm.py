@@ -123,7 +123,6 @@ async def answer_question(
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
     ui_submission: dict[str, Any] | None = None,
-    response_modality: str | None = None,
     on_exchange_persisted: Any | None = None,
     on_thread_title_needed: Any | None = None,
 ) -> dict[str, Any]:
@@ -172,15 +171,7 @@ async def answer_question(
         search_limit=search_limit,
         client_context=effective_client_context,
         ui_submission=ui_submission,
-        response_modality=response_modality,
     )
-
-    from voice_response import ResponseModality, normalize_modality
-
-    if normalize_modality(response_modality) is ResponseModality.VOICE and result.get("answer"):
-        from voice_response import prepare_voice_answer
-
-        result["answer"] = await prepare_voice_answer(result["answer"])
 
     # Persist conversation (bounded agent doesn't do this internally)
     if session_id and user_email and result.get("answer"):
@@ -244,7 +235,6 @@ async def answer_question_stream(
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
     ui_submission: dict[str, Any] | None = None,
-    response_modality: str | None = None,
     on_exchange_persisted: Any | None = None,
     on_thread_title_needed: Any | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
@@ -298,20 +288,9 @@ async def answer_question_stream(
         search_limit=search_limit,
         client_context=effective_client_context,
         ui_submission=ui_submission,
-        response_modality=response_modality,
     ):
         if event.get("type") == "done":
             final_bundle = event.get("bundle", {})
-            from voice_response import ResponseModality, normalize_modality
-
-            if (
-                normalize_modality(response_modality) is ResponseModality.VOICE
-                and final_bundle.get("answer")
-            ):
-                from voice_response import prepare_voice_answer
-
-                final_bundle["answer"] = await prepare_voice_answer(final_bundle["answer"])
-                event["bundle"] = final_bundle
 
         yield event
 
@@ -429,7 +408,7 @@ def _schedule_thread_title_generation(
         callback(question=question, session_id=session_id, user_email=user_email)
         return
 
-    # Non-chat callers (for example glasses commands) do not have FastAPI's
+    # Non-chat callers do not have FastAPI's
     # BackgroundTasks dependency, so keep title generation non-blocking there too.
     task = asyncio.create_task(
         asyncio.to_thread(

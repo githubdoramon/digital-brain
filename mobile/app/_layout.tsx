@@ -14,18 +14,6 @@ import * as Notifications from 'expo-notifications';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
-import { registerGlassesCaptureReconciliation } from '@/mentraCapture/backgroundTask';
-import { hydrateGlassesAudioRecording } from '@/mentraCapture/recordings';
-import { initializeGlassesFirmware } from '@/mentraCapture/firmware';
-import {
-  ensureMentraConnection,
-  getDefaultGlassesDevice,
-  subscribeMentraAudioOutput,
-  subscribeMentraEvents,
-  syncSavedGlassesWifiCredentials,
-} from '@/mentraCapture/sdk';
-import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
-import { reconcileGlassesCaptures } from '@/mentraCapture/sync';
 import { ensureAppStateTracking } from '@/location/runtimeState';
 import { theme } from '@/theme';
 
@@ -64,59 +52,6 @@ export default function RootLayout() {
 
   useEffect(() => {
     ensureAppStateTracking();
-    if (Platform.OS === 'android') void initializeGlassesFirmware().catch(() => undefined);
-    const unsubscribe = subscribeMentraEvents(() => {
-      void reconcileGlassesCaptures();
-    });
-    const unsubscribeAudioOutput = subscribeMentraAudioOutput((deviceName) => {
-      if (deviceName) void setExpectedGlassesAlertAudioDevice(deviceName).catch(() => undefined);
-    });
-    void getDefaultGlassesDevice()
-      .then((device) => {
-        if (device?.name) return setExpectedGlassesAlertAudioDevice(device.name);
-      })
-      .catch(() => undefined);
-    void registerGlassesCaptureReconciliation();
-    // The native recorder marks an unfinished file before encoding. On a
-    // process restart, retain it only when Android can verify a playable M4A.
-    void hydrateGlassesAudioRecording().catch(() => undefined);
-
-    // The native SDK's connection state is process-local. Restore the saved
-    // device and apply camera/gallery defaults on the first app launch, then
-    // reconnect on later foreground transitions without reconfiguring a live
-    // camera session. ensureMentraConnection owns its own boot wait and one
-    // controlled recovery; do not layer competing retry loops above it.
-    let disposed = false;
-    let foregroundSync: Promise<void> | null = null;
-    const reconnect = (applyCaptureDefaults: boolean) => {
-      if (disposed || foregroundSync) return;
-      foregroundSync = (async () => {
-        try {
-          const connected = await ensureMentraConnection({ applyCaptureDefaults });
-          if (!connected || disposed) return;
-          void syncSavedGlassesWifiCredentials().catch(() => undefined);
-          await reconcileGlassesCaptures();
-        } catch {
-          // The settings connection state and sync status retain the
-          // actionable failure. Do not restart a controller that is already
-          // performing the coordinator's controlled recovery.
-        }
-      })().finally(() => {
-        foregroundSync = null;
-      });
-      void foregroundSync;
-    };
-    reconnect(true);
-    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') reconnect(false);
-    });
-
-    return () => {
-      disposed = true;
-      appStateSubscription.remove();
-      unsubscribe();
-      unsubscribeAudioOutput();
-    };
   }, []);
 
   if (!loaded) {
@@ -332,35 +267,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
-          name="settings/glasses-capture/index"
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="settings/glasses-capture/models/index"
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="settings/glasses-capture/firmware/index"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
           name="settings/storage/index"
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="settings/glasses-recordings/index"
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="settings/glasses-alerts/index"
           options={{
             headerShown: false,
           }}

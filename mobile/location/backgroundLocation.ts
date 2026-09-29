@@ -21,7 +21,7 @@ import { reportLocationDebugEvent } from '@/location/debugState';
 import { API_BASE_URL } from '@/api/client';
 import { getLocationRuntimeState } from '@/location/runtimeState';
 import { hasSharedLocationRuntime } from '@/location/foregroundLocation';
-import RuntimeNative, { type AppRuntimeStatus } from '@/modules/digital-brain-glasses-alerts/src';
+import RuntimeNative, { type AppRuntimeStatus } from '@/modules/digital-brain-runtime/src';
 import { isLocationTrackingEnabled } from '@/location/trackingPreference';
 
 const BACKGROUND_TRACKING_STATE_KEY = 'digitalbrain.backgroundLocationTrackingState';

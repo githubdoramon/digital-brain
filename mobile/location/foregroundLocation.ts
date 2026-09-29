@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-import RuntimeNative from '@/modules/digital-brain-glasses-alerts/src';
+import RuntimeNative from '@/modules/digital-brain-runtime/src';
 import { enqueueBackgroundLocationEntry } from './backgroundLocationQueue';
 import { reportLocationDebugEvent } from './debugState';
 import { getLocationRuntimeState } from './runtimeState';

@@ -31,7 +31,6 @@ The architecture is split into shared runtime and agent-specific policy:
 - `backend/orchestrator/agents/registry.py`: intent-to-conversational-profile dispatch for generic `/ask` flows.
 - `backend/orchestrator/agents/main/`: general conversational profile policy (fallback and non-memory intents).
 - `backend/orchestrator/agents/memory_expert/`: memory-focused conversational profile for memory/data/contact intents.
-- `backend/orchestrator/routes/moments.py` and `moments.py`: authenticated moment ingestion and inspection. A moment is a source-independent canonical observation with immutable source/time, nullable location provenance, and no source media or model diagnostics. Mobile posts idempotent UUID batches to `/mobile/moments/batch`; `/moments` supplies the web inspector. Event/insight generation and embeddings are deliberately deferred.
 
 Profile selection contract:
 
@@ -102,69 +101,7 @@ sequenceDiagram
 
 ## Important Notes
 
-- Smart-glasses commands use authenticated `POST /mobile/glasses/commands` and
-  the same main-session/thread model as `/mobile/ask`. Exact normalized
-  transcripts `slash new`, `front gate`, and `car gate` are handled before the
-  agent; the gate shortcuts call fixed Home Assistant MCP script tools
-  `script__toggle_house_gate` or `script__toggle_car_gate` with `{}` and never
-  discover tools per request. The tool names are environment-overridable for a
-  deployment-specific inventory. The endpoint acknowledges once the MCP call
-  task has been dispatched; later Home Assistant success/failure is logged
-  asynchronously. A PostgreSQL idempotency row is claimed before side effects,
-  and cancelled/ambiguous work remains processing so a toggle cannot be
-  replayed. Agent voice mode is injected into every selected conversational
-  profile and validates/repairs the answer before existing conversation
-  persistence, then sends that exact canonical text to the independently
-  configured OpenAI-compatible Qwen TTS `/v1/audio/speech` endpoint. Its base
-  URL and bearer token use `TTS_BASE_URL` and `TTS_API_KEY`,
-  independent of LLM settings. The backend validates returned PCM WAV
-  bytes and places them in an authenticated, process-local audio reference
-  with TTL and post-download deletion; audio is never persisted to
-  conversations, documents, or memory. Kokoro models and ONNX dependencies are
-  not bundled. Startup reports safe TTS configuration status without contacting
-  the provider or blocking startup. Mobile may include optional transcription
-  timing fields; the backend emits those alongside route/auth, agent, TTS
-  request/header/body/WAV-validation phases, and audio-store timings in one
-  correlated `[glasses] command latency` record immediately before returning
-  the response. The web proxy records auth resolution and
-  upstream response timing under that same command ID and returns proxy/backend
-  phase headers to the phone; proxy body completion is logged separately.
-  Confirmed wake detection assigns the same command ID used by transcription,
-  command transport, audio download, and playback. See `GLASSES_TTS.md` for the
-  full correlated timing fields, including remote TTS response phases. The
-  provider request forwards the command ID and records only timing, response
-  metadata, and safe failure details; it does not log speech text, endpoint, or
-  credentials. Android records the selected Whisper backend and MediaPlayer
-  progress/output state; see `mobile/GLASSES_RELIABILITY.md` for the mobile
-  diagnostic contract.
-  Mobile also owns bounded Bluetooth control-plane recovery, sustained local
-  call alerts, and user-initiated glasses firmware updates. Firmware maintenance
-  persists on the phone and pauses capture/wake commands while the glasses run
-  Mentra's OTA protocol; firmware bytes do not pass through the backend.
-  See `mobile/GLASSES_RELIABILITY.md` in the repository root for the lifecycle,
-  installation prerequisites, and hardware validation checklist.
-  Provider settings and runtime diagnostics are documented in
-  `backend/orchestrator/docs/GLASSES_TTS.md`.
-
-- Android mobile background work uses one app-owned foreground service and one
-  ongoing Digital Brain notification for enabled glasses features and location.
-  Location remains independent of glasses and uses native balanced-accuracy
-  capture at a requested ten-minute interval with a 50m movement filter and up to twenty minutes of delivery batching. The location input schema accepts `android_foreground_location` sample provenance. Native capture commits a bounded
-  atomic queue without auth or backend calls; JavaScript acknowledges only after
-  its durable queue commit, and a separate uploader posts through the existing
-  client proxy. Runtime drains share a 45-second budget with scheduled fallback
-  drains. The backend `/mobile/location` contract is unchanged. See
-  `mobile/BACKGROUND_RUNTIME.md` for ownership, migration and validation.
-
-- Glasses audio recordings remain mobile-owned local M4A files. The shared
-  recording coordinator separates native capture transitions from background
-  indexing, guards delayed callbacks by capture generation, and serializes
-  library mutations. Storage preference loading does not wait on library reads.
-  Native recorder/recovery/playback operations use a separate IO dispatcher.
-  Playback completion subscribes to the app-patched native event through the
-  internal SDK adapter; the published public event facade rejects that event.
-  There is no backend audio-processing step for this screen. See
-  `mobile/GLASSES_CAPTURE_PIPELINE.md` for lifecycle and validation details.
+- Android mobile background location uses one app-owned foreground service and one ongoing Digital Brain notification while location tracking is enabled. Native Fused Location capture requests a ten-minute interval with a 50m movement filter and up to twenty minutes of delivery batching. Native callbacks persist a bounded queue without auth or backend calls; JavaScript acknowledges only after committing samples to its durable queue, and a separate uploader posts through the client proxy. Runtime drains share a bounded time budget with scheduled fallback drains. See `mobile/BACKGROUND_RUNTIME.md` for ownership and migration details.
 
 - Tool groups are now used for runtime visibility policy (not just metadata).
 - Clarification responses follow `need_user_input` standards and map to UI directives when possible.
@@ -218,9 +155,7 @@ The mobile proposed-event review screen exposes editable title, summary, local s
 - Mobile location diagnostics rotate at 2MiB with one previous file. Export reads a bounded 256KiB recent JSONL tail using Base64 byte ranges, skips incomplete boundary records, and includes bounded in-memory events. Oversized individual events retain a marked preview. Existing oversized logs can be exported without loading the full file.
 
 - Android runtime workers use per-instance native completion acknowledgements
-  to stop headless worker services promptly without a second notification. All automatic
-  glasses connection callers share a process-local 5–30 minute failure cooldown,
-  cleared by native readiness or explicit retry. Runtime energy logs sample OS
+  to stop headless worker services promptly without a second notification. Runtime energy logs sample OS
   battery and awake counters plus this process's CPU at existing work opportunities;
   device-wide battery counters are not app-attributed energy. See
   `mobile/BACKGROUND_RUNTIME.md` for protocol and system bug-report collection.

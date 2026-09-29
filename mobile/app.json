@@ -37,16 +37,9 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_MEDIA_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
-        "BLUETOOTH",
-        "BLUETOOTH_ADMIN",
-        "BLUETOOTH_SCAN",
-        "BLUETOOTH_CONNECT",
-        "CHANGE_NETWORK_STATE",
         "RECORD_AUDIO",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_CONNECTED_DEVICE",
-        "FOREGROUND_SERVICE_LOCATION",
-        "FOREGROUND_SERVICE_MICROPHONE"
+        "FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "plugins": [
@@ -72,8 +65,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Digital Brain uses your photo library for event attachments and private on-device image understanding.",
-          "cameraPermission": "Digital Brain uses your camera for event attachments and private on-device image understanding."
+          "photosPermission": "Digital Brain uses your photo library for event attachments.",
+          "cameraPermission": "Digital Brain uses your camera for event attachments."
         }
       ],
       [
@@ -86,7 +79,6 @@
       "expo-secure-store",
       "expo-web-browser",
       "react-native-maps",
-      "onnxruntime-react-native",
       "@react-native-google-signin/google-signin"
     ],
     "experiments": {

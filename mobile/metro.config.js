@@ -9,7 +9,7 @@ config.transformer = {
 
 config.resolver = {
   ...config.resolver,
-  assetExts: [...new Set([...config.resolver.assetExts.filter((ext) => ext !== 'svg'), 'onnx'])],
+  assetExts: [...new Set(config.resolver.assetExts.filter((ext) => ext !== 'svg'))],
   sourceExts: [...config.resolver.sourceExts, 'svg'],
 };
 

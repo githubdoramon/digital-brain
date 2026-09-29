@@ -34,12 +34,9 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
-    environment:
-      GLASSES_CAPTURE_UPLOAD_DIR: /app/storage/glasses-uploads
     volumes:
       - ./backend/orchestrator/config/service_manifest.dev.json:/app/config/service_manifest.json:ro
       - ./backend/orchestrator/storage/documents:/app/storage/documents
-      - glasses-capture-upload-data:/app/storage/glasses-uploads
 
   frontend:
     build:
@@ -100,6 +97,4 @@ volumes:
   mosquitto-data:
     driver: local
   mosquitto-log:
-    driver: local
-  glasses-capture-upload-data:
     driver: local

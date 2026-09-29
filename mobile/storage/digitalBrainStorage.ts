@@ -6,13 +6,8 @@ import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 
 export enum DigitalBrainStorageFolder {
   Recordings = 'Recordings',
-  GlassesCaptureQueue = 'Glasses Capture Queue',
-  ImagePipelineTemp = 'Image Pipeline Temp',
-  WakeCommandDebug = 'Wake Command Debug',
   Exports = 'Exports',
 }
-
-const LEGACY_IMAGE_PIPELINE_FOLDER = 'Smart Glasses POC 2';
 
 const STORAGE_BASE_URI_KEY = 'digitalbrain.storage.base_folder.v1';
 let storageCopyChain: Promise<void> = Promise.resolve();
@@ -65,13 +60,6 @@ export async function getDigitalBrainStorageFolder(
   if (!DigitalBrainStorageNative) {
     throw new Error('Digital Brain storage needs an Android rebuild before it can create folders.');
   }
-  if (folder === DigitalBrainStorageFolder.ImagePipelineTemp) {
-    await DigitalBrainStorageNative.renameSubdirectoryIfExists(
-      baseUri,
-      LEGACY_IMAGE_PIPELINE_FOLDER,
-      folder,
-    );
-  }
   // Preserve the provider-returned child document URI exactly. Rebuilding it
   // as a child tree loses the grant attached to the selected base directory.
   return (await DigitalBrainStorageNative.ensureSubdirectory(baseUri, folder)).uri;
@@ -103,13 +91,6 @@ async function copyToDigitalBrainStorageNow(
   }
   if (!DigitalBrainStorageNative) {
     throw new Error('Digital Brain storage needs an Android rebuild before it can save files.');
-  }
-  if (folder === DigitalBrainStorageFolder.ImagePipelineTemp) {
-    await DigitalBrainStorageNative.renameSubdirectoryIfExists(
-      baseUri,
-      LEGACY_IMAGE_PIPELINE_FOLDER,
-      folder,
-    );
   }
   const name = safeStorageFileName(fileName, 'digital-brain-file');
   const result = await DigitalBrainStorageNative.copyToSubdirectory(

@@ -18,7 +18,6 @@ import meeting_transcript_jobs
 import proposed_event_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
-from glasses_tts import close_tts_http_client, get_tts_provider_status
 from llm_helpers import warm_configured_chat_models
 from observability.log_stream import configure_logging, install_stdout_logger
 from observability.logger import get_runtime_logger
@@ -35,8 +34,6 @@ from routes.documents import create_documents_router
 from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
-from routes.glasses import create_glasses_router
-from routes.moments import create_moments_router
 from routes.news import create_news_router
 from routes.places import create_places_router
 from routes.proposed_events import create_proposed_events_router
@@ -144,8 +141,6 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Chat-model warmup failed; continuing startup")
 
-    logger.info("[glasses] TTS provider configuration: %s", get_tts_provider_status())
-
     meeting_transcript_jobs.start_worker()
     event_tag_jobs.start_worker()
     document_tag_jobs.start_worker()
@@ -163,7 +158,6 @@ async def lifespan(_app: FastAPI):
         document_enhancement_jobs.stop_worker()
         event_tag_jobs.stop_worker()
         meeting_transcript_jobs.stop_worker()
-        close_tts_http_client()
         shutdown_mirador()
 
 
@@ -172,7 +166,6 @@ install_request_middleware(api)
 
 api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())
-api.include_router(create_moments_router())
 api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
 api.include_router(create_places_router())
@@ -181,7 +174,6 @@ api.include_router(create_todos_router())
 api.include_router(create_events_router())
 api.include_router(create_documents_router())
 api.include_router(create_generated_pdfs_router())
-api.include_router(create_glasses_router())
 api.include_router(create_evals_router())
 api.include_router(create_system_router())
 api.include_router(create_user_router())

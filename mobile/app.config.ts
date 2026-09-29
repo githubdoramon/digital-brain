@@ -1,10 +1,5 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
-import {
-  withAndroidManifest,
-  withAppBuildGradle,
-  withMainApplication,
-  withProjectBuildGradle,
-} from 'expo/config-plugins';
+import { withAppBuildGradle } from 'expo/config-plugins';
 import { existsSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 
@@ -97,155 +92,6 @@ function withSystemDebugKeystore(config: ExpoConfig) {
   });
 }
 
-/**
- * The Sherpa 1.13.2 JNI library requires OrtGetApiBase@VERS_1.24.3.
- * onnxruntime-react-native's Android Gradle file asks for latest.integration,
- * so an EAS clean build can silently package a newer incompatible .so even
- * though the duplicate-library pickFirst rule lets the APK build succeed.
- */
-function withSherpaCompatibleOnnxRuntime(config: ExpoConfig): ExpoConfig {
-  return withProjectBuildGradle(config, (mod) => {
-    const marker = '// Digital Brain: pin the ONNX Runtime native ABI for Sherpa 1.13.2.';
-    if (mod.modResults.contents.includes(marker)) return mod;
-    const insertionPoint = 'apply plugin: "expo-root-project"';
-    if (!mod.modResults.contents.includes(insertionPoint)) {
-      throw new Error('Unable to pin Android ONNX Runtime in root build.gradle');
-    }
-    mod.modResults.contents = mod.modResults.contents.replace(
-      insertionPoint,
-      `${marker}
-subprojects {
-  configurations.configureEach {
-    resolutionStrategy.eachDependency { details ->
-      if (details.requested.group == 'com.microsoft.onnxruntime' &&
-          details.requested.name.startsWith('onnxruntime-android')) {
-        details.useVersion '1.24.3'
-        details.because('Sherpa 1.13.2 requires ONNX Runtime symbol version 1.24.3')
-      }
-    }
-  }
-}
-
-${insertionPoint}`,
-    );
-    return mod;
-  });
-}
-
-/**
- * Mentra Live exposes its gallery over a short-lived local HTTP server while the
- * phone is connected to the glasses hotspot. `expo prebuild --clean` regenerates
- * AndroidManifest.xml, so keep this transport requirement in dynamic config.
- */
-function withGlassesCaptureCleartext(config: ExpoConfig): ExpoConfig {
-  return withAndroidManifest(config, (mod) => {
-    const application = mod.modResults.manifest.application?.[0];
-    if (application) {
-      application.$ = {
-        ...application.$,
-        'android:usesCleartextTraffic': 'true',
-      };
-    }
-    return mod;
-  });
-}
-
-/**
- * Glasses alerts use Android's notification-access boundary and a temporary
- * shared app foreground runtime for glasses and location. The runtime service
- * declarations live in the local native module manifest.
- * Keep the declarations here because Expo prebuild regenerates AndroidManifest.xml.
- */
-function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
-  return withAndroidManifest(config, (mod) => {
-    const manifest = mod.modResults.manifest;
-    const addPermission = (name: string) => {
-      const permissions = manifest['uses-permission'] ?? [];
-      if (!permissions.some((permission) => permission.$?.['android:name'] === name)) {
-        permissions.push({ $: { 'android:name': name } });
-      }
-      manifest['uses-permission'] = permissions;
-    };
-    addPermission('android.permission.READ_PHONE_STATE');
-    addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
-    addPermission('android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
-    addPermission('android.permission.FOREGROUND_SERVICE_LOCATION');
-    addPermission('android.permission.FOREGROUND_SERVICE_MICROPHONE');
-
-    const application = manifest.application?.[0];
-    if (!application) return mod;
-    const retiredServices = new Set([
-      'expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService',
-      'expo.modules.digitalbrainglassesalerts.GlassesImageEnhancementService',
-    ]);
-    const services = (application.service ?? []).filter(
-      (service) => !retiredServices.has(service.$?.['android:name'] ?? ''),
-    );
-    const addService = (name: string, attributes: Record<string, string>, action?: string) => {
-      if (services.some((service) => service.$?.['android:name'] === name)) return;
-      services.push({
-        $: { 'android:name': name, ...attributes },
-        ...(action ? { 'intent-filter': [{ action: [{ $: { 'android:name': action } }] }] } : {}),
-      });
-    };
-    addService(
-      'expo.modules.digitalbrainglassesalerts.GlassesAlertNotificationListenerService',
-      {
-        'android:label': 'Digital Brain glasses alerts',
-        'android:permission': 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE',
-        'android:exported': 'true',
-      },
-      'android.service.notification.NotificationListenerService',
-    );
-    application.service = services;
-
-    const queries = manifest.queries?.[0] ?? {};
-    const intents = queries.intent ?? [];
-    const hasLauncherQuery = intents.some(
-      (intent) =>
-        intent.action?.some(
-          (action: { $?: Record<string, string> }) =>
-            action.$?.['android:name'] === 'android.intent.action.MAIN',
-        ) &&
-        intent.category?.some(
-          (category: { $?: Record<string, string> }) =>
-            category.$?.['android:name'] === 'android.intent.category.LAUNCHER',
-        ),
-    );
-    if (!hasLauncherQuery) {
-      intents.push({
-        action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
-        category: [{ $: { 'android:name': 'android.intent.category.LAUNCHER' } }],
-      });
-    }
-    queries.intent = intents;
-    manifest.queries = [queries];
-    return mod;
-  });
-}
-
-/**
- * onnxruntime-react-native only ships legacy Expo unimodule metadata, which
- * Expo/RN 0.83 does not turn into a React Package. Keep this native package
- * registration in config so it survives `expo prebuild --clean`.
- */
-function withOnnxRuntimePackage(config: ExpoConfig): ExpoConfig {
-  return withMainApplication(config, (mod) => {
-    if (mod.modResults.language !== 'kt') return mod;
-    const packageClass = 'ai.onnxruntime.reactnative.OnnxruntimePackage';
-    if (mod.modResults.contents.includes(packageClass)) return mod;
-    const marker = 'PackageList(this).packages.apply {';
-    if (!mod.modResults.contents.includes(marker)) {
-      throw new Error('Unable to register onnxruntime-react-native in MainApplication.kt');
-    }
-    mod.modResults.contents = mod.modResults.contents.replace(
-      marker,
-      `${marker}\n          add(${packageClass}())`,
-    );
-    return mod;
-  });
-}
-
 export default ({ config }: ConfigContext): ExpoConfig => {
   const appName = getAppName();
   const bundleId = getUniqueIdentifier();
@@ -304,8 +150,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     googleIosUrlScheme ? { iosUrlScheme: googleIosUrlScheme } : undefined,
   );
   const pluginsWithAsset = withPlugin(pluginsWithGoogleSignin, 'expo-asset');
-  const pluginsWithMentra = withPlugin(pluginsWithAsset, '@mentra/bluetooth-sdk');
-  const pluginsWithAudioStudio = withPlugin(pluginsWithMentra, '@siteed/audio-studio', {
+  const pluginsWithAudioStudio = withPlugin(pluginsWithAsset, '@siteed/audio-studio', {
     enablePhoneStateHandling: false,
     enableNotifications: false,
     enableBackgroundAudio: false,
@@ -327,29 +172,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const pluginsWithBuildProperties = withPlugin(pluginsWithAudioStudio, 'expo-build-properties', {
     android: {
       minSdkVersion: 28,
-      // Sherpa and onnxruntime-react-native both bundle libonnxruntime.so.
-      // Keep this in Expo config: EAS regenerates android/ and does not read
-      // the local checkout's gradle.properties packaging rules.
-      packagingOptions: {
-        pickFirst: [
-          '**/libc++_shared.so',
-          '**/libonnxruntime.so',
-          '**/libonnxruntime4j_jni.so',
-        ],
-      },
     },
   });
 
-  return withSherpaCompatibleOnnxRuntime(
-    withOnnxRuntimePackage(
-      withGlassesAlertsAndroidManifest(
-        withGlassesCaptureCleartext(
-          withSystemDebugKeystore({
-            ...merged,
-            plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
-          }),
-        ),
-      ),
-    ),
-  );
+  return withSystemDebugKeystore({
+    ...merged,
+    plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
+  });
 };

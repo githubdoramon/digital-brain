@@ -9,7 +9,6 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { useAppNotice } from '@/hooks/useAppNotice';
-import { syncImageEnhancementStorage } from '@/mentraCapture';
 import {
   chooseDigitalBrainStorageBaseUri,
   digitalBrainStorageFolderLabel,
@@ -21,8 +20,6 @@ import { theme } from '@/theme';
 
 const managedFolders = [
   DigitalBrainStorageFolder.Recordings,
-  DigitalBrainStorageFolder.GlassesCaptureQueue,
-  DigitalBrainStorageFolder.ImagePipelineTemp,
   DigitalBrainStorageFolder.Exports,
 ];
 
@@ -49,7 +46,6 @@ export default function StorageSettingsScreen() {
       const selected = await chooseDigitalBrainStorageBaseUri();
       if (!selected) return;
       await Promise.all(managedFolders.map((folder) => getDigitalBrainStorageFolder(folder)));
-      await syncImageEnhancementStorage();
       setBaseUri(selected);
       showSuccess('Digital Brain storage location saved.');
     } catch (error) {

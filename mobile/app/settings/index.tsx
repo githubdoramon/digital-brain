@@ -440,16 +440,6 @@ export default function SettingsScreen() {
         <Card style={[styles.card, styles.navCard]}>
           <Pressable
             style={styles.navRow}
-            onPress={() => router.push('/settings/glasses-capture' as never)}
-          >
-            <View style={styles.textBlock}>
-              <Text style={styles.rowTitle}>Smart glasses</Text>
-              <Text style={styles.rowSubtitle}>Capture what you see and sync it to Immich</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
-          </Pressable>
-          <Pressable
-            style={styles.navRow}
             onPress={() => router.push('/settings/storage' as never)}
           >
             <View style={styles.textBlock}>

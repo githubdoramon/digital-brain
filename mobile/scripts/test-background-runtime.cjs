@@ -64,7 +64,7 @@ async function handoff() {
   };
   const location = load('location/foregroundLocation.ts', {
     'react-native': { Platform: { OS: 'android' } },
-    '@/modules/digital-brain-glasses-alerts/src': native,
+    '@/modules/digital-brain-runtime/src': native,
     './backgroundLocationQueue': {
       enqueueBackgroundLocationEntry: async (entry) => {
         if (persistFails) throw Error('disk failure');
@@ -159,42 +159,22 @@ async function draining() {
 async function work() {
   const events = [];
   const diagnostics = [];
-  let healthFails = false;
-  let diagnosticsFail = false;
   const completedTokens = [];
   let locationEnabled = true;
-  let glassesEnabled = false;
-  let bluetoothGranted = false;
   let transferFails = false;
-  let afterUpload = () => {};
-  let afterPermissionCheck = () => {};
+  let diagnosticsFail = false;
   const mod = load('runtime/backgroundRuntime.ts', {
     'react-native': {
       AppRegistry: { registerHeadlessTask: (name) => events.push(name) },
       Platform: { OS: 'android', Version: 36 },
-      PermissionsAndroid: {
-        PERMISSIONS: {},
-        check: async () => {
-          afterPermissionCheck();
-          return bluetoothGranted;
-        },
-      },
     },
-    '@/mentraCapture/sdk': { ensureMentraConnection: async () => events.push('connect') },
-    '@/mentraCapture/maintenance': { assertGlassesNotUpdating: async () => {} },
-    '@/modules/digital-brain-glasses-alerts/src': {
+    '@/modules/digital-brain-runtime/src': {
       completeRuntimeWork: async (token) => completedTokens.push(token),
-      getRuntimeEnergyDiagnostics: async () => {
-        if (healthFails) throw Error('energy unavailable');
-        return { processCpuMs: 100, batteryChargeMicroAh: 500_000 };
-      },
-      getImageEnhancementDeviceHealth: async () => {
-        if (healthFails) throw Error('health unavailable');
-        return { batteryPercent: 72, charging: false, thermalStatus: 0 };
-      },
-      getAppRuntimeStatus: async () => ({
-        owners: [locationEnabled && 'location', glassesEnabled && 'glasses'].filter(Boolean),
+      getRuntimeEnergyDiagnostics: async () => ({
+        processCpuMs: 100,
+        batteryChargeMicroAh: 500_000,
       }),
+      getAppRuntimeStatus: async () => ({ owners: locationEnabled ? ['location'] : [] }),
     },
     '@/location/foregroundLocation': {
       transferNativeLocations: async () => {
@@ -203,10 +183,7 @@ async function work() {
       },
     },
     '@/location/backgroundLocationQueue': {
-      drainQueuedBackgroundLocations: async () => {
-        events.push('upload');
-        afterUpload();
-      },
+      drainQueuedBackgroundLocations: async () => events.push('upload'),
     },
     '@/location/debugState': {
       reportLocationDebugEvent: (name, detail) => {
@@ -220,52 +197,21 @@ async function work() {
   assert.deepEqual(events, ['DigitalBrainRuntimeWork', 'persist', 'upload']);
   const finished = diagnostics.find((event) => event.name === 'foreground_runtime_work_finished');
   assert.equal(finished.detail.payload.reason, 'location_batch');
-  assert.equal(finished.detail.payload.deviceHealth.batteryPercent, 72);
   assert.ok(finished.detail.payload.durationMs >= 0);
   assert.ok(diagnostics.some((event) => event.name === 'foreground_runtime_energy_sample'));
-  healthFails = true;
+
   locationEnabled = false;
-  glassesEnabled = true;
   events.length = 0;
   await mod.runForegroundRuntimeWork();
-  assert.deepEqual(events, ['persist'], 'Glasses alone must not turn location uploads back on');
+  assert.deepEqual(events, ['persist'], 'Location disabled must prevent upload work');
 
-  bluetoothGranted = true;
+  locationEnabled = true;
   transferFails = true;
   events.length = 0;
   await mod.runForegroundRuntimeWork({ workToken: 'worker-2' });
-  assert.deepEqual(
-    completedTokens,
-    ['worker-1', 'worker-2'],
-    'Native completion survives location and energy diagnostic failure',
-  );
-  assert.deepEqual(
-    events,
-    ['persist', 'connect'],
-    'Location storage failure must not block glasses recovery',
-  );
+  assert.deepEqual(events, ['persist'], 'Native completion still follows location handoff failure');
+  assert.deepEqual(completedTokens, ['worker-1', 'worker-2']);
 
-  transferFails = false;
-  locationEnabled = true;
-  afterUpload = () => {
-    glassesEnabled = false;
-  };
-  events.length = 0;
-  await mod.runForegroundRuntimeWork();
-  assert.deepEqual(
-    events,
-    ['persist', 'upload'],
-    'Disconnect during an upload must not be undone by an old ownership snapshot',
-  );
-
-  locationEnabled = false;
-  glassesEnabled = true;
-  afterPermissionCheck = () => {
-    glassesEnabled = false;
-  };
-  events.length = 0;
-  await mod.runForegroundRuntimeWork();
-  assert.deepEqual(events, ['persist'], 'Recheck ownership after asynchronous permission checks');
   diagnosticsFail = true;
   await assert.rejects(
     mod.runForegroundRuntimeWork({ workToken: 'worker-3' }),
@@ -274,7 +220,7 @@ async function work() {
   assert.equal(
     completedTokens.at(-1),
     'worker-3',
-    'Diagnostic logging errors cannot skip native acknowledgement',
+    'Logging errors cannot skip native acknowledgement',
   );
 }
 async function permissionRace() {
@@ -318,7 +264,7 @@ async function permissionRace() {
     '@/api/client': { API_BASE_URL: 'https://api.example.com' },
     '@/location/runtimeState': runtime,
     '@/location/foregroundLocation': { hasSharedLocationRuntime: () => true },
-    '@/modules/digital-brain-glasses-alerts/src': native,
+    '@/modules/digital-brain-runtime/src': native,
     '@/location/trackingPreference': { isLocationTrackingEnabled: async () => preference },
   });
   const openingPermission = location.syncBackgroundLocationTracking(true);

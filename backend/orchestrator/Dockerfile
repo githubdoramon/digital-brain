@@ -14,8 +14,6 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
 
-ENV GLASSES_AUDIO_TTL_SECONDS=300
-
 COPY . /app
 
 EXPOSE 8000

@@ -88,15 +88,6 @@ def build_memory_expert_messages(
     if tags_context:
         messages.append({"role": "system", "content": tags_context})
     messages.append({"role": "system", "content": _cached_protocol_prompt()})
-    from voice_response import ResponseModality, normalize_modality, voice_system_instruction
-
-    if (
-        normalize_modality((state.request_context or {}).get("response_modality"))
-        is ResponseModality.VOICE
-    ):
-
-        messages.append({"role": "system", "content": voice_system_instruction()})
-
     if user_email:
         self_context = get_self_context(user_email)
         if self_context:
