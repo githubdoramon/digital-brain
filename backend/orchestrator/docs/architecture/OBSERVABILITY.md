@@ -40,13 +40,22 @@ providers flush queued telemetry during graceful shutdown.
   method, and status class. They contain no raw URL, query string, user, or
   conversation identifier.
 - `agent.run` spans with the conversational profile, streaming flag, and outcome.
+- `daily_briefing.run` parent spans around scheduled/background briefing jobs,
+  including their generation and persistence work. The parent records outcome,
+  duration, event/todo/news counts, and aggregate LLM/tool call and failure
+  counts. Context is copied into briefing worker threads so parallel LLM calls
+  and registered tool spans remain children of that briefing trace.
 - `llm.chat_completion` spans for every production model request routed through
   `llm_helpers`, including sync calls, buffered streaming calls, async SSE
   streaming calls, and Ollama model warm-up requests. They record model, request
   message count, streaming flag, duration, outcome, and provider token counts
   when returned. Async streaming spans remain open through stream completion or
-  failure. Requests made outside an `agent.run` still appear as standalone spans;
-  background workflows do not need an HTTP request or agent run to be measured.
+  failure. Stream spans attach their context only while pulling provider chunks,
+  then detach it before yielding chunks to consumers; this keeps consumer work
+  out of the LLM span and avoids detaching a context token after a generator is
+  resumed or closed in another context. Requests made outside an `agent.run`
+  still appear as standalone spans; background workflows do not need an HTTP
+  request or agent run to be measured.
 - `digital_brain.llm.requests` counter, tagged by model and success/error outcome.
 - `gen_ai.client.operation.duration` histogram in seconds, tagged by model and
   outcome.
@@ -59,8 +68,9 @@ providers flush queued telemetry during graceful shutdown.
   `digital_brain.agent.run.repairs` histograms, tagged by profile and outcome.
   Rounds are LLM iterations; tool calls are individual tool invocations, so a
   parallel batch can contribute multiple calls in one round.
-- Safe per-run counts (`agent.rounds`, `agent.tool_calls`, and `agent.repairs`)
-  on the `agent.run` span for inspecting an individual trace.
+- Safe per-run counts (`agent.run_count`, `agent.rounds`, `agent.total_tool_calls`,
+  `agent.failed_tool_calls`, and `agent.validation_repairs`) on the `agent.run`
+  span, so the parent span summarizes the run without opening child spans.
 - `execute_tool {tool_name}` child spans under `agent.run`, with the registered
   tool name, success/validation-error/error outcome, parallel-execution flag,
   and duration. Tool arguments and results are deliberately omitted.

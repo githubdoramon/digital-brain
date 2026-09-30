@@ -240,6 +240,28 @@ def _execute_daily_briefing_job(
     user_email: str,
     revision: int | None,
 ) -> None:
+    from observability.mirador import traced_daily_briefing_run
+
+    with traced_daily_briefing_run() as trace:
+        _execute_daily_briefing_job_impl(
+            job_id=job_id,
+            date_value=date_value,
+            timezone_name=timezone_name,
+            user_email=user_email,
+            revision=revision,
+            trace=trace,
+        )
+
+
+def _execute_daily_briefing_job_impl(
+    *,
+    job_id: str,
+    date_value: str,
+    timezone_name: str,
+    user_email: str,
+    revision: int | None,
+    trace: Any | None,
+) -> None:
     from agents.daily_briefing.executor import handle_daily_briefing_request
 
     logger.info(
@@ -258,6 +280,8 @@ def _execute_daily_briefing_job(
             }
         )
         if result.get("status") == "error":
+            if trace is not None:
+                trace.set_outcome("error", error_type="BriefingGenerationError")
             error_message = str(result.get("message") or "Daily briefing generation failed")
             async_jobs.mark_failed(
                 job_id,
@@ -268,6 +292,13 @@ def _execute_daily_briefing_job(
             )
             logger.warning("[briefing.job] Job failed job=%s error=%s", job_id, error_message)
             return
+
+        if trace is not None:
+            trace.set_result_counts(
+                events=int(result.get("event_count") or 0),
+                todos=int(result.get("todo_count") or 0),
+                news_items=len(result.get("news_items") or []),
+            )
 
         async_jobs.mark_succeeded(
             job_id,
@@ -282,6 +313,8 @@ def _execute_daily_briefing_job(
             result.get("briefing_id"),
         )
     except Exception as exc:
+        if trace is not None:
+            trace.set_outcome("error", error_type=type(exc).__name__)
         error_message = str(exc)
         async_jobs.mark_failed(
             job_id,

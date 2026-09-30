@@ -8,7 +8,12 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Executor, Future
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass, field
 from functools import wraps
+from threading import Lock
 from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,116 @@ _tool_call_count: Any | None = None
 _tool_call_duration: Any | None = None
 _http_request_count: Any | None = None
 _http_request_duration: Any | None = None
+
+
+@dataclass
+class _DailyBriefingRunCounts:
+    llm_calls: int = 0
+    llm_failures: int = 0
+    tool_calls: int = 0
+    tool_failures: int = 0
+    lock: Lock = field(default_factory=Lock)
+
+    def record_llm(self, outcome: str) -> None:
+        with self.lock:
+            self.llm_calls += 1
+            if outcome != "success":
+                self.llm_failures += 1
+
+    def record_tool(self, outcome: str) -> None:
+        with self.lock:
+            self.tool_calls += 1
+            if outcome != "success":
+                self.tool_failures += 1
+
+
+_active_daily_briefing_counts: ContextVar[_DailyBriefingRunCounts | None] = ContextVar(
+    "active_daily_briefing_counts", default=None
+)
+
+
+class DailyBriefingTrace:
+    """Safe summary writer for one daily-briefing parent span."""
+
+    def __init__(self, span: Any) -> None:
+        self.span = span
+        self.outcome = "success"
+
+    def set_outcome(self, outcome: str, *, error_type: str | None = None) -> None:
+        self.outcome = outcome
+        self.span.set_attribute("daily_briefing.outcome", outcome)
+        if error_type:
+            self.span.set_attribute("error.type", error_type[:128])
+        if outcome == "error":
+            try:
+                from opentelemetry.trace import Status, StatusCode
+
+                self.span.set_status(Status(StatusCode.ERROR))
+            except ImportError:
+                pass
+
+    def set_result_counts(self, *, events: int, todos: int, news_items: int) -> None:
+        self.span.set_attribute("daily_briefing.event_count", max(0, events))
+        self.span.set_attribute("daily_briefing.todo_count", max(0, todos))
+        self.span.set_attribute("daily_briefing.news_item_count", max(0, news_items))
+
+
+def submit_with_current_context(
+    executor: Executor,
+    function: Callable[..., _T],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Future[_T]:
+    """Submit work with the caller's OpenTelemetry and run-local context."""
+    context = copy_context()
+    return executor.submit(context.run, function, *args, **kwargs)
+
+
+@contextmanager
+def traced_daily_briefing_run():
+    """Create a privacy-safe parent span for one daily-briefing job."""
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        yield None
+        return
+
+    tracer = trace.get_tracer("digital-brain.daily_briefing")
+    counts = _DailyBriefingRunCounts()
+    started = time.perf_counter()
+    with tracer.start_as_current_span("daily_briefing.run") as span:
+        span.set_attribute("daily_briefing.run_count", 1)
+        run = DailyBriefingTrace(span)
+        token = _active_daily_briefing_counts.set(counts)
+        try:
+            yield run
+        except BaseException as exc:
+            run.set_outcome("error", error_type=type(exc).__name__)
+            raise
+        finally:
+            span.set_attribute("daily_briefing.outcome", run.outcome)
+            with counts.lock:
+                span.set_attribute("daily_briefing.llm_calls", counts.llm_calls)
+                span.set_attribute("daily_briefing.llm_failures", counts.llm_failures)
+                span.set_attribute("daily_briefing.tool_calls", counts.tool_calls)
+                span.set_attribute("daily_briefing.tool_failures", counts.tool_failures)
+            span.set_attribute(
+                "daily_briefing.duration_ms", (time.perf_counter() - started) * 1000
+            )
+            _active_daily_briefing_counts.reset(token)
+
+
+def _record_daily_briefing_llm(outcome: str) -> None:
+    counts = _active_daily_briefing_counts.get()
+    if counts is not None:
+        counts.record_llm(outcome)
+
+
+def _record_daily_briefing_tool(outcome: str) -> None:
+    counts = _active_daily_briefing_counts.get()
+    if counts is not None:
+        counts.record_tool(outcome)
 
 
 def configure_mirador() -> None:
@@ -300,6 +415,7 @@ def _record_llm_metrics(
     result: Any,
 ) -> None:
     """Record bounded-cardinality LLM metrics without affecting request behavior."""
+    _record_daily_briefing_llm(outcome)
     if _llm_request_count is None or _llm_duration is None:
         return
 
@@ -345,6 +461,7 @@ def record_agent_run_metrics(
     rounds: int,
     tool_calls: int,
     repairs: int,
+    failed_tool_calls: int,
 ) -> None:
     """Record bounded-cardinality agent-run metrics and safe span summaries."""
     # Profile names and outcomes are bounded runtime values. Never attach run,
@@ -360,7 +477,10 @@ def record_agent_run_metrics(
                 span.set_attribute("agent.outcome", outcome)
                 span.set_attribute("agent.rounds", max(0, rounds))
                 span.set_attribute("agent.tool_calls", max(0, tool_calls))
+                span.set_attribute("agent.total_tool_calls", max(0, tool_calls))
                 span.set_attribute("agent.repairs", max(0, repairs))
+                span.set_attribute("agent.validation_repairs", max(0, repairs))
+                span.set_attribute("agent.failed_tool_calls", max(0, failed_tool_calls))
         except ImportError:
             pass
 
@@ -422,6 +542,7 @@ def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
                 return
 
             with tracer.start_as_current_span("agent.run") as span:
+                span.set_attribute("agent.run_count", 1)
                 span.set_attribute("agent.stream", True)
                 try:
                     async for item in function(self, *args, **kwargs):
@@ -441,6 +562,7 @@ def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
             return await function(self, *args, **kwargs)
 
         with tracer.start_as_current_span("agent.run") as span:
+            span.set_attribute("agent.run_count", 1)
             span.set_attribute("agent.stream", False)
             try:
                 result = await function(self, *args, **kwargs)
@@ -514,6 +636,7 @@ def traced_tool_call(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
                 span.set_status(Status(StatusCode.ERROR))
                 raise
             finally:
+                _record_daily_briefing_tool(outcome)
                 duration_seconds = time.perf_counter() - started
                 span.set_attribute("tool.duration_ms", duration_seconds * 1000)
                 _record_tool_call_metrics(
@@ -553,54 +676,66 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
             started = time.perf_counter()
             outcome = "error"
             usage: dict[str, Any] | None = None
-            with tracer.start_as_current_span("llm.chat_completion") as span:
-                span.set_attribute("gen_ai.operation.name", "chat")
-                span.set_attribute("gen_ai.request.model", model)
-                span.set_attribute(
-                    "gen_ai.request.message_count",
-                    len(messages) if isinstance(messages, list) else 0,
-                )
-                span.set_attribute("gen_ai.request.stream", True)
-                try:
-                    async for item in function(payload, *args, **kwargs):
-                        # OpenAI-compatible streaming providers may include usage
-                        # on the final SSE chunk. Parse only those bounded counts.
-                        if isinstance(item, str):
-                            line = item.strip()
-                            if line.startswith("data: "):
-                                try:
-                                    chunk = json.loads(line[6:])
-                                except (ValueError, TypeError):
-                                    chunk = None
-                                if isinstance(chunk, dict) and isinstance(
-                                    chunk.get("usage"), dict
-                                ):
-                                    usage = chunk["usage"]
-                        yield item
-                    outcome = "success"
-                    span.set_attribute("llm.outcome", outcome)
-                    _set_llm_token_attributes(span, usage)
-                except BaseException as exc:
-                    outcome = "cancelled" if isinstance(exc, GeneratorExit) else "error"
-                    span.set_attribute("llm.outcome", outcome)
-                    if outcome == "error":
-                        span.set_attribute("error.type", type(exc).__name__)
-                        try:
-                            from opentelemetry.trace import Status, StatusCode
+            # Keep this span current only while pulling provider data. The caller
+            # processes yielded chunks between pulls; leaving it current during
+            # yield would incorrectly parent agent/tool work under the LLM span.
+            span = tracer.start_span("llm.chat_completion")
+            span.set_attribute("gen_ai.operation.name", "chat")
+            span.set_attribute("gen_ai.request.model", model)
+            span.set_attribute(
+                "gen_ai.request.message_count",
+                len(messages) if isinstance(messages, list) else 0,
+            )
+            span.set_attribute("gen_ai.request.stream", True)
+            stream = function(payload, *args, **kwargs).__aiter__()
+            try:
+                while True:
+                    try:
+                        with trace.use_span(span, end_on_exit=False):
+                            item = await stream.__anext__()
+                    except StopAsyncIteration:
+                        break
 
-                            span.set_status(Status(StatusCode.ERROR))
-                        except ImportError:
-                            pass
-                    raise
-                finally:
-                    duration_seconds = time.perf_counter() - started
-                    span.set_attribute("llm.duration_ms", duration_seconds * 1000)
-                    _record_llm_metrics(
-                        model=model,
-                        duration_seconds=duration_seconds,
-                        outcome=outcome,
-                        result={"usage": usage} if usage is not None else None,
-                    )
+                    # OpenAI-compatible streaming providers may include usage
+                    # on the final SSE chunk. Parse only those bounded counts.
+                    if isinstance(item, str):
+                        line = item.strip()
+                        if line.startswith("data: "):
+                            try:
+                                chunk = json.loads(line[6:])
+                            except (ValueError, TypeError):
+                                chunk = None
+                            if isinstance(chunk, dict) and isinstance(
+                                chunk.get("usage"), dict
+                            ):
+                                usage = chunk["usage"]
+                    yield item
+
+                outcome = "success"
+                span.set_attribute("llm.outcome", outcome)
+                _set_llm_token_attributes(span, usage)
+            except BaseException as exc:
+                outcome = "cancelled" if isinstance(exc, GeneratorExit) else "error"
+                span.set_attribute("llm.outcome", outcome)
+                if outcome == "error":
+                    span.set_attribute("error.type", type(exc).__name__)
+                    try:
+                        from opentelemetry.trace import Status, StatusCode
+
+                        span.set_status(Status(StatusCode.ERROR))
+                    except ImportError:
+                        pass
+                raise
+            finally:
+                duration_seconds = time.perf_counter() - started
+                span.set_attribute("llm.duration_ms", duration_seconds * 1000)
+                _record_llm_metrics(
+                    model=model,
+                    duration_seconds=duration_seconds,
+                    outcome=outcome,
+                    result={"usage": usage} if usage is not None else None,
+                )
+                span.end()
 
         return wrapped_stream  # type: ignore[return-value]
 

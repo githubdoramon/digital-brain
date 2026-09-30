@@ -38,6 +38,7 @@ from llm_helpers import (
 from llm_json_schemas import (
     DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA,
 )
+from observability.mirador import submit_with_current_context
 from search_normalization import normalize_search_text
 from tools.handlers.memory import _synthesize_memory_summary
 
@@ -207,9 +208,13 @@ def build_daily_briefing(
     # -- 3-5. Fetch birthdays, news, and unlinked todos in parallel --------------
     t0 = perf_counter()
     with ThreadPoolExecutor(max_workers=3) as pool:
-        birthdays_future = pool.submit(_fetch_upcoming_birthdays, local_date)
-        news_future = pool.submit(_fetch_news_safely)
-        todos_future = pool.submit(todos_service.list_unlinked_relevant_todos, pending_only=True)
+        birthdays_future = submit_with_current_context(
+            pool, _fetch_upcoming_birthdays, local_date
+        )
+        news_future = submit_with_current_context(pool, _fetch_news_safely)
+        todos_future = submit_with_current_context(
+            pool, todos_service.list_unlinked_relevant_todos, pending_only=True
+        )
 
         upcoming_birthdays = birthdays_future.result()
         news_articles = news_future.result()
@@ -485,7 +490,9 @@ def _build_event_contexts_parallel(
     max_workers = min(EVENT_ENRICHMENT_MAX_WORKERS, len(events))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
-            pool.submit(_build_single_event_context, event, tz, start_utc, self_contact_id): idx
+            submit_with_current_context(
+                pool, _build_single_event_context, event, tz, start_utc, self_contact_id
+            ): idx
             for idx, event in enumerate(events)
         }
         for future in as_completed(future_map):
@@ -558,7 +565,9 @@ def _summarize_events_parallel(
     max_workers = min(EVENT_SUMMARY_MAX_WORKERS, len(event_contexts))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
-            pool.submit(_summarize_event, ec, timezone_name, user_email=user_email): idx
+            submit_with_current_context(
+                pool, _summarize_event, ec, timezone_name, user_email=user_email
+            ): idx
             for idx, ec in enumerate(event_contexts)
         }
         for future in as_completed(future_map):
@@ -1924,7 +1933,8 @@ def _generate_markdown(
         )
         t_parallel = perf_counter()
         with ThreadPoolExecutor(max_workers=BRIEFING_SECTION_MAX_WORKERS) as pool:
-            news_future = pool.submit(
+            news_future = submit_with_current_context(
+                pool,
                 _generate_news_section_markdown,
                 selected_news_data,
                 user_email=user_email,
@@ -2522,7 +2532,9 @@ def _enrich_selected_news_summaries(
     workers = min(NEWS_SUMMARY_MAX_WORKERS, total_articles)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
-            pool.submit(_generate_article_brief_summary, article, user_email=user_email): (
+            submit_with_current_context(
+                pool, _generate_article_brief_summary, article, user_email=user_email
+            ): (
                 container,
                 idx,
             )

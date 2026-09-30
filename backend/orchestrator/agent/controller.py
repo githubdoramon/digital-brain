@@ -2092,6 +2092,7 @@ class AgentController:
             rounds=state.step_count,
             tool_calls=state.tool_calls_count,
             repairs=state.repair_count,
+            failed_tool_calls=state.failed_tool_calls,
         )
 
         # Trace limit violation
@@ -2193,6 +2194,7 @@ class AgentController:
             rounds=state.step_count,
             tool_calls=state.tool_calls_count,
             repairs=state.repair_count,
+            failed_tool_calls=state.failed_tool_calls,
         )
 
         # Log completion

@@ -38,6 +38,14 @@ ASGI response stream so streamed agent and LLM work remains on one trace. Record
 metrics for other HTTP routes without creating a trace for every frontend request.
 Trace every production LLM request made through `llm_helpers`, including async
 SSE streams, warm-up calls, and background workflows without an agent-run parent.
+Wrap scheduled/background daily-briefing jobs in one `daily_briefing.run` parent
+span and propagate its OpenTelemetry context into briefing worker threads; keep
+only outcome, duration, bounded counts, and safe child LLM/tool spans. In async
+LLM stream wrappers, detach the span context before yielding each chunk so
+generator cancellation or cross-context resumption cannot raise detach errors.
+Keep the `agent.run` span itself populated with the run count, rounds, total tool
+calls, failed tool calls, and validation repairs so its summary is readable without
+opening child spans.
 Do not enable blanket HTTP, SQL, or application-log export. See
 `backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
 
