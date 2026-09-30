@@ -284,15 +284,10 @@ def warm_chat_model(
         "stream": False,
         "keep_alive": keep_alive if keep_alive is not None else LLM_WARM_KEEP_ALIVE,
     }
-    response = requests.post(
-        f"{get_ollama_api_base_url(base_url)}/api/chat",
-        headers=get_llm_headers(),
-        json=payload,
+    data = _post_chat_model_warmup(
+        payload,
         timeout=timeout or LLM_WARMUP_TIMEOUT,
     )
-    response.raise_for_status()
-    data = response.json()
-    _raise_for_llm_error(data)
     logger.info(
         "[llm_helpers] Warmed chat model model=%s keep_alive=%s done_reason=%s",
         model_name,
@@ -300,6 +295,24 @@ def warm_chat_model(
         data.get("done_reason", ""),
     )
     return True
+
+
+@traced_llm_request
+def _post_chat_model_warmup(
+    payload: dict[str, Any], *, timeout: int
+) -> dict[str, Any]:
+    """Trace the small Ollama chat request used to warm a configured model."""
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    response = requests.post(
+        f"{get_ollama_api_base_url(base_url)}/api/chat",
+        headers=get_llm_headers(),
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    _raise_for_llm_error(data)
+    return data
 
 
 def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
@@ -722,6 +735,7 @@ def call_llm_chat(
     return data
 
 
+@traced_llm_request
 async def stream_llm_chat(
     messages: list[dict[str, Any]],
     *,

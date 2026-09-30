@@ -34,6 +34,13 @@ object DigitalBrainRuntime {
       .putStringSet("owners", features.persistentKeys())
       .commit()) { "Could not persist runtime owners" }
     Log.i("DigitalBrainRuntime", "owner=${feature.key} enabled=$enabled")
+    if (feature == RuntimeFeature.LOCATION) {
+      if (!enabled) {
+        RuntimeLocationUploadScheduler.cancel(context)
+      } else if (service?.foregroundTypes?.let { it != 0 } == true) {
+        RuntimeLocationUploadScheduler.enqueueIfPending(context, "location_enabled")
+      }
+    }
     refresh(context, enabled)
   }
 
@@ -56,11 +63,8 @@ object DigitalBrainRuntime {
     "owners" to owners(context).map { it.key }.sorted(),
     "locationActive" to (service?.locationActive == true),
     "startedAtMs" to service?.startedAtMs,
-    "lastNativeTickAtMs" to service?.lastTickAtMs,
-    "nativeTickCount" to (service?.tickCount ?: 0L),
-    "workRequestCount" to RuntimeWorkService.requestCount,
-    "lastWorkDurationMs" to RuntimeWorkService.lastDurationMs,
     "lastError" to lastError,
     "foregroundTypes" to (service?.foregroundTypes ?: 0),
-  )
+    "nativeLocationQueueSize" to runCatching { RuntimeLocationStore.pendingSamples(context).size }.getOrDefault(-1),
+  ) + RuntimeLocationUploadStats.snapshot(context)
 }

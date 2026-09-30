@@ -10,60 +10,39 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.LocationManager
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 /** The app's native foreground service for background location capture. */
 class DigitalBrainRuntimeService : Service() {
-  private val handler = Handler(Looper.getMainLooper())
   private lateinit var location: RuntimeLocationCapture
-  private val workCadence = RuntimeWorkCadence()
   private var notificationOwners: Set<RuntimeFeature>? = null
   var foregroundTypes = 0
     private set
   val locationActive get() = location.active
   var startedAtMs = System.currentTimeMillis()
     private set
-  var lastTickAtMs: Long? = null
-    private set
-  var tickCount = 0L
-    private set
-  private val tick = object : Runnable {
-    override fun run() {
-      lastTickAtMs = System.currentTimeMillis()
-      tickCount++
-      refresh(rescheduleTick = false)
-      if (foregroundTypes == 0) return
-      val owners = DigitalBrainRuntime.owners(this@DigitalBrainRuntimeService)
-      if (workCadence.shouldRequest(SystemClock.elapsedRealtime(), owners)) requestWork("periodic")
-      handler.postDelayed(this, 900_000L)
-    }
-  }
 
   override fun onCreate() {
     super.onCreate()
-    location = RuntimeLocationCapture(this) { handler.post { requestWork("location_batch") } }
+    location = RuntimeLocationCapture(this) { RuntimeLocationUploadScheduler.enqueue(this, "location_batch") }
     DigitalBrainRuntime.service = this
     Log.i("DigitalBrainRuntime", "service_created")
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    refresh(forceNotification = true, rescheduleTick = false)
+    refresh(forceNotification = true)
     if (foregroundTypes == 0) return START_NOT_STICKY
-    handler.removeCallbacks(tick)
-    handler.post(tick)
+    RuntimeLocationUploadScheduler.enqueueIfPending(this, "service_started")
     return START_STICKY
   }
 
   private fun granted(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
-  fun refresh(forceNotification: Boolean = false, rescheduleTick: Boolean = true) {
+  fun refresh(forceNotification: Boolean = false) {
     val owners = DigitalBrainRuntime.owners(this)
     val wantsLocation = RuntimeFeature.LOCATION in owners
     val locationPermitted =
@@ -79,7 +58,6 @@ class DigitalBrainRuntimeService : Service() {
     if (types == 0) {
       location.stop()
       foregroundTypes = 0
-      handler.removeCallbacks(tick)
       stopForeground(STOP_FOREGROUND_REMOVE)
       stopSelf()
       return
@@ -102,10 +80,6 @@ class DigitalBrainRuntimeService : Service() {
         Log.w("DigitalBrainRuntime", "location_start_failed", error)
       }
     } else location.stop()
-    if (rescheduleTick) {
-      handler.removeCallbacks(tick)
-      handler.post(tick)
-    }
   }
 
   private fun showNotification(types: Int) {
@@ -126,15 +100,7 @@ class DigitalBrainRuntimeService : Service() {
     listOf(1001, 4017, 4308).forEach(manager::cancel)
   }
 
-  private fun requestWork(reason: String) {
-    if (foregroundTypes != 0) {
-      workCadence.requested(SystemClock.elapsedRealtime())
-      RuntimeWorkService.request(this, reason)
-    }
-  }
-
   override fun onDestroy() {
-    handler.removeCallbacks(tick)
     location.stop()
     foregroundTypes = 0
     if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null

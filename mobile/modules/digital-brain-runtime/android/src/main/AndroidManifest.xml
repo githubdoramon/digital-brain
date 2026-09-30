@@ -5,6 +5,5 @@
   <application>
     <service android:name=".DigitalBrainRuntimeService" android:exported="false"
       android:foregroundServiceType="location" />
-    <service android:name=".RuntimeWorkService" android:exported="false" />
   </application>
 </manifest>

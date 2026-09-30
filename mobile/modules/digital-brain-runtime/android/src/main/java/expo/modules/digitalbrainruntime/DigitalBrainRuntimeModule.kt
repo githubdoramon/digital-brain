@@ -10,13 +10,11 @@ class DigitalBrainRuntimeModule : Module() {
     AsyncFunction("setRuntimeLocationEnabled") { enabled: Boolean ->
       DigitalBrainRuntime.setFeature(context(), RuntimeFeature.LOCATION.key, enabled)
     }
+    AsyncFunction("configureRuntimeLocationUploader") { apiBaseUrl: String, googleWebClientId: String ->
+      RuntimeLocationUploadConfigStore.save(context(), apiBaseUrl, googleWebClientId)
+    }
     AsyncFunction("getAppRuntimeStatus") { DigitalBrainRuntime.status(context()) }
     AsyncFunction("getRuntimeEnergyDiagnostics") { RuntimeEnergyDiagnostics.sample(context()) }
-    AsyncFunction("completeRuntimeWork") { token: String -> RuntimeWorkService.complete(token) }
-    AsyncFunction("readRuntimeLocations") { RuntimeLocationStore.samples(context()) }
-    AsyncFunction("acknowledgeRuntimeLocations") { ids: List<String> ->
-      RuntimeLocationStore.acknowledge(context(), ids.toSet())
-    }
   }
 
   private fun context() = requireNotNull(appContext.reactContext).applicationContext

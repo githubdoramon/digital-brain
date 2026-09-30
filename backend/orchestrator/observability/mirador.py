@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
 import time
@@ -26,6 +27,8 @@ _agent_run_tool_calls: Any | None = None
 _agent_run_repairs: Any | None = None
 _tool_call_count: Any | None = None
 _tool_call_duration: Any | None = None
+_http_request_count: Any | None = None
+_http_request_duration: Any | None = None
 
 
 def configure_mirador() -> None:
@@ -35,6 +38,7 @@ def configure_mirador() -> None:
     global _agent_run_count, _agent_run_duration, _agent_run_rounds
     global _agent_run_tool_calls, _agent_run_repairs
     global _tool_call_count, _tool_call_duration
+    global _http_request_count, _http_request_duration
     if _configured:
         return
 
@@ -93,7 +97,7 @@ def configure_mirador() -> None:
         _llm_request_count = meter.create_counter(
             "digital_brain.llm.requests",
             unit="{request}",
-            description="Completed LLM chat-completion requests by outcome and model",
+            description="LLM chat-completion requests by outcome and model",
         )
         _llm_duration = meter.create_histogram(
             "gen_ai.client.operation.duration",
@@ -140,6 +144,16 @@ def configure_mirador() -> None:
             unit="s",
             description="Duration of an individual agent tool call",
         )
+        _http_request_count = meter.create_counter(
+            "digital_brain.http.requests",
+            unit="{request}",
+            description="Orchestrator HTTP requests by route, method, and status class",
+        )
+        _http_request_duration = meter.create_histogram(
+            "digital_brain.http.request.duration",
+            unit="s",
+            description="Orchestrator HTTP request duration by route, method, and status class",
+        )
         _meter_provider = meter_provider
         logger.info(
             "Mirador OTLP metrics enabled service=%s export_interval_ms=%d",
@@ -154,7 +168,44 @@ def configure_mirador() -> None:
 
 
 def install_request_middleware(app: Any) -> None:
-    """Trace the complete ASGI exchange, including streaming response bodies."""
+    """Trace AI entry points and measure all HTTP requests through streamed bodies."""
+
+    default_trace_paths = {
+        "/ask",
+        "/mobile/ask",
+        "/ask/stream",
+        "/mobile/ask/stream",
+        "/debug/daily-briefing/event-summary",
+    }
+    configured_trace_paths = os.getenv("MIRADOR_HTTP_TRACE_PATHS")
+    trace_paths = (
+        {path.strip() for path in configured_trace_paths.split(",") if path.strip()}
+        if configured_trace_paths is not None
+        else default_trace_paths
+    )
+
+    def route_template(scope: dict[str, Any]) -> str:
+        route = scope.get("route")
+        path = getattr(route, "path", None)
+        if isinstance(path, str) and path.startswith("/") and len(path) <= 200:
+            return path
+        return "unmatched"
+
+    def record_http_metrics(
+        *, method: str, route: str, status_code: int, duration_seconds: float
+    ) -> None:
+        if _http_request_count is None or _http_request_duration is None:
+            return
+        attributes = {
+            "http.request.method": method,
+            "http.route": route,
+            "http.response.status_class": f"{status_code // 100}xx",
+        }
+        try:
+            _http_request_count.add(1, attributes)
+            _http_request_duration.record(max(0.0, duration_seconds), attributes)
+        except Exception:
+            logger.debug("Could not record HTTP metrics", exc_info=True)
 
     class RequestTracingMiddleware:
         def __init__(self, app: Any) -> None:
@@ -165,27 +216,70 @@ def install_request_middleware(app: Any) -> None:
                 await self.downstream_app(scope, receive, send)
                 return
 
+            method = str(scope.get("method", ""))
+            path = str(scope.get("path", ""))
+            started = time.perf_counter()
+            status_code = 500
+
+            async def capture_status(message: dict[str, Any]) -> None:
+                nonlocal status_code
+                if message.get("type") == "http.response.start":
+                    status_code = int(message.get("status", 0))
+                await send(message)
+
             try:
-                from opentelemetry import trace
+                from opentelemetry import context, propagation, trace
             except ImportError:
-                await self.downstream_app(scope, receive, send)
-                return
-
-            tracer = trace.get_tracer("digital-brain.http")
-            with tracer.start_as_current_span("http.server") as span:
-                span.set_attribute("http.request.method", scope.get("method", ""))
-
-                async def capture_status(message: dict[str, Any]) -> None:
-                    if message.get("type") == "http.response.start":
-                        span.set_attribute("http.response.status_code", message.get("status", 0))
-                    await send(message)
-
                 try:
                     await self.downstream_app(scope, receive, capture_status)
-                except Exception as exc:
-                    span.set_attribute("http.response.status_code", 500)
-                    span.set_attribute("error.type", type(exc).__name__)
-                    raise
+                finally:
+                    record_http_metrics(
+                        method=method,
+                        route=route_template(scope),
+                        status_code=status_code,
+                        duration_seconds=time.perf_counter() - started,
+                    )
+                return
+
+            # Honor standard W3C context propagation when an upstream frontend or
+            # proxy supplies traceparent. Header values are used only as context,
+            # never copied into telemetry attributes.
+            carrier = {
+                key.decode("ascii").lower(): value.decode("ascii", errors="ignore")
+                for key, value in scope.get("headers", [])
+                if key.lower() in {b"traceparent", b"tracestate"}
+            }
+            extracted_context = propagation.extract(carrier=carrier)
+            context_token = context.attach(extracted_context)
+            try:
+                if path in trace_paths:
+                    tracer = trace.get_tracer("digital-brain.http")
+                    with tracer.start_as_current_span("http.server") as span:
+                        span.set_attribute("http.request.method", method)
+                        try:
+                            await self.downstream_app(scope, receive, capture_status)
+                        except Exception as exc:
+                            status_code = 500
+                            span.set_attribute("error.type", type(exc).__name__)
+                            raise
+                        finally:
+                            route = route_template(scope)
+                            span.set_attribute("http.route", route)
+                            span.set_attribute("http.response.status_code", status_code)
+                            span.update_name(f"{method} {route}")
+                else:
+                    await self.downstream_app(scope, receive, capture_status)
+            except Exception:
+                status_code = 500
+                raise
+            finally:
+                record_http_metrics(
+                    method=method,
+                    route=route_template(scope),
+                    status_code=status_code,
+                    duration_seconds=time.perf_counter() - started,
+                )
+                context.detach(context_token)
 
     app.add_middleware(RequestTracingMiddleware)
 
@@ -310,29 +404,25 @@ def _record_tool_call_metrics(
 def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitable[_T]]:
     """Trace an agent run without exporting user, prompt, or response content."""
 
-    def _span() -> Any:
+    def _tracer() -> Any | None:
         try:
             from opentelemetry import trace
         except ImportError:
             return None
-
-        tracer = trace.get_tracer("digital-brain.agent")
-        span = tracer.start_span("agent.run")
-        span.set_attribute("agent.stream", function.__name__ == "run_stream")
-        return span
+        return trace.get_tracer("digital-brain.agent")
 
     if inspect.isasyncgenfunction(function):
 
         @wraps(function)
         async def wrapped_stream(self: Any, *args: Any, **kwargs: Any):
-            span = _span()
-            if span is None:
+            tracer = _tracer()
+            if tracer is None:
                 async for item in function(self, *args, **kwargs):
                     yield item
                 return
-            from opentelemetry import trace
 
-            with trace.use_span(span, end_on_exit=True):
+            with tracer.start_as_current_span("agent.run") as span:
+                span.set_attribute("agent.stream", True)
                 try:
                     async for item in function(self, *args, **kwargs):
                         yield item
@@ -346,12 +436,12 @@ def traced_agent_run(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
 
     @wraps(function)
     async def wrapped(self: Any, *args: Any, **kwargs: Any) -> _T:
-        span = _span()
-        if span is None:
+        tracer = _tracer()
+        if tracer is None:
             return await function(self, *args, **kwargs)
-        from opentelemetry import trace
 
-        with trace.use_span(span, end_on_exit=True):
+        with tracer.start_as_current_span("agent.run") as span:
+            span.set_attribute("agent.stream", False)
             try:
                 result = await function(self, *args, **kwargs)
                 outcome = (
@@ -439,6 +529,81 @@ def traced_tool_call(function: Callable[..., Awaitable[_T]]) -> Callable[..., Aw
 def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
     """Trace model-call timing and shape only; never export prompt or completion text."""
 
+    if inspect.isasyncgenfunction(function):
+
+        @wraps(function)
+        async def wrapped_stream(payload: Any, *args: Any, **kwargs: Any):
+            try:
+                from opentelemetry import trace
+            except ImportError:
+                async for item in function(payload, *args, **kwargs):
+                    yield item
+                return
+
+            # Transport helpers receive a ready-made payload, while
+            # stream_llm_chat receives messages and model as regular arguments.
+            metadata = (
+                payload
+                if isinstance(payload, dict)
+                else {"messages": payload, "model": kwargs.get("model")}
+            )
+            messages = metadata.get("messages")
+            model = str(metadata.get("model") or "unknown")[:128]
+            tracer = trace.get_tracer("digital-brain.llm")
+            started = time.perf_counter()
+            outcome = "error"
+            usage: dict[str, Any] | None = None
+            with tracer.start_as_current_span("llm.chat_completion") as span:
+                span.set_attribute("gen_ai.operation.name", "chat")
+                span.set_attribute("gen_ai.request.model", model)
+                span.set_attribute(
+                    "gen_ai.request.message_count",
+                    len(messages) if isinstance(messages, list) else 0,
+                )
+                span.set_attribute("gen_ai.request.stream", True)
+                try:
+                    async for item in function(payload, *args, **kwargs):
+                        # OpenAI-compatible streaming providers may include usage
+                        # on the final SSE chunk. Parse only those bounded counts.
+                        if isinstance(item, str):
+                            line = item.strip()
+                            if line.startswith("data: "):
+                                try:
+                                    chunk = json.loads(line[6:])
+                                except (ValueError, TypeError):
+                                    chunk = None
+                                if isinstance(chunk, dict) and isinstance(
+                                    chunk.get("usage"), dict
+                                ):
+                                    usage = chunk["usage"]
+                        yield item
+                    outcome = "success"
+                    span.set_attribute("llm.outcome", outcome)
+                    _set_llm_token_attributes(span, usage)
+                except BaseException as exc:
+                    outcome = "cancelled" if isinstance(exc, GeneratorExit) else "error"
+                    span.set_attribute("llm.outcome", outcome)
+                    if outcome == "error":
+                        span.set_attribute("error.type", type(exc).__name__)
+                        try:
+                            from opentelemetry.trace import Status, StatusCode
+
+                            span.set_status(Status(StatusCode.ERROR))
+                        except ImportError:
+                            pass
+                    raise
+                finally:
+                    duration_seconds = time.perf_counter() - started
+                    span.set_attribute("llm.duration_ms", duration_seconds * 1000)
+                    _record_llm_metrics(
+                        model=model,
+                        duration_seconds=duration_seconds,
+                        outcome=outcome,
+                        result={"usage": usage} if usage is not None else None,
+                    )
+
+        return wrapped_stream  # type: ignore[return-value]
+
     @wraps(function)
     def wrapped(payload: dict[str, Any], *args: Any, **kwargs: Any) -> _T:
         try:
@@ -464,19 +629,17 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
                 span.set_attribute("llm.outcome", "success")
                 if isinstance(result, dict):
                     usage = result.get("usage")
-                    if isinstance(usage, dict):
-                        if usage.get("prompt_tokens") is not None:
-                            span.set_attribute(
-                                "gen_ai.usage.input_tokens", int(usage["prompt_tokens"])
-                            )
-                        if usage.get("completion_tokens") is not None:
-                            span.set_attribute(
-                                "gen_ai.usage.output_tokens", int(usage["completion_tokens"])
-                            )
+                    _set_llm_token_attributes(span, usage)
                 return result
             except Exception as exc:
                 span.set_attribute("llm.outcome", "error")
                 span.set_attribute("error.type", type(exc).__name__)
+                try:
+                    from opentelemetry.trace import Status, StatusCode
+
+                    span.set_status(Status(StatusCode.ERROR))
+                except ImportError:
+                    pass
                 raise
             finally:
                 duration_seconds = time.perf_counter() - started
@@ -489,3 +652,18 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
                 )
 
     return wrapped
+
+
+def _set_llm_token_attributes(span: Any, usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    for usage_key, attribute in (
+        ("prompt_tokens", "gen_ai.usage.input_tokens"),
+        ("completion_tokens", "gen_ai.usage.output_tokens"),
+    ):
+        try:
+            value = int(usage[usage_key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if value >= 0:
+            span.set_attribute(attribute, value)

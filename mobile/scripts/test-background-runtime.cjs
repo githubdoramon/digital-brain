@@ -37,56 +37,6 @@ const debug = { reportLocationDebugEvent() {} };
 const runtime = {
   getLocationRuntimeState: () => ({ appState: 'background', lastAppStateChangeAt: null }),
 };
-const sample = {
-  id: 'native-1',
-  latitude: 12,
-  longitude: 34,
-  timestamp: 1_700_000_000_000,
-  accuracy: 20,
-  timezone: 'UTC',
-};
-async function handoff() {
-  const stored = new Map();
-  let persistFails = true,
-    ackFails = false,
-    ackCount = 0,
-    reads = 0;
-  const native = {
-    readRuntimeLocations: async () => {
-      reads++;
-      return [sample];
-    },
-    acknowledgeRuntimeLocations: async (ids) => {
-      assert.deepEqual(Array.from(ids), ['native-1']);
-      ackCount++;
-      if (ackFails) throw Error('ack failure');
-    },
-  };
-  const location = load('location/foregroundLocation.ts', {
-    'react-native': { Platform: { OS: 'android' } },
-    '@/modules/digital-brain-runtime/src': native,
-    './backgroundLocationQueue': {
-      enqueueBackgroundLocationEntry: async (entry) => {
-        if (persistFails) throw Error('disk failure');
-        stored.set(entry.id, entry);
-      },
-    },
-    './debugState': debug,
-    './runtimeState': runtime,
-  });
-  await assert.rejects(location.transferNativeLocations(), /disk failure/);
-  assert.equal(ackCount, 0, 'Native copy survives failed JS persistence');
-  persistFails = false;
-  ackFails = true;
-  await assert.rejects(location.transferNativeLocations(), /ack failure/);
-  ackFails = false;
-  const before = reads;
-  await Promise.all([location.transferNativeLocations(), location.transferNativeLocations()]);
-  assert.equal(reads - before, 1, 'Concurrent handoffs join one transfer');
-  assert.equal(stored.size, 1, 'Replay after lost ACK retains stable identity');
-  assert.equal([...stored.values()][0].timezone, 'UTC', 'Capture timezone survives delivery delay');
-  assert.equal([...stored.values()][0].source, 'android_foreground_location');
-}
 async function draining() {
   let disk = '[]',
     posts = 0,
@@ -144,84 +94,17 @@ async function draining() {
       attemptCount: 0,
     });
   await Promise.all([
-    queue.drainQueuedBackgroundLocations('foreground_service'),
+    queue.drainQueuedBackgroundLocations('manual'),
     queue.drainQueuedBackgroundLocations('background_task_worker'),
   ]);
   assert.equal(posts, 3, 'Concurrent worker triggers share one 45-second budget');
   assert.equal(JSON.parse(disk).length, 5, 'Budget exhaustion preserves remaining samples');
   fail = true;
-  await queue.drainQueuedBackgroundLocations('foreground_service');
+  await queue.drainQueuedBackgroundLocations('manual');
   assert.equal(JSON.parse(disk).length, 5, 'Offline upload preserves queue');
   fail = false;
-  await queue.drainQueuedBackgroundLocations('foreground_service');
+  await queue.drainQueuedBackgroundLocations('manual');
   assert.equal(JSON.parse(disk).length, 2, 'Later runtime opportunity resumes delivery');
-}
-async function work() {
-  const events = [];
-  const diagnostics = [];
-  const completedTokens = [];
-  let locationEnabled = true;
-  let transferFails = false;
-  let diagnosticsFail = false;
-  const mod = load('runtime/backgroundRuntime.ts', {
-    'react-native': {
-      AppRegistry: { registerHeadlessTask: (name) => events.push(name) },
-      Platform: { OS: 'android', Version: 36 },
-    },
-    '@/modules/digital-brain-runtime/src': {
-      completeRuntimeWork: async (token) => completedTokens.push(token),
-      getRuntimeEnergyDiagnostics: async () => ({
-        processCpuMs: 100,
-        batteryChargeMicroAh: 500_000,
-      }),
-      getAppRuntimeStatus: async () => ({ owners: locationEnabled ? ['location'] : [] }),
-    },
-    '@/location/foregroundLocation': {
-      transferNativeLocations: async () => {
-        events.push('persist');
-        if (transferFails) throw Error('storage unavailable');
-      },
-    },
-    '@/location/backgroundLocationQueue': {
-      drainQueuedBackgroundLocations: async () => events.push('upload'),
-    },
-    '@/location/debugState': {
-      reportLocationDebugEvent: (name, detail) => {
-        if (diagnosticsFail) throw Error('diagnostic write failed');
-        diagnostics.push({ name, detail });
-      },
-    },
-  });
-  await mod.runForegroundRuntimeWork({ reason: 'location_batch', workToken: 'worker-1' });
-  assert.deepEqual(completedTokens, ['worker-1']);
-  assert.deepEqual(events, ['DigitalBrainRuntimeWork', 'persist', 'upload']);
-  const finished = diagnostics.find((event) => event.name === 'foreground_runtime_work_finished');
-  assert.equal(finished.detail.payload.reason, 'location_batch');
-  assert.ok(finished.detail.payload.durationMs >= 0);
-  assert.ok(diagnostics.some((event) => event.name === 'foreground_runtime_energy_sample'));
-
-  locationEnabled = false;
-  events.length = 0;
-  await mod.runForegroundRuntimeWork();
-  assert.deepEqual(events, ['persist'], 'Location disabled must prevent upload work');
-
-  locationEnabled = true;
-  transferFails = true;
-  events.length = 0;
-  await mod.runForegroundRuntimeWork({ workToken: 'worker-2' });
-  assert.deepEqual(events, ['persist'], 'Native completion still follows location handoff failure');
-  assert.deepEqual(completedTokens, ['worker-1', 'worker-2']);
-
-  diagnosticsFail = true;
-  await assert.rejects(
-    mod.runForegroundRuntimeWork({ workToken: 'worker-3' }),
-    /diagnostic write failed/,
-  );
-  assert.equal(
-    completedTokens.at(-1),
-    'worker-3',
-    'Logging errors cannot skip native acknowledgement',
-  );
 }
 async function permissionRace() {
   const owners = [],
@@ -230,7 +113,10 @@ async function permissionRace() {
   let preference = true,
     grantPermission;
   let foreground = 'denied';
-  const native = { setRuntimeLocationEnabled: async (enabled) => owners.push(enabled) };
+  const native = {
+    setRuntimeLocationEnabled: async (enabled) => owners.push(enabled),
+    configureRuntimeLocationUploader: async () => events.push('configure-native-uploader'),
+  };
   const location = load('location/backgroundLocation.ts', {
     '@react-native-async-storage/async-storage': {},
     'expo-location': {
@@ -250,7 +136,9 @@ async function permissionRace() {
       defineTask: (name, task) => definitions.set(name, task),
     },
     'react-native': { Platform: { OS: 'android' } },
-    '@/location/backgroundLocationQueue': {},
+    '@/location/backgroundLocationQueue': {
+      drainQueuedBackgroundLocations: async () => events.push('legacy-queue-drain'),
+    },
     '@/location/backgroundLocationDrainTask': {
       ensureBackgroundLocationDrainTaskRegistered: async () => events.push('register-drain'),
       unregisterBackgroundLocationDrainTask: async () => events.push('unregister-drain'),
@@ -266,6 +154,7 @@ async function permissionRace() {
     '@/location/foregroundLocation': { hasSharedLocationRuntime: () => true },
     '@/modules/digital-brain-runtime/src': native,
     '@/location/trackingPreference': { isLocationTrackingEnabled: async () => preference },
+    'process': { env: { EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 'fake-web-client-id' } },
   });
   const openingPermission = location.syncBackgroundLocationTracking(true);
   while (!grantPermission) await new Promise(setImmediate);
@@ -348,12 +237,10 @@ async function debugExportBounds() {
 
 (async () => {
   await debugExportBounds();
-  await handoff();
   await draining();
-  await work();
   await permissionRace();
   console.log(
-    'PASS background runtime: durable handoff/replay, serialized bounded upload, offline recovery, feature isolation',
+    'PASS background runtime: serialized bounded legacy queue upload, offline recovery, permission race',
   );
 })().catch((error) => {
   console.error(error);

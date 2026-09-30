@@ -22,21 +22,23 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile background task convention**: Expo background task definitions must be imported from `mobile/index.js` before `expo-router/entry`, so headless/background launches register the tasks even when React navigation has not mounted.
 
-**Mobile background location convention**: Android location capture is owned by the app's `DigitalBrainRuntimeService`, independently of other app features. Use native Fused Location callbacks with balanced accuracy, a ten-minute requested/minimum interval, a 50m movement filter, and up to twenty minutes of delivery batching. Persist each sample and its capture timezone atomically before waking JavaScript; callbacks never read auth or call the backend. Transfer samples into the durable JS queue before acknowledging the native copy. A separate bounded uploader runs under the foreground runtime, with the scheduled drain worker as fallback. New native batches trigger handoff promptly; periodic JS work is limited to fifteen minutes for location. JavaScript acknowledges a per-worker token to stop the native headless worker service promptly; stale acknowledgements must not stop a newer worker. Energy diagnostics sample permission-free OS battery/current, process CPU and device awake/deep-sleep counters at existing worker opportunities; device-wide counters are not app energy attribution. Location has an independent persisted Settings toggle; sign-out releases its runtime ownership. Keep legacy location/geofence task definitions registered at import for upgrades, but unregister their Android capture registrations and ignore late callbacks after migration. iOS retains Expo location capture. Keep capture, handoff, runtime/permission, queue, auth and drain diagnostics. The location API accepts `android_foreground_location` as sample provenance. Location diagnostic files rotate at 2MiB with one previous file; exports read at most a 256KiB recent tail using Base64 byte ranges, never the entire historical file. See `mobile/BACKGROUND_RUNTIME.md`.
+**Mobile background location convention**: Android background location is owned by the app's `DigitalBrainRuntimeService` and implemented natively. Use Fused Location callbacks with balanced accuracy, a ten-minute requested/minimum interval, a 50m movement filter, and up to one hour of delivery batching. Persist each sample and its capture timezone atomically. A native WorkManager worker uploads directly through the configured frontend proxy using a fresh silent Google ID token; preserve samples until a successful response. Android service callbacks and scheduled/background work must not start Headless JS or depend on the React Native bridge. Use React Native for interactive UI, settings, foreground configuration, and diagnostics. Keep Android location permissions and the independent persisted Settings toggle; sign-out releases runtime ownership and cancels upload work while retaining queued samples. Keep legacy Expo task definitions imported for upgrades, unregister old Android capture/drain registrations, and ignore late callbacks after migration. iOS currently retains its Expo path; do not constrain Android runtime design to maintain cross-platform JS execution. Future Android foreground/background jobs should use native Kotlin services or WorkManager. Keep capture, permission, queue, auth, upload, and runtime diagnostics. The location API accepts `android_foreground_location` as sample provenance. Location diagnostic files rotate at 2MiB with one previous file; exports read at most a 256KiB recent tail using Base64 byte ranges, never the entire historical file. See `mobile/BACKGROUND_RUNTIME.md`.
 
 ## Architecture Documentation
 
 **Mirador AI observability**: The Python orchestrator exports privacy-conscious
-OpenTelemetry request, agent-run, LLM-call, and per-tool-call spans plus LLM
-request, duration, token, agent-run duration, round, tool-call, validation-repair,
-and registered-tool call/duration metrics to Mirador only when
-`MIRADOR_API_KEY` is configured in
+OpenTelemetry spans for AI entry-point requests, agent runs, LLM calls, and
+registered tool calls, plus HTTP, LLM, agent-run, and per-tool metrics to
+Mirador only when `MIRADOR_API_KEY` is configured in
 `backend/.env` or the optional user-private Compose env file. Never export
 prompt/output text, tool arguments/results, user or conversation identifiers,
 or credentials. Add one privacy-conscious child span per registered tool call
-under the active agent span. Keep the HTTP span active through the complete ASGI
-response stream so streamed agent and LLM work remains on the request trace. Do not
-enable blanket HTTP, SQL, or application-log export. See
+under the active agent span. Keep AI request spans active through the complete
+ASGI response stream so streamed agent and LLM work remains on one trace. Record
+metrics for other HTTP routes without creating a trace for every frontend request.
+Trace every production LLM request made through `llm_helpers`, including async
+SSE streams, warm-up calls, and background workflows without an agent-run parent.
+Do not enable blanket HTTP, SQL, or application-log export. See
 `backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
 
 

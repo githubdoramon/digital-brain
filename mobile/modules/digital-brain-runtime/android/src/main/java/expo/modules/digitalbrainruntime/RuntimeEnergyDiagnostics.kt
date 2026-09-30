@@ -40,10 +40,8 @@ object RuntimeEnergyDiagnostics {
       "screenInteractive" to power.isInteractive,
       "deviceIdle" to power.isDeviceIdleMode,
       "powerSaveMode" to power.isPowerSaveMode,
-      "workerServiceTotalMs" to RuntimeWorkService.totalDurationMs,
-      "workerLastFinishReason" to RuntimeWorkService.lastFinishReason,
-      "attribution" to "battery_and_awake_counters_are_device_wide; cpu_is_this_process; worker_duration_is_service_lifetime",
-    )
+      "attribution" to "battery_and_awake_counters_are_device_wide; cpu_is_this_process",
+    ) + RuntimeLocationUploadStats.snapshot(context)
     previousElapsed = elapsed; previousUptime = uptime; previousCpu = cpu; previousCharge = charge
     return result
   }

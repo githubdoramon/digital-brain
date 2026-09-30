@@ -4,6 +4,7 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
 import {
+  drainQueuedBackgroundLocations,
   enqueueBackgroundLocationEntry,
   getQueuedBackgroundLocationSummary,
 } from '@/location/backgroundLocationQueue';
@@ -27,6 +28,8 @@ import { isLocationTrackingEnabled } from '@/location/trackingPreference';
 const BACKGROUND_TRACKING_STATE_KEY = 'digitalbrain.backgroundLocationTrackingState';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 5;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
+const ANDROID_NATIVE_LOCATION_INTERVAL_MS = 10 * 60 * 1000;
+const ANDROID_NATIVE_MAX_BATCH_DELAY_MS = 60 * 60 * 1000;
 const ANDROID_LOCATION_MODE = 'hybrid_quiet_until_moving';
 const IOS_LOCATION_MODE = 'continuous_background_updates';
 const ANDROID_GEOFENCE_RADIUS_METERS = 30;
@@ -943,7 +946,9 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
   TaskManager.defineTask(
     BACKGROUND_LOCATION_GEOFENCE_TASK,
     async ({ data, error, executionInfo }) => {
-      if (hasSharedLocationRuntime()) return;
+      // Android location work moved to the native runtime. Keep this task
+      // definition for iOS and upgrade cleanup, but never run Android work in JS.
+      if (Platform.OS === 'android') return;
       const eventType = (data as { eventType?: number } | undefined)?.eventType;
       const region = (data as { region?: Location.LocationRegion } | undefined)?.region;
       if (error) {
@@ -979,7 +984,9 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error, executionInfo }) => {
-    if (hasSharedLocationRuntime()) return;
+    // Android capture and upload are native-only. This definition remains for
+    // iOS and safely absorbs stale Android callbacks after upgrade.
+    if (Platform.OS === 'android') return;
     const [taskRegistration, executionDiagnostics] = await Promise.all([
       getTaskRegistrationSnapshot().catch(() => ({
         locationTaskRegistered: false,
@@ -1140,6 +1147,7 @@ export type BackgroundLocationDebugStatus = {
   androidCaptureMode: AndroidCaptureMode | null;
   configuredDistanceIntervalMeters: number;
   configuredTimeIntervalMs: number;
+  configuredMaxBatchDelayMs: number | null;
   foregroundPermission: string;
   backgroundPermission: string;
   locationServicesEnabled: boolean | null;
@@ -1227,7 +1235,10 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       registered_tasks: registeredTasks,
       location_task_options: locationTaskOptions,
       configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
+      configured_time_interval_ms: sharedRuntime
+        ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
+        : BACKGROUND_TIME_INTERVAL_MS,
+      configured_max_batch_delay_ms: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
       newest_queued_captured_at: queueSummary.newestCapturedAt,
@@ -1259,7 +1270,10 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
         registered_tasks: androidTaskDiagnostics.registeredTasks,
         location_task_options: androidTaskDiagnostics.locationTaskOptions,
         configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
+        configured_time_interval_ms: sharedRuntime
+          ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
+          : BACKGROUND_TIME_INTERVAL_MS,
+        configured_max_batch_delay_ms: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
         location_mode: getLocationMode(trackingState.mode),
         android_capture_mode: trackingState.mode,
         android_anchor_lat: trackingState.anchorLat,
@@ -1277,7 +1291,10 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     androidCaptureMode:
       Platform.OS === 'android' ? (sharedRuntime ? 'reliable' : trackingState.mode) : null,
     configuredDistanceIntervalMeters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-    configuredTimeIntervalMs: BACKGROUND_TIME_INTERVAL_MS,
+    configuredTimeIntervalMs: sharedRuntime
+      ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
+      : BACKGROUND_TIME_INTERVAL_MS,
+    configuredMaxBatchDelayMs: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     locationServicesEnabled,
@@ -1306,7 +1323,20 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   const generation = ++trackingSyncGeneration;
   enabled = enabled && (await isLocationTrackingEnabled());
   if (generation !== trackingSyncGeneration) return;
-  if (hasSharedLocationRuntime()) {
+  const sharedRuntime = hasSharedLocationRuntime();
+  if (Platform.OS === 'android' && !sharedRuntime) {
+    // Android background location and uploads are native-only. Retire old Expo
+    // registrations after upgrade instead of silently falling back to JS work.
+    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => undefined);
+    await stopAndroidGeofence('native_runtime_unavailable');
+    await unregisterBackgroundLocationDrainTask();
+    reportLocationDebugEvent('background_tracking_blocked', {
+      message: 'Native Android location runtime is unavailable',
+      payload: { reason: 'native_runtime_unavailable', enabled },
+    });
+    return;
+  }
+  if (sharedRuntime) {
     // Retire both legacy Android capture registrations, including an in-flight
     // movement callback's old foreground notification. iOS keeps Expo capture.
     if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
@@ -1345,11 +1375,44 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       });
       return;
     }
-    await ensureBackgroundLocationDrainTaskRegistered();
+    // Android's location delivery and upload queue are handled by Kotlin.
+    // Remove the prior Expo/Headless-JS drain registration after upgrading.
+    await unregisterBackgroundLocationDrainTask();
+    if (generation !== trackingSyncGeneration) return;
+    const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
+    if (!googleWebClientId) {
+      await RuntimeNative!.setRuntimeLocationEnabled(false);
+      reportLocationDebugEvent('background_tracking_blocked', {
+        message: 'Google web client ID is unavailable for native location uploads',
+        payload: { reason: 'native_upload_configuration_missing' },
+      });
+      return;
+    }
+    try {
+      await RuntimeNative!.configureRuntimeLocationUploader(API_BASE_URL, googleWebClientId);
+    } catch (error) {
+      await RuntimeNative!.setRuntimeLocationEnabled(false);
+      reportLocationDebugEvent('background_tracking_blocked', {
+        message: 'Native location uploader configuration failed',
+        error,
+        payload: { reason: 'native_upload_configuration_failed' },
+      });
+      return;
+    }
     if (generation !== trackingSyncGeneration) return;
     await RuntimeNative!.setRuntimeLocationEnabled(true);
+    // Drain any durable queue left by the prior JS uploader while the app is
+    // open. Future Android capture and delivery are native-only.
+    void drainQueuedBackgroundLocations('manual').catch((error) => {
+      reportLocationDebugEvent('legacy_background_queue_drain_error', { error });
+    });
     reportLocationDebugEvent('shared_foreground_location_requested', {
-      payload: { accuracy: 'balanced', interval_ms: BACKGROUND_TIME_INTERVAL_MS },
+      payload: {
+        accuracy: 'balanced',
+        interval_ms: ANDROID_NATIVE_LOCATION_INTERVAL_MS,
+        max_batch_delay_ms: ANDROID_NATIVE_MAX_BATCH_DELAY_MS,
+        execution: 'native_capture_and_native_upload',
+      },
     });
     return;
   }

@@ -10,7 +10,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.util.TimeZone
 
-/** Native capture commits before any JS/auth/network work; ACK follows the JS durable commit. */
+/** Native capture commits before upload; ACK follows a successful native HTTP response. */
 object RuntimeLocationStore {
   private const val MAX_SAMPLES = 200
   private fun file(context: Context) = AtomicFile(File(context.filesDir, "runtime-locations.json"))
@@ -35,31 +35,47 @@ object RuntimeLocationStore {
       throw error
     }
   }
-  @Synchronized fun append(context: Context, location: Location) {
-    if (!location.latitude.isFinite() || !location.longitude.isFinite() || location.time <= 0) return
-    val id = "${location.time}:${location.latitude}:${location.longitude}"
+  @Synchronized fun appendBatch(context: Context, locations: List<Location>) {
     val previous = read(context)
-    if ((0 until previous.length()).any { previous.getJSONObject(it).getString("id") == id }) return
+    val knownIds = (0 until previous.length()).mapTo(mutableSetOf()) {
+      previous.getJSONObject(it).getString("id")
+    }
+    val combined = (0 until previous.length()).map { previous.getJSONObject(it) }.toMutableList()
+    val timezone = TimeZone.getDefault().id
+    var appended = 0
+    locations.forEach { location ->
+      if (!location.latitude.isFinite() || !location.longitude.isFinite() || location.time <= 0) return@forEach
+      val id = "${location.time}:${location.latitude}:${location.longitude}"
+      if (!knownIds.add(id)) return@forEach
+      combined += JSONObject().put("id", id).put("latitude", location.latitude)
+        .put("longitude", location.longitude).put("timestamp", location.time)
+        .put("accuracy", if (location.hasAccuracy()) location.accuracy.toDouble() else JSONObject.NULL)
+        .put("timezone", timezone)
+      appended++
+    }
+    if (appended == 0) return
+
+    val dropped = (combined.size - MAX_SAMPLES).coerceAtLeast(0)
     val next = JSONArray()
-    val dropped = (previous.length() + 1 - MAX_SAMPLES).coerceAtLeast(0)
-    for (index in dropped until previous.length()) next.put(previous.getJSONObject(index))
-    next.put(JSONObject().put("id", id).put("latitude", location.latitude)
-      .put("longitude", location.longitude).put("timestamp", location.time)
-      .put("accuracy", if (location.hasAccuracy()) location.accuracy.toDouble() else JSONObject.NULL)
-      .put("timezone", TimeZone.getDefault().id))
+    combined.drop(dropped).forEach { next.put(it) }
     write(context, next)
-    Log.i("DigitalBrainRuntime", "location_enqueued count=${next.length()} dropped=$dropped")
+    Log.i("DigitalBrainRuntime", "location_enqueued added=$appended count=${next.length()} dropped=$dropped")
   }
-  @Synchronized fun samples(context: Context): List<Map<String, Any?>> {
+  @Synchronized fun pendingSamples(context: Context): List<RuntimeLocationSample> {
     val samples = read(context)
     return (0 until samples.length()).map { index ->
       val item = samples.getJSONObject(index)
-      mapOf("id" to item.getString("id"), "latitude" to item.getDouble("latitude"),
-        "longitude" to item.getDouble("longitude"), "timestamp" to item.getLong("timestamp"),
-        "accuracy" to if (item.isNull("accuracy")) null else item.getDouble("accuracy"),
-        "timezone" to item.getString("timezone"))
+      RuntimeLocationSample(
+        id = item.getString("id"),
+        latitude = item.getDouble("latitude"),
+        longitude = item.getDouble("longitude"),
+        timestamp = item.getLong("timestamp"),
+        accuracy = if (item.isNull("accuracy")) null else item.getDouble("accuracy"),
+        timezone = item.getString("timezone"),
+      )
     }
   }
+
   @Synchronized fun acknowledge(context: Context, ids: Set<String>) {
     val previous = read(context)
     val next = JSONArray()
@@ -70,3 +86,12 @@ object RuntimeLocationStore {
     write(context, next)
   }
 }
+
+data class RuntimeLocationSample(
+  val id: String,
+  val latitude: Double,
+  val longitude: Double,
+  val timestamp: Long,
+  val accuracy: Double?,
+  val timezone: String,
+)

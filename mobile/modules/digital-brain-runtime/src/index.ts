@@ -5,40 +5,28 @@ export type AppRuntimeStatus = {
   owners: string[];
   locationActive: boolean;
   startedAtMs: number | null;
-  lastNativeTickAtMs: number | null;
-  nativeTickCount: number;
-  workRequestCount: number;
-  lastWorkDurationMs: number;
+  nativeUploadRunCount: number;
+  nativeUploadSampleCount: number;
+  nativeUploadLastDurationMs: number;
+  nativeUploadLastOutcome: string;
+  nativeUploadLastHttpStatus: number | null;
+  nativeUploadLastQueueSize: number;
+  nativeLocationQueueSize: number;
   lastError: string | null;
   foregroundTypes: number;
-};
-
-export type RuntimeLocationSample = {
-  id: string;
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-  accuracy: number | null;
-  timezone: string;
 };
 
 class DigitalBrainRuntimeModule extends NativeModule {
   setRuntimeLocationEnabled(_enabled: boolean): Promise<void> {
     throw new Error('Native DigitalBrainRuntime implementation is unavailable');
   }
+  configureRuntimeLocationUploader(_apiBaseUrl: string, _googleWebClientId: string): Promise<void> {
+    throw new Error('Native DigitalBrainRuntime implementation is unavailable');
+  }
   getAppRuntimeStatus(): Promise<AppRuntimeStatus> {
     throw new Error('Native DigitalBrainRuntime implementation is unavailable');
   }
   getRuntimeEnergyDiagnostics(): Promise<Record<string, unknown>> {
-    throw new Error('Native DigitalBrainRuntime implementation is unavailable');
-  }
-  completeRuntimeWork(_workToken: string): Promise<void> {
-    throw new Error('Native DigitalBrainRuntime implementation is unavailable');
-  }
-  readRuntimeLocations(): Promise<RuntimeLocationSample[]> {
-    throw new Error('Native DigitalBrainRuntime implementation is unavailable');
-  }
-  acknowledgeRuntimeLocations(_ids: string[]): Promise<void> {
     throw new Error('Native DigitalBrainRuntime implementation is unavailable');
   }
 }

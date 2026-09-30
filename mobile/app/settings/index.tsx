@@ -577,6 +577,15 @@ export default function SettingsScreen() {
               Shared runtime: {backgroundStatus.sharedRuntime.active ? 'active' : 'inactive'}
               {'\n'}Activities: {backgroundStatus.sharedRuntime.owners.join(', ') || 'none'}
               {'\n'}Last runtime error: {backgroundStatus.sharedRuntime.lastError ?? 'none'}
+              {'\n'}Native upload runs: {backgroundStatus.sharedRuntime.nativeUploadRunCount}
+              {'\n'}Native samples uploaded:{' '}
+              {backgroundStatus.sharedRuntime.nativeUploadSampleCount}
+              {'\n'}Last upload: {backgroundStatus.sharedRuntime.nativeUploadLastOutcome}
+              {'\n'}Last HTTP status:{' '}
+              {backgroundStatus.sharedRuntime.nativeUploadLastHttpStatus ?? 'none'}
+              {'\n'}Last upload duration:{' '}
+              {backgroundStatus.sharedRuntime.nativeUploadLastDurationMs}ms
+              {'\n'}Native samples queued: {backgroundStatus.sharedRuntime.nativeLocationQueueSize}
             </Text>
           )}
           <Text style={styles.versionValue}>
@@ -591,6 +600,9 @@ export default function SettingsScreen() {
           </Text>
           <Text style={styles.versionValue}>
             Capture time interval: {backgroundStatus?.configuredTimeIntervalMs ?? 'unknown'}ms
+          </Text>
+          <Text style={styles.versionValue}>
+            Location delivery batch delay: {backgroundStatus?.configuredMaxBatchDelayMs ?? 'none'}ms
           </Text>
           <Text style={styles.versionValue}>
             Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}
