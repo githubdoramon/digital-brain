@@ -36,6 +36,7 @@ import {
   readVoiceTranscriptionDebugLog,
 } from '@/debug/voiceTranscriptionDebug';
 import {
+  appendNativeLocationDiagnostics,
   getLocationDebugSnapshot,
   buildLocationDebugLogText,
   getLocationDebugLogInfo,
@@ -229,11 +230,12 @@ export default function SettingsScreen() {
   const exportLocationDebug = React.useCallback(async () => {
     setIsExportingLocationDebug(true);
     try {
-      await getBackgroundLocationDebugStatus();
+      const backgroundStatus = await getBackgroundLocationDebugStatus();
       const currentSnapshot = await hydrateLocationDebugSnapshot();
-      const logText =
+      const baseLogText =
         (await readLocationDebugLogText({ backgroundOnly: true })) ||
         buildLocationDebugLogText(currentSnapshot, { backgroundOnly: true });
+      const logText = appendNativeLocationDiagnostics(baseLogText, backgroundStatus.sharedRuntime);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `digital-brain-background-location-debug-${timestamp}.txt`;
       const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;

@@ -22,6 +22,10 @@ object RuntimeLocationUploadConfigStore {
       .putString(API_BASE_URL, normalizedUrl)
       .putString(GOOGLE_WEB_CLIENT_ID, googleWebClientId.trim())
       .commit()) { "Could not persist native location upload configuration" }
+    RuntimeLocationDiagnostics.record(context, "upload_configuration_saved", mapOf(
+      "config_available" to true,
+      "api_endpoint" to diagnosticSnapshot(context)["endpoint"],
+    ))
   }
 
   fun load(context: Context): RuntimeLocationUploadConfig? {
@@ -29,5 +33,18 @@ object RuntimeLocationUploadConfigStore {
     val apiBaseUrl = prefs.getString(API_BASE_URL, null)?.takeIf(String::isNotBlank) ?: return null
     val googleWebClientId = prefs.getString(GOOGLE_WEB_CLIENT_ID, null)?.takeIf(String::isNotBlank) ?: return null
     return RuntimeLocationUploadConfig(apiBaseUrl, googleWebClientId)
+  }
+
+  fun diagnosticSnapshot(context: Context): Map<String, Any?> {
+    val config = runCatching { load(context) }.getOrNull()
+      ?: return mapOf("available" to false, "endpoint" to null)
+    val uri = runCatching { URI(config.apiBaseUrl) }.getOrNull()
+      ?: return mapOf("available" to false, "endpoint" to null)
+    val port = if (uri.port >= 0) ":${uri.port}" else ""
+    val path = uri.path.orEmpty().trimEnd('/')
+    return mapOf(
+      "available" to true,
+      "endpoint" to "${uri.scheme}://${uri.host}$port$path",
+    )
   }
 }

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
+import type { AppRuntimeStatus } from '@/modules/digital-brain-runtime/src';
 
 export type LocationDebugEvent = {
   at: string;
@@ -230,6 +231,22 @@ function buildBackgroundSummaryLines(events: LocationDebugEvent[]): string[] {
     'remaining_queue_size',
   );
   const lastDrainStartedQueueSize = getPayloadNumber(lastDrainStarted?.payload, 'queue_size');
+  const nativeUploadRuns = Array.isArray(lastStatusSnapshot?.payload?.native_upload_recent_runs)
+    ? (lastStatusSnapshot.payload.native_upload_recent_runs as Record<string, unknown>[])
+    : [];
+  const nativeUploadRunLines = nativeUploadRuns.map((run) => {
+    const at = typeof run.at === 'string' ? run.at : 'unknown time';
+    const uploaded = typeof run.uploaded === 'number' ? run.uploaded : 'unknown';
+    const queued = typeof run.queued === 'number' ? run.queued : 'unknown';
+    const status = typeof run.http_status === 'number' ? run.http_status : 'none';
+    const outcome = typeof run.outcome === 'string' ? run.outcome : 'unknown';
+    const duration = typeof run.duration_ms === 'number' ? run.duration_ms : 'unknown';
+    const cpu = typeof run.process_cpu_ms === 'number' ? run.process_cpu_ms : 'unknown';
+    const awake = typeof run.device_awake_ms === 'number' ? run.device_awake_ms : 'unknown';
+    const charge =
+      typeof run.battery_charge_delta_uah === 'number' ? run.battery_charge_delta_uah : 'unknown';
+    return `  ${at} outcome=${outcome} uploaded=${uploaded} queued=${queued} http_status=${status} duration_ms=${duration} process_cpu_ms=${cpu} device_awake_ms=${awake} battery_charge_delta_uah=${charge}`;
+  });
   return [
     'Capture service:',
     `Last capture batch at: ${lastCaptureBatch?.at ?? 'none'}`,
@@ -256,6 +273,19 @@ function buildBackgroundSummaryLines(events: LocationDebugEvent[]): string[] {
     `Last failure event: ${lastFailure?.eventName ?? 'none'}`,
     `Last failure at: ${lastFailure?.at ?? 'none'}`,
     `Last failure reason: ${getPayloadString(lastFailure?.payload, 'reason') ?? lastFailure?.message ?? lastFailure?.error ?? 'none'}`,
+    '',
+    'Native WorkManager upload service:',
+    `Last native upload run at: ${getPayloadString(lastStatusSnapshot?.payload, 'native_upload_last_run_at') ?? 'none'}`,
+    `Native upload runs: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_upload_run_count') ?? 'unknown'}`,
+    `Native samples uploaded: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_upload_sample_count') ?? 'unknown'}`,
+    `Last native upload outcome: ${getPayloadString(lastStatusSnapshot?.payload, 'native_upload_last_outcome') ?? 'unknown'}`,
+    `Last native upload HTTP status: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_upload_last_http_status') ?? 'none'}`,
+    `Last native upload duration: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_upload_last_duration_ms') ?? 'unknown'}ms`,
+    `Last native upload queue size: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_upload_last_queue_size') ?? 'unknown'}`,
+    `Native samples currently queued: ${getPayloadNumber(lastStatusSnapshot?.payload, 'native_location_queue_size') ?? 'unknown'}`,
+    `Recent native upload runs exported: ${nativeUploadRuns.length}`,
+    'Energy note: process CPU is app-process time; device-awake and battery-charge deltas are device-wide.',
+    ...nativeUploadRunLines,
   ];
 }
 
@@ -289,6 +319,48 @@ export function buildLocationDebugLogText(
   lines.push('', ...buildLogLines(filteredEvents));
 
   return lines.join('\n');
+}
+
+export function appendNativeLocationDiagnostics(
+  logText: string,
+  runtime: AppRuntimeStatus | null | undefined,
+): string {
+  const events = runtime?.nativeLocationRecentEvents;
+  const queue = runtime?.nativeLocationQueueSnapshot;
+  const work = runtime?.nativeLocationWorkManager;
+  const lines = [
+    '',
+    'Native Android capture and upload diagnostics:',
+    `Native diagnostics available: ${runtime ? 'yes' : 'no (native module status was unavailable)'}`,
+    `Runtime active: ${runtime?.active ?? 'unknown'}; location active: ${runtime?.locationActive ?? 'unknown'}; owners: ${runtime?.owners?.join(', ') || 'none'}`,
+    `Runtime error: ${runtime?.lastError ?? 'none'}; foreground types: ${runtime?.foregroundTypes ?? 'unknown'}`,
+    `Native uploader endpoint: ${runtime?.nativeLocationUploadConfig?.endpoint ?? 'unknown'}`,
+    `Native upload totals: runs=${runtime?.nativeUploadRunCount ?? 'unknown'} samples_uploaded=${runtime?.nativeUploadSampleCount ?? 'unknown'}`,
+    `Last native upload: at_ms=${runtime?.nativeUploadLastRunAtMs ?? 'unknown'} duration_ms=${runtime?.nativeUploadLastDurationMs ?? 'unknown'} outcome=${runtime?.nativeUploadLastOutcome ?? 'unknown'} http_status=${runtime?.nativeUploadLastHttpStatus ?? 'none'} last_queue=${runtime?.nativeUploadLastQueueSize ?? 'unknown'}`,
+    `Native queue count: ${runtime?.nativeLocationQueueSize ?? 'unknown'}`,
+    `Native event history: ${runtime?.nativeLocationDiagnosticsInfo ? JSON.stringify(runtime.nativeLocationDiagnosticsInfo) : 'unavailable'}`,
+    'Legacy foreground_location_captured entries are foreground client-context lookups, not native background samples.',
+    `Native queue snapshot: ${queue ? JSON.stringify(queue) : 'unavailable'}`,
+    `WorkManager snapshot: ${work ? JSON.stringify(work) : 'unavailable'}`,
+    `Native event records: ${events?.length ?? 0}`,
+    'Native event records use hashed sample keys matching x-location-debug-request-id; search that ID in the mobile proxy and backend logs. No coordinates, tokens, or request bodies are included.',
+    'Device-awake and battery-charge deltas are device-wide; process CPU is app-process time.',
+    'Native event history (oldest first):',
+  ];
+  if (events?.length) {
+    for (const event of events) {
+      const atMs = typeof event.atMs === 'number' ? event.atMs : undefined;
+      const at = atMs === undefined ? 'unknown time' : new Date(atMs).toISOString();
+      const eventName = typeof event.event === 'string' ? event.event : 'unknown_event';
+      const details = Object.fromEntries(
+        Object.entries(event).filter(([key]) => key !== 'atMs' && key !== 'event'),
+      );
+      lines.push(`${at} ${eventName} ${JSON.stringify(details)}`);
+    }
+  } else {
+    lines.push('No native capture/upload events were exported by this installed native module.');
+  }
+  return `${logText}\n${lines.join('\n')}`;
 }
 
 async function ensureLocationDebugLogDirectory(): Promise<void> {

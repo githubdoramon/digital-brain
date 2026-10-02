@@ -974,10 +974,6 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
         },
         recordInHistory: false,
       });
-
-      if (Platform.OS === 'android' && eventType === Location.GeofencingEventType.Exit) {
-        await transitionAndroidTrackingMode('reliable', 'geofence_exit');
-      }
     },
   );
 }
@@ -1179,7 +1175,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   const [
     foregroundPermission,
     backgroundPermission,
-    taskStarted,
+    sharedRuntimeStatus,
     drainTaskRegistered,
     backgroundTaskStatus,
     queueSummary,
@@ -1194,9 +1190,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   ] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
-    sharedRuntime
-      ? RuntimeNative!.getAppRuntimeStatus().then((status) => status.locationActive)
-      : Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
+    sharedRuntime ? RuntimeNative!.getAppRuntimeStatus() : Promise.resolve(null),
     TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
     getBackgroundLocationDrainWorkerStatus(),
     getQueuedBackgroundLocationSummary(),
@@ -1209,6 +1203,37 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     TaskManager.getRegisteredTasksAsync().catch(() => []),
     TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(() => null),
   ]);
+
+  const resolvedSharedRuntimeStatus = sharedRuntimeStatus as AppRuntimeStatus | null;
+  const taskStarted = resolvedSharedRuntimeStatus
+    ? resolvedSharedRuntimeStatus.locationActive
+    : await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+  const nativeUploadSnapshot = {
+    native_upload_run_count: resolvedSharedRuntimeStatus?.nativeUploadRunCount ?? null,
+    native_upload_sample_count: resolvedSharedRuntimeStatus?.nativeUploadSampleCount ?? null,
+    native_upload_last_run_at:
+      resolvedSharedRuntimeStatus?.nativeUploadLastRunAtMs != null
+        ? new Date(resolvedSharedRuntimeStatus.nativeUploadLastRunAtMs).toISOString()
+        : null,
+    native_upload_last_duration_ms: resolvedSharedRuntimeStatus?.nativeUploadLastDurationMs ?? null,
+    native_upload_last_outcome: resolvedSharedRuntimeStatus?.nativeUploadLastOutcome ?? null,
+    native_upload_last_http_status: resolvedSharedRuntimeStatus?.nativeUploadLastHttpStatus ?? null,
+    native_upload_last_queue_size: resolvedSharedRuntimeStatus?.nativeUploadLastQueueSize ?? null,
+    native_location_queue_size: resolvedSharedRuntimeStatus?.nativeLocationQueueSize ?? null,
+    native_upload_recent_runs: (resolvedSharedRuntimeStatus?.nativeUploadRecentRuns ?? []).map(
+      (run) => ({
+        at: new Date(run.atMs).toISOString(),
+        duration_ms: run.durationMs,
+        uploaded: run.uploaded,
+        queued: run.queued,
+        outcome: run.outcome,
+        http_status: run.httpStatus,
+        process_cpu_ms: run.processCpuMs,
+        device_awake_ms: run.deviceAwakeMs,
+        battery_charge_delta_uah: run.batteryChargeDeltaMicroAh,
+      }),
+    ),
+  };
 
   const resolvedBackgroundTaskStatus = backgroundTaskStatus;
 
@@ -1252,6 +1277,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       android_reliable_start_distance_meters: ANDROID_RELIABLE_START_DISTANCE_METERS,
       android_stationary_radius_meters: ANDROID_STATIONARY_RADIUS_METERS,
       android_stationary_min_ms: ANDROID_STATIONARY_MIN_MS,
+      ...nativeUploadSnapshot,
     },
     recordInHistory: false,
   });
@@ -1280,13 +1306,14 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
         android_anchor_lon: trackingState.anchorLon,
         android_anchor_captured_at: trackingState.anchorCapturedAt,
         android_stationary_since_ms: trackingState.stationarySinceMs,
+        ...nativeUploadSnapshot,
       },
       recordInHistory: false,
     });
   }
 
   return {
-    sharedRuntime: sharedRuntime ? await RuntimeNative!.getAppRuntimeStatus() : null,
+    sharedRuntime: resolvedSharedRuntimeStatus,
     locationMode: sharedRuntime ? 'shared_foreground_runtime' : getLocationMode(trackingState.mode),
     androidCaptureMode:
       Platform.OS === 'android' ? (sharedRuntime ? 'reliable' : trackingState.mode) : null,

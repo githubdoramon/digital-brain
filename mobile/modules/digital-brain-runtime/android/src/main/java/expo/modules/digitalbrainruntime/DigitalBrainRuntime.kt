@@ -33,6 +33,10 @@ object DigitalBrainRuntime {
     check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
       .putStringSet("owners", features.persistentKeys())
       .commit()) { "Could not persist runtime owners" }
+    RuntimeLocationDiagnostics.record(context, "runtime_owner_changed", mapOf(
+      "reason" to feature.key,
+      "owner_enabled" to enabled,
+    ))
     Log.i("DigitalBrainRuntime", "owner=${feature.key} enabled=$enabled")
     if (feature == RuntimeFeature.LOCATION) {
       if (!enabled) {
@@ -58,13 +62,21 @@ object DigitalBrainRuntime {
     }
   }
 
-  fun status(context: Context): Map<String, Any?> = mapOf(
-    "active" to (service != null && service?.foregroundTypes != 0),
-    "owners" to owners(context).map { it.key }.sorted(),
-    "locationActive" to (service?.locationActive == true),
-    "startedAtMs" to service?.startedAtMs,
-    "lastError" to lastError,
-    "foregroundTypes" to (service?.foregroundTypes ?: 0),
-    "nativeLocationQueueSize" to runCatching { RuntimeLocationStore.pendingSamples(context).size }.getOrDefault(-1),
-  ) + RuntimeLocationUploadStats.snapshot(context)
+  fun status(context: Context): Map<String, Any?> {
+    val nativeQueue = RuntimeLocationDiagnostics.queueSnapshot(context)
+    return mapOf(
+      "active" to (service != null && service?.foregroundTypes != 0),
+      "owners" to owners(context).map { it.key }.sorted(),
+      "locationActive" to (service?.locationActive == true),
+      "startedAtMs" to service?.startedAtMs,
+      "lastError" to lastError,
+      "foregroundTypes" to (service?.foregroundTypes ?: 0),
+      "nativeLocationQueueSize" to (nativeQueue["count"] as? Int ?: -1),
+      "nativeLocationQueueSnapshot" to nativeQueue,
+      "nativeLocationRecentEvents" to RuntimeLocationDiagnostics.recentEvents(context),
+      "nativeLocationDiagnosticsInfo" to RuntimeLocationDiagnostics.historySnapshot(context),
+      "nativeLocationWorkManager" to RuntimeLocationDiagnostics.workManagerSnapshot(context),
+      "nativeLocationUploadConfig" to RuntimeLocationUploadConfigStore.diagnosticSnapshot(context),
+    ) + RuntimeLocationUploadStats.snapshot(context)
+  }
 }

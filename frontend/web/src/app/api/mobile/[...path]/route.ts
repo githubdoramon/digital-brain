@@ -36,6 +36,11 @@ export async function handler(
 
   const headers = new Headers(request.headers);
   headers.delete("host");
+  const isLocationUpdate = request.method === "POST" && targetPath === "location";
+  const locationRequestId = isLocationUpdate
+    ? headers.get("x-location-debug-request-id") ?? "none"
+    : null;
+  const startedAt = Date.now();
 
   const authHeader = await buildAuthorizationHeader(request);
   if (authHeader) {
@@ -44,6 +49,7 @@ export async function handler(
     console.warn("[mobile proxy] missing authorization header", {
       path: `/${targetPath}`,
       method: request.method,
+      ...(isLocationUpdate ? { debug_request_id: locationRequestId } : {}),
     });
     return new Response(
       JSON.stringify({
@@ -64,11 +70,25 @@ export async function handler(
   };
 
   try {
+    if (isLocationUpdate) {
+      console.info("[mobile location proxy] request", {
+        debug_request_id: locationRequestId,
+        method: request.method,
+      });
+    }
     const backendResponse = await fetch(url, init);
+    if (isLocationUpdate) {
+      console.info("[mobile location proxy] response", {
+        debug_request_id: locationRequestId,
+        status: backendResponse.status,
+        duration_ms: Date.now() - startedAt,
+      });
+    }
     if (backendResponse.status === 401) {
       console.warn("[mobile proxy] backend returned 401", {
         path: `/${targetPath}`,
         method: request.method,
+        ...(isLocationUpdate ? { debug_request_id: locationRequestId } : {}),
       });
     }
     const responseHeaders = new Headers(backendResponse.headers);
@@ -81,7 +101,16 @@ export async function handler(
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error("Orchestrator mobile proxy error", error);
+    if (isLocationUpdate) {
+      console.error("[mobile location proxy] failed", {
+        debug_request_id: locationRequestId,
+        error_type: error instanceof Error ? error.name : typeof error,
+        duration_ms: Date.now() - startedAt,
+      });
+    }
+    if (!isLocationUpdate) {
+      console.error("Orchestrator mobile proxy error", error);
+    }
     return new Response(
       JSON.stringify({
         detail: "Failed to reach orchestrator service",

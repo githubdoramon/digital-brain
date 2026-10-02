@@ -102,7 +102,7 @@ function requestLocationInBackground(): void {
           source: 'expo_location',
         },
       };
-      reportLocationDebugEvent('foreground_location_captured', {
+      reportLocationDebugEvent('foreground_context_location_captured', {
         payload: {
           lat,
           lon,

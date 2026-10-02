@@ -29,10 +29,15 @@ class DigitalBrainRuntimeService : Service() {
     super.onCreate()
     location = RuntimeLocationCapture(this) { RuntimeLocationUploadScheduler.enqueue(this, "location_batch") }
     DigitalBrainRuntime.service = this
+    RuntimeLocationDiagnostics.record(this, "runtime_service_created")
     Log.i("DigitalBrainRuntime", "service_created")
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    RuntimeLocationDiagnostics.record(this, "runtime_service_start_command", mapOf(
+      "attempt" to startId,
+      "owner_enabled" to (RuntimeFeature.LOCATION in DigitalBrainRuntime.owners(this)),
+    ))
     refresh(forceNotification = true)
     if (foregroundTypes == 0) return START_NOT_STICKY
     RuntimeLocationUploadScheduler.enqueueIfPending(this, "service_started")
@@ -51,12 +56,25 @@ class DigitalBrainRuntimeService : Service() {
       (Build.VERSION.SDK_INT < 29 || DigitalBrainRuntime.activityVisible ||
         foregroundTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0 ||
         granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+    RuntimeLocationDiagnostics.record(this, "runtime_location_eligibility_checked", mapOf(
+      "wants_location" to wantsLocation,
+      "fine_permission" to granted(Manifest.permission.ACCESS_FINE_LOCATION),
+      "coarse_permission" to granted(Manifest.permission.ACCESS_COARSE_LOCATION),
+      "background_permission" to granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+      "location_services_enabled" to getSystemService(LocationManager::class.java).isLocationEnabled,
+      "foreground_types" to foregroundTypes,
+    ))
     val types = if (wantsLocation && locationPermitted) {
       android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
     } else 0
-    if (wantsLocation && !locationPermitted) DigitalBrainRuntime.lastError = "Location permission or device location is unavailable"
+    if (wantsLocation && !locationPermitted) {
+      DigitalBrainRuntime.lastError = "Location permission or device location is unavailable"
+      RuntimeLocationDiagnostics.record(this, "runtime_location_blocked", mapOf(
+        "reason" to "permission_or_location_services_unavailable",
+      ))
+    }
     if (types == 0) {
-      location.stop()
+      location.stop("runtime_not_permitted_or_not_owned")
       foregroundTypes = 0
       stopForeground(STOP_FOREGROUND_REMOVE)
       stopSelf()
@@ -65,9 +83,12 @@ class DigitalBrainRuntimeService : Service() {
     try {
       if (forceNotification || types != foregroundTypes || owners != notificationOwners) showNotification(types)
     } catch (error: SecurityException) {
-      location.stop()
+      location.stop("foreground_promotion_rejected")
       foregroundTypes = 0
       DigitalBrainRuntime.lastError = "Foreground location promotion rejected: ${error.javaClass.simpleName}"
+      RuntimeLocationDiagnostics.record(this, "foreground_promotion_rejected", mapOf(
+        "error_type" to error.javaClass.simpleName,
+      ))
       Log.w("DigitalBrainRuntime", "foreground_promotion_rejected", error)
       stopSelf()
       return
@@ -77,9 +98,12 @@ class DigitalBrainRuntimeService : Service() {
     if (types and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0) {
       try { location.start() } catch (error: RuntimeException) {
         DigitalBrainRuntime.lastError = "Location start failed: ${error.javaClass.simpleName}"
+        RuntimeLocationDiagnostics.record(this, "capture_start_failed", mapOf(
+          "error_type" to error.javaClass.simpleName,
+        ))
         Log.w("DigitalBrainRuntime", "location_start_failed", error)
       }
-    } else location.stop()
+      } else location.stop("location_not_active")
   }
 
   private fun showNotification(types: Int) {
@@ -101,9 +125,10 @@ class DigitalBrainRuntimeService : Service() {
   }
 
   override fun onDestroy() {
-    location.stop()
+    location.stop("service_destroyed")
     foregroundTypes = 0
     if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null
+    RuntimeLocationDiagnostics.record(this, "runtime_service_destroyed")
     Log.i("DigitalBrainRuntime", "service_destroyed")
     super.onDestroy()
   }

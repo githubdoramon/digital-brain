@@ -46,6 +46,7 @@ PLACE_WEB_SEARCH_MAX_RESULTS = 3
 PLACE_DESCRIPTION_MIN_CHARS = 80
 PLACE_DESCRIPTION_MAX_CHARS = 600
 PLACE_CLUSTER_RADIUS_M = 75.0
+SAME_PLACE_STAY_MERGE_GAP_MINUTES = 30
 PLACE_QUERY_MAX_POINTS = 3
 PLACE_QUERY_RADIUS_M = 100.0
 
@@ -1730,7 +1731,35 @@ def _build_stay_segments(rows: list[dict[str, Any]], *, day_end: datetime) -> li
         segments.append(_make_segment(current, next_start=row["captured_at"]))
         current = [row]
     segments.append(_make_segment(current, next_start=min(day_end, current[-1]["captured_at"])))
-    return segments
+    return _merge_nearby_same_place_segments(segments)
+
+
+def _merge_nearby_same_place_segments(segments: list[StaySegment]) -> list[StaySegment]:
+    if len(segments) < 2:
+        return segments
+    merged: list[StaySegment] = [segments[0]]
+    max_gap = timedelta(minutes=SAME_PLACE_STAY_MERGE_GAP_MINUTES)
+    for segment in segments[1:]:
+        previous = merged[-1]
+        gap = segment.start_at - previous.end_at
+        if gap < max_gap and _segments_refer_to_same_place(previous, segment):
+            merged[-1] = _make_segment(
+                previous.samples + segment.samples,
+                next_start=segment.end_at,
+            )
+        else:
+            merged.append(segment)
+    return merged
+
+
+def _segments_refer_to_same_place(left: StaySegment, right: StaySegment) -> bool:
+    left_id = str(left.place_id or "").strip()
+    right_id = str(right.place_id or "").strip()
+    if left_id and right_id:
+        return left_id == right_id
+    left_name = normalize_search_text(left.place_name or "")
+    right_name = normalize_search_text(right.place_name or "")
+    return bool(left_name and right_name and left_name == right_name)
 
 
 def _same_stay_cluster(current: list[dict[str, Any]], row: dict[str, Any]) -> bool:
