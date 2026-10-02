@@ -64,9 +64,12 @@ class DigitalBrainRuntimeService : Service() {
       "location_services_enabled" to getSystemService(LocationManager::class.java).isLocationEnabled,
       "foreground_types" to foregroundTypes,
     ))
-    val types = if (wantsLocation && locationPermitted) {
+    val locationTypes = if (wantsLocation && locationPermitted) {
       android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
     } else 0
+    val wantsGlasses = RuntimeFeature.GLASSES in owners && RuntimeGlasses.signedIn(this)
+    val glassesTypes = if (wantsGlasses && RuntimeGlasses.permitted(this)) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
+    val types = locationTypes or glassesTypes
     if (wantsLocation && !locationPermitted) {
       DigitalBrainRuntime.lastError = "Location permission or device location is unavailable"
       RuntimeLocationDiagnostics.record(this, "runtime_location_blocked", mapOf(
@@ -74,6 +77,7 @@ class DigitalBrainRuntimeService : Service() {
       ))
     }
     if (types == 0) {
+      RuntimeGlasses.stop()
       location.stop("runtime_not_permitted_or_not_owned")
       foregroundTypes = 0
       stopForeground(STOP_FOREGROUND_REMOVE)
@@ -94,6 +98,12 @@ class DigitalBrainRuntimeService : Service() {
       return
     }
     foregroundTypes = types
+    if (glassesTypes != 0) {
+      try { RuntimeGlasses.start(this) } catch (error: RuntimeException) {
+        RuntimeGlasses.stop()
+        DigitalBrainRuntime.lastError = "Glasses start failed: ${error.javaClass.simpleName}"
+      }
+    } else RuntimeGlasses.stop()
     notificationOwners = owners
     if (types and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0) {
       try { location.start() } catch (error: RuntimeException) {
@@ -111,9 +121,17 @@ class DigitalBrainRuntimeService : Service() {
     manager.createNotificationChannel(NotificationChannel("digital_brain_runtime", "Digital Brain activity", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
     val builder = NotificationCompat.Builder(this, "digital_brain_runtime")
       .setSmallIcon(android.R.drawable.ic_dialog_info)
-      .setContentTitle("Digital Brain location tracking")
-      .setContentText("Background location capture is active")
-      .setStyle(NotificationCompat.BigTextStyle().bigText("Background location capture is active"))
+      .setContentTitle("Digital Brain activity")
+      .setContentText(when (types) {
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
+        else -> "Glasses connection and location tracking are active"
+      })
+      .setStyle(NotificationCompat.BigTextStyle().bigText(when (types) {
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
+        else -> "Glasses connection and location tracking are active"
+      }))
       .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
     packageManager.getLaunchIntentForPackage(packageName)?.let {
       builder.setContentIntent(PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
@@ -125,6 +143,7 @@ class DigitalBrainRuntimeService : Service() {
   }
 
   override fun onDestroy() {
+    RuntimeGlasses.stop()
     location.stop("service_destroyed")
     foregroundTypes = 0
     if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null

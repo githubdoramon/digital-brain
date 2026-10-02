@@ -1,6 +1,6 @@
 # Android background location runtime
 
-`DigitalBrainRuntimeService` owns Android background location capture. Location tracking is tied to the persisted Settings toggle; sign-out releases runtime ownership and cancels upload work while keeping already captured samples queued.
+`DigitalBrainRuntimeService` owns Android background location capture and the optional Mentra Live glasses connection. These have independent persisted owners and share one foreground notification. Glasses uses the `connectedDevice` service type; location retains its existing eligibility and capture policy. See `GLASSES_CONNECTION.md` for pairing, reconnect, OTA and event-driven native chime/call-alert behavior. Alerts use Android notification/call callbacks and the existing glasses owner; they add no separate persistent foreground owner or Headless JS. Location tracking is tied to the persisted Settings toggle; sign-out releases runtime ownership and cancels upload work while keeping already captured samples queued.
 
 ## Native capture and upload
 
@@ -17,3 +17,7 @@ Runtime status exposes native upload run/sample totals, last run time/duration/o
 The JSONL log rotates at 2MiB and keeps one previous file. Exports read at most the newest 256KiB of the active file. The location service and WorkManager do not guarantee exact delivery timing, survival after force-stop, continuous CPU wakefulness, or OEM restart behavior. Upload work is bounded per run; later native worker runs continue a backlog.
 
 The location API accepts `android_foreground_location` sample provenance. Deploy the backend schema that recognizes this value so Android foreground samples are accepted.
+
+## Glasses media transfers
+
+`GlassesMediaWorker` owns original downloads, resumable proxy uploads, and confirmed cleanup without React Native or Headless JS. Capture/video/button callbacks debounce work for five seconds; a ready connection catches up missed captures. Runs yield after seven minutes and continue durable queues. Existing Wi-Fi gallery reachability is checked only for requested work; hotspot fallback uses a `WifiNetworkSpecifier` scoped to gallery sockets, with no process-wide network binding. Internet requests retain Android routing, including cellular. First hotspot approval can require the foreground Settings screen. App-owned hotspot state is recorded so a later run can clean up after interruption. Disable/sign-out cancel work and preserve account-scoped original files. Fresh silent Google tokens are obtained natively and requests refresh once on 401. See [GLASSES_MEDIA.md](GLASSES_MEDIA.md) for upload acknowledgement and device qualification.

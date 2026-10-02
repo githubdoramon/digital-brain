@@ -7,6 +7,7 @@ import { apiFetch, setAuthDiagnosticsProvider, setAuthRefreshHandler, setAuthTok
 import { configureGoogleSignIn } from '@/auth/googleSignin';
 import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
 import { getTokenDiagnostics } from '@/auth/tokenDiagnostics';
+import { syncGlassesSignedIn } from '@/glasses/runtime';
 
 type AuthContextValue = {
   token: string | null;
@@ -201,6 +202,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     console.info('[auth] signOut');
+    await syncGlassesSignedIn(false);
     setToken(null);
     setEmail(null);
     setName(null);

@@ -169,7 +169,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         'Digital Brain can show recording controls while capturing audio.',
     },
   });
-  const pluginsWithBuildProperties = withPlugin(pluginsWithAudioStudio, 'expo-build-properties', {
+  const pluginsWithMentra = withPlugin(pluginsWithAudioStudio, '@mentra/bluetooth-sdk', {
+    analytics: { enabled: false },
+  });
+  const pluginsWithBuildProperties = withPlugin(pluginsWithMentra, 'expo-build-properties', {
     android: {
       minSdkVersion: 28,
     },

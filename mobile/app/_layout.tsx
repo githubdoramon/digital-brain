@@ -12,6 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { syncGlassesSignedIn } from '@/glasses/runtime';
 import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
 import { ensureAppStateTracking } from '@/location/runtimeState';
@@ -93,6 +94,9 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     if (isLoading) {
       return;
     }
+    void syncGlassesSignedIn(Boolean(token)).catch((error) => {
+      console.warn('Glasses runtime could not synchronize', error);
+    });
     const syncLocation = () => {
       void syncBackgroundLocationTracking(Boolean(token)).catch((error) => {
         console.warn('Background location tracking could not start', error);
@@ -100,7 +104,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     };
     syncLocation();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') syncLocation();
+      if (state === 'active') {
+        syncLocation();
+        void syncGlassesSignedIn(Boolean(token)).catch((error) =>
+          console.warn('Glasses resume failed', error),
+        );
+      }
     });
     return () => subscription.remove();
   }, [isLoading, token]);
@@ -236,6 +245,8 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
             headerShown: false,
           }}
         />
+        <Stack.Screen name="settings/glasses/index" options={{ headerShown: false }} />
+        <Stack.Screen name="settings/glasses/alerts/index" options={{ headerShown: false }} />
         <Stack.Screen
           name="settings/notifications"
           options={{

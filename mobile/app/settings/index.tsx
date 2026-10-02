@@ -439,6 +439,22 @@ export default function SettingsScreen() {
         ]}
       >
         {Platform.OS === 'android' && <BackgroundLocationControl />}
+        {Platform.OS === 'android' && (
+          <Card style={[styles.card, styles.navCard]}>
+            <Pressable
+              style={styles.navRow}
+              onPress={() => router.push('/settings/glasses' as never)}
+            >
+              <View style={styles.textBlock}>
+                <Text style={styles.rowTitle}>Glasses</Text>
+                <Text style={styles.rowSubtitle}>
+                  Pair Mentra Live, manage connection, and update firmware.
+                </Text>
+              </View>
+              <Ionicons name="glasses-outline" size={20} color={theme.colors.mutedInk} />
+            </Pressable>
+          </Card>
+        )}
         <Card style={[styles.card, styles.navCard]}>
           <Pressable
             style={styles.navRow}

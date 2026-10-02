@@ -1,7 +1,8 @@
 package expo.modules.digitalbrainruntime
 
 enum class RuntimeFeature(val key: String, val persistent: Boolean) {
-  LOCATION("location", true);
+  LOCATION("location", true),
+  GLASSES("glasses", true);
 
   companion object {
     fun fromKey(key: String) = entries.firstOrNull { it.key == key }

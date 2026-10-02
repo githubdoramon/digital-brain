@@ -37,6 +37,7 @@ services:
     volumes:
       - ./backend/orchestrator/config/service_manifest.dev.json:/app/config/service_manifest.json:ro
       - ./backend/orchestrator/storage/documents:/app/storage/documents
+      - ./backend/orchestrator/storage/glasses-media:/app/storage/glasses-media
 
   frontend:
     build:

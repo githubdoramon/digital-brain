@@ -19,6 +19,7 @@ function load(file, mocks, globals = {}) {
       module,
       exports: module.exports,
       console,
+      process: { env: { EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 'fake-web-client-id' } },
       Date,
       setTimeout,
       clearTimeout,
@@ -154,7 +155,7 @@ async function permissionRace() {
     '@/location/foregroundLocation': { hasSharedLocationRuntime: () => true },
     '@/modules/digital-brain-runtime/src': native,
     '@/location/trackingPreference': { isLocationTrackingEnabled: async () => preference },
-    'process': { env: { EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 'fake-web-client-id' } },
+    process: { env: { EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: 'fake-web-client-id' } },
   });
   const openingPermission = location.syncBackgroundLocationTracking(true);
   while (!grantPermission) await new Promise(setImmediate);

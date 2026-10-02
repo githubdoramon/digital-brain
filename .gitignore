@@ -50,3 +50,6 @@ android/.idea/
 .idea/
 .vscode/
 *.swp
+
+# Private original media and resumable upload sessions
+backend/orchestrator/storage/glasses-media/
