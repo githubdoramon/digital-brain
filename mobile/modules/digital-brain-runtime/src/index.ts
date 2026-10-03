@@ -74,7 +74,9 @@ export type NativeLocationWorkManagerSnapshot = {
 };
 
 export type GlassesStatus = {
-  media: { pending: number; status: string };
+  media: { pending: number; status: string; transport: string; networkNote: string | null };
+  wifi: { connected: boolean; ssid: string | null; address: string | null };
+  hotspotEnabled: boolean;
   enabled: boolean;
   signedIn: boolean;
   running: boolean;
@@ -143,6 +145,13 @@ type DigitalBrainRuntimeModule = NativeModule & {
   configureGlassesWifi(ssid: string, password: string): Promise<void>;
   getGlassesDiagnostics(): Promise<Record<string, unknown>>;
   getGlassesAlertsStatus(): Promise<GlassesAlertsStatus>;
+  getGlassesRecordingStatus(): Promise<GlassesRecordingStatus>;
+  startGlassesRecording(baseUri: string): Promise<void>;
+  stopGlassesRecording(): Promise<void>;
+  retryGlassesRecordingSave(baseUri: string): Promise<void>;
+  playGlassesRecording(uri: string): Promise<void>;
+  seekGlassesRecording(ms: number): Promise<void>;
+  stopGlassesRecordingPlayback(): Promise<void>;
   getGlassesAlertApps(): Promise<GlassesAlertApp[]>;
   saveGlassesAlerts(
     notifications: boolean,
@@ -163,3 +172,19 @@ type DigitalBrainRuntimeModule = NativeModule & {
 };
 
 export default requireOptionalNativeModule<DigitalBrainRuntimeModule>('DigitalBrainRuntime');
+
+export type GlassesRecordingStatus = {
+  state: 'IDLE' | 'RECORDING' | 'SAVING' | 'SAVE_FAILED';
+  startedAtMs: number;
+  durationMs: number;
+  message: string | null;
+  savedUri: string | null;
+  ready: boolean;
+  playback: {
+    uri: string | null;
+    playing: boolean;
+    durationMs: number;
+    positionMs: number;
+    error: string | null;
+  };
+};

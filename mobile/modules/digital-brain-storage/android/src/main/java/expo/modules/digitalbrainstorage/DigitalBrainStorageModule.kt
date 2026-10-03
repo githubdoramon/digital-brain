@@ -335,6 +335,7 @@ class DigitalBrainStorageModule : Module() {
           "name" to (document.name ?: "capture.bin"),
           "mimeType" to (document.type ?: "application/octet-stream"),
           "bytes" to document.length(),
+          "modifiedAtMs" to document.lastModified(),
         )
       }
     }

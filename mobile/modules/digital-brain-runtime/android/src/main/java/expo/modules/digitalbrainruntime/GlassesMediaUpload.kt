@@ -26,23 +26,41 @@ class GlassesMediaUpload(private val c: Context, private val owner: String) {
           connection.outputStream.use { it.write(body) }
         }
         val status = connection.responseCode
+        // Successful chunk requests are deliberately omitted to keep this trail useful and cheap.
+        if (method != "PUT" || status !in 200..299) GlassesMediaDiagnostics.record(
+          c, GlassesMediaEvent.UPLOAD_HTTP, path = path, httpStatus = status)
+
         if (status == 401 && attempt == 0) { token = null; return@repeat }
-        check(status in 200..299) { "Digital Brain upload HTTP $status" }
+        if (status !in 200..299) {
+          val reason = runCatching {
+            connection.errorStream?.use {
+              val result = JSONObject(String(GlassesMediaStore.readBounded(it, 65536)))
+              GlassesUploadReason.fromDetail(result.optString("detail"))
+            }
+          }.getOrNull() ?: GlassesUploadReason.UNKNOWN
+          GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED,
+            phase = GlassesMediaPhase.UPLOAD, path = path, httpStatus = status, uploadReason = reason)
+          throw GlassesUploadException(status, reason)
+        }
         return connection.inputStream.use { JSONObject(String(GlassesMediaStore.readBounded(it, 65536))) }
+      } catch (e: Exception) {
+        GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED, phase = GlassesMediaPhase.UPLOAD,
+          path = path, error = GlassesMediaDiagnosticPolicy.failure(e))
+        throw e
       } finally { connection.disconnect() }
     }
     error("Sign in again to resume uploads")
   }
   fun upload(record: JSONObject, file: JSONObject, deadline: Long, active: () -> Boolean) {
     val key = file.getString("key")
-    if (request("/receipts/$key").optBoolean("confirmed")) { file.put("confirmed", true); return }
+    if (request("/receipts/$key").optBoolean("confirmed")) { file.put("confirmed", true); GlassesMediaDiagnostics.record(c, GlassesMediaEvent.UPLOAD_CONFIRMED); return }
     val original = GlassesMediaStore.bytes(c, owner, key)
     val metadata = JSONObject().put("capture_key", key).put("sha256", file.getString("sha256"))
       .put("size", file.getLong("size")).put("filename", file.getString("name").substringAfterLast('/'))
       .put("mime_type", file.getString("mime"))
       .put("captured_at", if (record.has("timestamp")) java.time.Instant.ofEpochMilli(record.getLong("timestamp")).toString() else JSONObject.NULL)
     val session = request("/sessions", metadata.toString().toByteArray())
-    if (session.optBoolean("confirmed")) { file.put("confirmed", true); return }
+    if (session.optBoolean("confirmed")) { file.put("confirmed", true); GlassesMediaDiagnostics.record(c, GlassesMediaEvent.UPLOAD_CONFIRMED); return }
     val id = session.getString("session_id")
     var offset = session.getLong("offset")
     check(offset in 0..original.length()) { "Invalid upload offset" }
@@ -56,6 +74,6 @@ class GlassesMediaUpload(private val c: Context, private val owner: String) {
       }
     }
     check(request("/sessions/$id/complete", ByteArray(0)).optBoolean("confirmed")) { "Upload is not confirmed" }
-    file.put("confirmed", true)
+    file.put("confirmed", true); GlassesMediaDiagnostics.record(c, GlassesMediaEvent.UPLOAD_CONFIRMED)
   }
 }

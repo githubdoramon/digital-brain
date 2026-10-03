@@ -28,6 +28,18 @@ class DigitalBrainRuntimeModule : Module() {
       }
     }
     AsyncFunction("syncGlassesMedia") { GlassesMediaWorker.enqueue(context(), manual = true) }
+    AsyncFunction("getGlassesRecordingStatus") Coroutine { -> withContext(Dispatchers.Main) {
+      GlassesRecording.snapshot(context()) + mapOf("playback" to GlassesRecordingPlayback.snapshot())
+    } }
+    AsyncFunction("startGlassesRecording") Coroutine { baseUri: String -> withContext(Dispatchers.Main) {
+      check(appContext.currentActivity?.hasWindowFocus() == true) { "Open Recordings to start recording" }
+      GlassesRecording.start(context(), baseUri)
+    } }
+    AsyncFunction("stopGlassesRecording") Coroutine { -> withContext(Dispatchers.Main) { GlassesRecording.stop() } }
+    AsyncFunction("retryGlassesRecordingSave") Coroutine { baseUri: String -> withContext(Dispatchers.Main) { GlassesRecording.retry(context(), baseUri) } }
+    AsyncFunction("playGlassesRecording") Coroutine { uri: String -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.play(context(), uri) } }
+    AsyncFunction("seekGlassesRecording") Coroutine { ms: Int -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.seek(ms) } }
+    AsyncFunction("stopGlassesRecordingPlayback") Coroutine { -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.stop() } }
     AsyncFunction("getGlassesStatus") Coroutine { ->
       withContext(Dispatchers.Main) { RuntimeGlasses.snapshot(context()) }
     }
@@ -41,7 +53,11 @@ class DigitalBrainRuntimeModule : Module() {
     AsyncFunction("configureGlassesWifi") Coroutine { ssid: String, password: String ->
       withContext(Dispatchers.Main) { RuntimeGlasses.configureWifi(ssid, password) }
     }
-    AsyncFunction("getGlassesDiagnostics") Coroutine { -> withContext(Dispatchers.Main) { RuntimeGlasses.diagnostics(context()) } }
+    AsyncFunction("getGlassesDiagnostics") Coroutine { ->
+      val c = context()
+      val connection = withContext(Dispatchers.Main) { RuntimeGlasses.diagnostics(c) }
+      connection + withContext(Dispatchers.IO) { mapOf("mediaLog" to GlassesMediaDiagnostics.snapshot(c)) }
+    }
     AsyncFunction("getGlassesAlertsStatus") Coroutine { -> withContext(Dispatchers.Main) { GlassesAlertSettings.status(context()) } }
     AsyncFunction("getGlassesAlertApps") { GlassesAlertSettings.apps(context()) }
     AsyncFunction("saveGlassesAlerts") Coroutine { notifications: Boolean, calls: Boolean, packages: List<String>, chime: Int, call: Int ->

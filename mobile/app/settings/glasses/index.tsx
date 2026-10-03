@@ -1,4 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
@@ -8,7 +9,6 @@ import {
   AppState,
   KeyboardAvoidingView,
   Platform,
-  Share,
   StyleSheet,
   Switch,
   Text,
@@ -32,6 +32,10 @@ import {
 } from '@/glasses/runtime';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import type { GlassesStatus, GlassesWifiNetwork } from '@/modules/digital-brain-runtime/src';
+import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 import { theme } from '@/theme';
 
 export default function GlassesSettingsScreen() {
@@ -200,6 +204,17 @@ export default function GlassesSettingsScreen() {
             },
           ]}
         >
+          <Card style={styles.card}>
+            <Text style={styles.title}>Recordings</Text>
+            <Text style={styles.body}>
+              Record audio from your glasses and listen to files saved on this phone.
+            </Text>
+            <Button
+              label="Glasses recordings"
+              variant="secondary"
+              onPress={() => router.push('/settings/glasses/recordings')}
+            />
+          </Card>
           {loadError && (
             <Card style={styles.card}>
               <Text style={styles.error}>{loadError}</Text>
@@ -245,6 +260,14 @@ export default function GlassesSettingsScreen() {
                                   : 'Runtime stopped'}
                 </Text>
                 <Text style={styles.body}>{status.savedName ?? 'No saved glasses'}</Text>
+                <Text style={styles.body}>
+                  Glasses Wi-Fi:{' '}
+                  {status.wifi?.connected ? (status.wifi.ssid ?? 'Connected') : 'Disconnected'}
+                  {status.wifi?.address ? ` · ${status.wifi.address}` : ''}
+                </Text>
+                <Text style={styles.body}>
+                  Glasses hotspot: {status.hotspotEnabled ? 'On' : 'Off'}
+                </Text>
                 {status.nextRetryAtMs && (
                   <Text style={styles.body}>
                     Next attempt around {new Date(status.nextRetryAtMs).toLocaleTimeString()}
@@ -306,6 +329,12 @@ export default function GlassesSettingsScreen() {
                   {status.media?.pending ?? 0} pending ·{' '}
                   {status.media?.status ?? 'Waiting for glasses'}
                 </Text>
+                <Text style={styles.body}>
+                  Transfer connection: {status.media?.transport ?? 'Not transferring'}
+                </Text>
+                {status.media?.networkNote && (
+                  <Text style={styles.body}>{status.media.networkNote}</Text>
+                )}
                 <Text style={styles.body}>
                   Originals sync automatically over Wi-Fi, using the glasses hotspot when needed.
                   Uploads can use cellular.
@@ -476,22 +505,36 @@ export default function GlassesSettingsScreen() {
               </Card>
               <Card style={styles.card}>
                 <Text style={styles.title}>Connection diagnostics</Text>
-                <Text style={styles.body}>SDK 3.1.1 · reconnect delay capped at 5 minutes.</Text>
-                <Text style={styles.body}>
-                  Battery and awake counters describe the whole phone. CPU time describes this app
-                  process.
-                </Text>
                 <Button
-                  label="Export diagnostics"
+                  label="Export debug logs"
                   variant="secondary"
                   disabled={busy}
                   onPress={() =>
                     void run(async () => {
                       const diagnostics = await glassesNative().getGlassesDiagnostics();
-                      await Share.share({
-                        message: JSON.stringify(diagnostics, null, 2),
-                        title: 'Glasses diagnostics',
-                      });
+                      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                      const fileName = `digital-brain-glasses-debug-${timestamp}.json`;
+                      const cache = FileSystem.cacheDirectory;
+                      if (!cache) throw new Error('Debug export storage is unavailable.');
+                      const uri = `${cache}${fileName}`;
+                      try {
+                        await FileSystem.writeAsStringAsync(
+                          uri,
+                          JSON.stringify(diagnostics, null, 2),
+                          {
+                            encoding: FileSystem.EncodingType.UTF8,
+                          },
+                        );
+                        await copyToDigitalBrainStorage(
+                          uri,
+                          DigitalBrainStorageFolder.Exports,
+                          fileName,
+                          'application/json',
+                        );
+                        showSuccess(`Saved to your Digital Brain folder as ${fileName}.`);
+                      } finally {
+                        await FileSystem.deleteAsync(uri, { idempotent: true });
+                      }
                     })
                   }
                 />

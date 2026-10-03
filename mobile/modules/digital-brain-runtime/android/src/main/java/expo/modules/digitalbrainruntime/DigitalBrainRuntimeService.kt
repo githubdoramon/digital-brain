@@ -38,6 +38,7 @@ class DigitalBrainRuntimeService : Service() {
       "attempt" to startId,
       "owner_enabled" to (RuntimeFeature.LOCATION in DigitalBrainRuntime.owners(this)),
     ))
+    if (intent?.action == "stop_glasses_recording") GlassesRecording.stop()
     refresh(forceNotification = true)
     if (foregroundTypes == 0) return START_NOT_STICKY
     RuntimeLocationUploadScheduler.enqueueIfPending(this, "service_started")
@@ -69,7 +70,9 @@ class DigitalBrainRuntimeService : Service() {
     } else 0
     val wantsGlasses = RuntimeFeature.GLASSES in owners && RuntimeGlasses.signedIn(this)
     val glassesTypes = if (wantsGlasses && RuntimeGlasses.permitted(this)) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
-    val types = locationTypes or glassesTypes
+    val recordingTypes = if (GlassesRecording.capturing && glassesTypes != 0 && granted(Manifest.permission.RECORD_AUDIO))
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
+    val types = locationTypes or glassesTypes or recordingTypes
     if (wantsLocation && !locationPermitted) {
       DigitalBrainRuntime.lastError = "Location permission or device location is unavailable"
       RuntimeLocationDiagnostics.record(this, "runtime_location_blocked", mapOf(
@@ -119,20 +122,23 @@ class DigitalBrainRuntimeService : Service() {
   private fun showNotification(types: Int) {
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel("digital_brain_runtime", "Digital Brain activity", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
+    val body = if (GlassesRecording.capturing) "Glasses microphone is active. Tap Stop recording to save."
+      else when (types) {
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
+        else -> "Glasses connection and location tracking are active"
+      }
     val builder = NotificationCompat.Builder(this, "digital_brain_runtime")
       .setSmallIcon(android.R.drawable.ic_dialog_info)
-      .setContentTitle("Digital Brain activity")
-      .setContentText(when (types) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
-        else -> "Glasses connection and location tracking are active"
-      })
-      .setStyle(NotificationCompat.BigTextStyle().bigText(when (types) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
-        else -> "Glasses connection and location tracking are active"
-      }))
+      .setContentTitle(if (GlassesRecording.capturing) "Recording from glasses" else "Digital Brain activity")
+      .setContentText(body)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(body))
       .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
+    if (GlassesRecording.capturing) {
+      val stop = Intent(this, DigitalBrainRuntimeService::class.java).setAction("stop_glasses_recording")
+      builder.addAction(android.R.drawable.ic_media_pause, "Stop recording",
+        PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+    }
     packageManager.getLaunchIntentForPackage(packageName)?.let {
       builder.setContentIntent(PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
     }
@@ -143,10 +149,11 @@ class DigitalBrainRuntimeService : Service() {
   }
 
   override fun onDestroy() {
+    // Recording teardown must not promote a service that is being destroyed.
+    if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null
     RuntimeGlasses.stop()
     location.stop("service_destroyed")
     foregroundTypes = 0
-    if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null
     RuntimeLocationDiagnostics.record(this, "runtime_service_destroyed")
     Log.i("DigitalBrainRuntime", "service_destroyed")
     super.onDestroy()

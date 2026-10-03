@@ -175,6 +175,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const pluginsWithBuildProperties = withPlugin(pluginsWithMentra, 'expo-build-properties', {
     android: {
       minSdkVersion: 28,
+      // Mentra's local gallery serves HTTP; preserve this in clean production prebuilds.
+      usesCleartextTraffic: true,
     },
   });
 

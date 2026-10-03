@@ -2,6 +2,8 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.READ_PHONE_STATE" />
@@ -29,6 +31,6 @@
       <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
     </service>
     <service android:name=".DigitalBrainRuntimeService" android:exported="false"
-      android:foregroundServiceType="location|connectedDevice" />
+      android:foregroundServiceType="location|connectedDevice|microphone" />
   </application>
 </manifest>

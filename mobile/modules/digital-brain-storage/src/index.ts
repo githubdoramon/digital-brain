@@ -26,7 +26,9 @@ type DigitalBrainStorageNativeModule = {
   listSubdirectory(
     baseUri: string,
     folder: string,
-  ): Promise<{ uri: string; name: string; mimeType: string; bytes: number }[]>;
+  ): Promise<
+    { uri: string; name: string; mimeType: string; bytes: number; modifiedAtMs?: number }[]
+  >;
   getFileInfo(uri: string): Promise<{ exists: boolean; bytes: number }>;
   deleteFile(uri: string): Promise<void>;
 };

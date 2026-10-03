@@ -11,7 +11,7 @@ index ba9c1a2..1cb51ca 100644
              sdk =
                      MentraBluetoothSdk.create(
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
-index b31dc38..ea93034 100644
+index b31dc38..62bbdcd 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
 @@ -285,11 +285,12 @@ class DeviceManager {
@@ -69,6 +69,39 @@ index b31dc38..ea93034 100644
          val context = Bridge.getContext()
  
          try {
+@@ -1791,6 +1796,11 @@ class DeviceManager {
+         ar99.sendFactoryReset()
+     }
+ 
++    fun sendGalleryServerEnabled(requestId: String, enabled: Boolean) {
++        val live = sgc as? MentraLive ?: throw IllegalStateException("unsupported_device")
++        live.sendGalleryServerEnabled(requestId, enabled)
++    }
++
+     fun sendGalleryMode(requestId: String, enabled: Boolean) {
+         val live = sgc as? MentraLive ?: throw IllegalStateException("unsupported_device")
+         live.sendGalleryMode(requestId, enabled)
+@@ -2010,9 +2020,20 @@ class DeviceManager {
+         if (micEnabled && !nextEnabled) {
+             vadPolicy?.microphoneStateChanged(false)
+         }
++        if (ExternalConnectionOwner.enabled(Bridge.getContext())) {
++            synchronized(lc3Lock) {
++                if (nextEnabled && lc3DecoderPtr == 0L) lc3DecoderPtr = Lc3Cpp.initDecoder()
++                if (nextEnabled) check(lc3DecoderPtr != 0L) { "Glasses microphone decoder unavailable" }
++            }
++        }
+         micEnabled = nextEnabled
+         vadBuffer.clear()
+         updateMicState()
++        if (ExternalConnectionOwner.enabled(Bridge.getContext()) && !nextEnabled) {
++            synchronized(lc3Lock) {
++                if (lc3DecoderPtr != 0L) { Lc3Cpp.freeDecoder(lc3DecoderPtr); lc3DecoderPtr = 0L }
++            }
++        }
+     }
+ 
+     fun requestPhoto(request: PhotoRequest) {
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/ExternalConnectionOwner.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/ExternalConnectionOwner.kt
 new file mode 100644
 index 0000000..843e2c9
@@ -87,10 +120,25 @@ index 0000000..843e2c9
 +        .metaData?.getBoolean("com.mentra.bluetoothsdk.external_connection_owner", false) == true
 +}
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-index dc4bd25..7b2b969 100644
+index dc4bd25..cf9dda0 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-@@ -1295,7 +1295,7 @@ class MentraBluetoothSdk private constructor(
+@@ -543,6 +543,14 @@ class MentraBluetoothSdk private constructor(
+         DeviceStore.apply(ObservableStore.BLUETOOTH_CATEGORY, "screen_disabled", disabled)
+     }
+ 
++    /** Enable station-network gallery access on firmware that supports the acknowledged command. */
++    suspend fun setGalleryServerEnabled(enabled: Boolean): SettingsAckEvent =
++        performSettingsCommand(
++            setting = "gallery_server",
++            updateStore = { _ -> },
++            send = { requestId -> deviceManager.sendGalleryServerEnabled(requestId, enabled) },
++        )
++
+     suspend fun setGalleryModeEnabled(enabled: Boolean): SettingsAckEvent =
+         performSettingsCommand(
+             setting = "gallery_mode",
+@@ -1295,7 +1303,7 @@ class MentraBluetoothSdk private constructor(
      internal suspend fun startOtaUpdate(otaVersionUrl: String): OtaStartAckEvent =
          startOtaCommand(otaVersionUrl)
  
@@ -100,7 +148,7 @@ index dc4bd25..7b2b969 100644
      fun startAr99OtaFromFile(path: String): Boolean {
          requireGlassesConnected("start AR99 OTA")
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
-index 703c7f0..637f78f 100644
+index 703c7f0..4559537 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
 @@ -1031,6 +1031,7 @@ class MentraLive : SGCManager() {
@@ -127,3 +175,18 @@ index 703c7f0..637f78f 100644
          // Don't attempt reconnection if we've been killed/forgotten
          if (isKilled) {
              Bridge.log("LIVE: 🔌 RECONNECT ABORTED - device has been killed/forgotten")
+@@ -5669,6 +5672,14 @@ class MentraLive : SGCManager() {
+         sendGalleryMode(null, active)
+     }
+ 
++    fun sendGalleryServerEnabled(requestId: String, enabled: Boolean) {
++        val json = JSONObject()
++        json.put("type", "set_gallery_server_enabled")
++        json.put("request_id", requestId)
++        json.put("enabled", enabled)
++        sendJson(json, true)
++    }
++
+     fun sendGalleryMode(requestId: String?, active: Boolean) {
+         Bridge.log("LIVE: 📸 Sending gallery mode active to glasses: " + active)
+         try {

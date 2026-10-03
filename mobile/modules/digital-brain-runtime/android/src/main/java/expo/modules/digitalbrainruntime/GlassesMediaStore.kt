@@ -9,6 +9,7 @@ import java.security.MessageDigest
 
 /** Private original bytes, atomic queue records, and account-scoped completion tombstones. */
 object GlassesMediaStore {
+  @Volatile private var activeTransport = GlassesMediaTransport.NONE
   fun readBounded(input: java.io.InputStream, limit: Int): ByteArray {
     val out = java.io.ByteArrayOutputStream()
     val buffer = ByteArray(8192)
@@ -60,7 +61,15 @@ object GlassesMediaStore {
     val prefs = c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE)
     val pending = if (owner == null) 0 else maxOf(prefs.getInt("pending_$owner", 0),
       if (prefs.getString("remote_owner", null) == owner) prefs.getInt("remote_count", 0) else 0)
-    return mapOf("pending" to pending, "status" to prefs.getString("state", "Waiting for glasses"))
+    return mapOf("pending" to pending, "status" to prefs.getString("state", "Waiting for glasses"),
+      "transport" to activeTransport.label,
+      "networkNote" to prefs.getString("network_note", null))
+  }
+  fun transport(c: Context, value: GlassesMediaTransport, note: String? = null) {
+    if (activeTransport != value) GlassesMediaDiagnostics.record(c, GlassesMediaEvent.TRANSPORT, transport = value)
+    activeTransport = value
+    c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE).edit()
+      .putString("network_note", note).apply()
   }
   fun state(c: Context, text: String) { c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE).edit().putString("state", text).apply() }
 }

@@ -5,7 +5,13 @@ import android.net.*
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import org.json.JSONException
+import java.net.SocketTimeoutException
+import java.io.IOException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -48,13 +54,21 @@ class GlassesMediaNetwork(private val c: Context) : AutoCloseable {
     }
     callback = listener
     manager.requestNetwork(request, listener, 45_000)
-    network = withTimeout(50_000) { ready.await() }; address = ip
+    try { network = withTimeout(50_000) { ready.await() } }
+    catch (_: TimeoutCancellationException) { error("Open Glasses settings to approve the hotspot connection") }
+    address = ip
   }
   fun connection(path: String): HttpURLConnection {
     check(path.startsWith("/api/") && !path.contains('\n'))
-    val n = checkNotNull(network) { "Glasses Wi-Fi disconnected" }
-    return (n.openConnection(URL("http://${checkNotNull(address)}:8089$path")) as HttpURLConnection).apply {
-      connectTimeout = 5000; readTimeout = 30000; instanceFollowRedirects = false
+    val n = network ?: throw GlassesGalleryException(GlassesGalleryError.DISCONNECTED, path)
+    val ip = checkNotNull(address)
+    if (!android.security.NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(ip)) {
+      throw loggedFailure(GlassesGalleryError.CLEARTEXT_BLOCKED, path,
+        IOException("Local gallery HTTP blocked by Android policy"))
+    }
+    return (n.openConnection(URL("http://$ip:8089$path")) as HttpURLConnection).apply {
+      connectTimeout = if (path == "/api/health") 2000 else 5000
+      readTimeout = if (path == "/api/health") 2000 else 30000; instanceFollowRedirects = false
     }
   }
   fun json(path: String, body: JSONObject? = null): JSONObject {
@@ -66,12 +80,50 @@ class GlassesMediaNetwork(private val c: Context) : AutoCloseable {
         connection.setRequestProperty("Content-Type", "application/json"); connection.setFixedLengthStreamingMode(bytes.size)
         connection.outputStream.use { it.write(bytes) }
       }
-      check(connection.responseCode in 200..299) { "Gallery HTTP ${connection.responseCode}" }
+      val status = connection.responseCode
+      GlassesMediaDiagnostics.record(c, GlassesMediaEvent.GALLERY_HTTP, path = path, httpStatus = status)
+      if (status !in 200..299) throw GlassesGalleryException(GlassesGalleryError.HTTP, path, status)
       val text = connection.inputStream.use { String(GlassesMediaStore.readBounded(it, 2 * 1024 * 1024)) }
       val result = JSONObject(text)
-      check(result.optString("status", "success") == "success") { "Gallery request was rejected" }
+      if (!GlassesMediaProtocol.acceptsStatus(path, if (result.has("status")) result.getString("status") else null))
+        throw GlassesGalleryException(GlassesGalleryError.REJECTED, path)
       return result.optJSONObject("data") ?: result
-    } finally { connection.disconnect() }
+    } catch (e: GlassesGalleryException) {
+      GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED, path = path, error = GlassesMediaDiagnosticPolicy.failure(e))
+      throw e
+    }
+    catch (e: SocketTimeoutException) { throw loggedFailure(GlassesGalleryError.TIMEOUT, path, e) }
+    catch (e: JSONException) { throw loggedFailure(GlassesGalleryError.INVALID_RESPONSE, path, e) }
+    catch (e: IOException) { throw loggedFailure(GlassesMediaProtocol.networkFailure(e), path, e) }
+    finally { connection.disconnect() }
+  }
+  private fun loggedFailure(kind: GlassesGalleryError, path: String, cause: Exception): GlassesGalleryException {
+    val error = GlassesGalleryException(kind, path, cause = cause)
+    GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED, path = path,
+      error = GlassesMediaDiagnosticPolicy.failure(error))
+    return error
+  }
+  /** Joining Wi-Fi does not mean NanoHTTPD has started listening yet. */
+  suspend fun awaitGalleryReady(active: () -> Boolean) {
+    val deadline = android.os.SystemClock.elapsedRealtime() + 15_000
+    var last: GlassesGalleryException? = null
+    do {
+      if (!active()) throw CancellationException("Glasses sync stopped")
+      try {
+        json("/api/health")
+        return
+      } catch (e: GlassesGalleryException) {
+        // Firmware without a health route can still have a working gallery.
+        if (e.kind == GlassesGalleryError.HTTP && e.httpStatus == 404) {
+          json("/api/gallery?limit=1&offset=0")
+          return
+        }
+        last = e
+      }
+      if (android.os.SystemClock.elapsedRealtime() >= deadline) break
+      delay(500)
+    } while (true)
+    throw checkNotNull(last)
   }
   override fun close() {
     callback?.let { runCatching { manager.unregisterNetworkCallback(it) } }; callback = null; network = null

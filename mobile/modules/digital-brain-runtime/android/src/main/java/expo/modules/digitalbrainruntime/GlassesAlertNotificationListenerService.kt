@@ -117,6 +117,12 @@ class GlassesAlertNotificationListenerService : NotificationListenerService() {
   }
   private fun processCall(post: StatusBarNotification): GlassesCallKind {
     val value = kind(post.notification)
+    val callType = post.notification.extras?.getInt("android.callType", 0) ?: 0
+    if (GlassesRecordingPolicy.callInterrupts(value == GlassesCallKind.INCOMING, callType,
+      post.notification.category == Notification.CATEGORY_CALL,
+      post.notification.flags and Notification.FLAG_ONGOING_EVENT != 0)) {
+      GlassesRecording.stop(GlassesRecordingStop.CALL)
+    }
     val dialer = getSystemService(TelecomManager::class.java)?.defaultDialerPackage
     val cellularNotification = post.packageName == dialer || post.packageName == "com.android.server.telecom"
     if (value == GlassesCallKind.INCOMING && enabledCalls()) {

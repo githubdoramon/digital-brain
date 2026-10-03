@@ -4,7 +4,7 @@ This restoration supports Android Mentra Live through exact npm version `@mentra
 
 ## Ownership and settings
 
-Settings → Glasses starts disabled. Enabling requests Nearby devices permissions (fine location on Android 11 and earlier), Wi-Fi transfer permission, and optional notification permission. Pairing scans for 15 seconds and uses SDK device identity; the selected pair is persisted only after readiness. One pair is supported. Disconnect disables persisted glasses ownership; Forget clears the app's saved identity. The SDK may ask Android to bond the Classic audio device during pairing, App-owned playback is limited to optional alert tones; microphone capture remains disabled.
+Settings → Glasses starts disabled. Enabling requests Nearby devices permissions (fine location on Android 11 and earlier), Wi-Fi transfer permission, and optional notification permission. Pairing scans for 15 seconds and uses SDK device identity; the selected pair is persisted only after readiness. One pair is supported. Disconnect disables persisted glasses ownership; Forget clears the app's saved identity. The SDK may ask Android to bond the Classic audio device during pairing, Optional alert tones and local recording playback use app-owned audio. User-started glasses microphone capture is available under Recordings; see [the recording contract](GLASSES_RECORDINGS.md).
 
 `RuntimeGlasses` runs on the native main looper, owned by `DigitalBrainRuntimeService` with `connectedDevice` foreground type. Its notification is shared with independent background location. React Native configures settings and reads diagnostics only while interactive. The Settings screen polls only while focused and foregrounded. Native connection callbacks, recovery timers, and boot/package-replacement broadcasts never call JavaScript or start Headless JS. Bluetooth broadcasts are registered and unregistered on the same application context; disable/service teardown cleanup is repeatable and finishes SDK cleanup even if the receiver is already unregistered.
 
@@ -14,7 +14,7 @@ The runtime persists signed-in eligibility separately from enablement. Sign-out 
 
 One connection attempt is bounded to 45 seconds. After unsuccessful attempts, delays are 2s, 5s, 10s, 20s, 40s, 1m, 2m, and 5m, then remain at 5m indefinitely. One minute of sustained readiness resets the backoff. Bluetooth off or missing permissions pauses retry work; restoring Bluetooth or tapping Connect triggers an immediate attempt. Main-looper timers are best-effort during device sleep and never hold a wake lock. Device-presence detection is not implemented in this stage.
 
-The SDK already contains reconnect and foreground-service behavior. A `patch-package` patch opts the application into external connection ownership via manifest metadata. It suppresses the SDK's foreground service and auto-reconnect paths, skips eager Expo SDK construction, unused phone microphone/LC3/VAD initialization and the ten-second mic timer, and exposes the existing native OTA query for recovery. SDK analytics is disabled in both Expo configuration and the native client. Regenerate/review this version-specific patch on any SDK upgrade; do not add a second reconnect loop.
+The SDK already contains reconnect and foreground-service behavior. A `patch-package` patch opts the application into external connection ownership via manifest metadata. It suppresses the SDK's foreground service and auto-reconnect paths, skips eager Expo SDK construction, unused phone microphone/LC3 encoder/VAD initialization (the LC3 decoder is initialized only for explicit recording) and the ten-second mic timer, and exposes the existing native OTA query for recovery. SDK analytics is disabled in both Expo configuration and the native client. Regenerate/review this version-specific patch on any SDK upgrade; do not add a second reconnect loop.
 
 ## Firmware and diagnostics
 
@@ -55,3 +55,7 @@ Automated checks cover TypeScript, lint, native compilation/manifest merging, re
 ## Original photos and videos
 
 Native automatic downloads and Immich uploads are implemented in the separate [media sync contract](GLASSES_MEDIA.md). This does not enable app-initiated captures or change firmware. Settings → Glasses includes a compact pending/status card and Sync now.
+
+## Local audio recording
+
+Settings → Glasses → Recordings supports explicit Start/Stop, M4A output in the selected Digital Brain folder, playback, rename and confirmed deletion. Capture and saving stay native while the screen is locked. Calls/disconnects stop and save without resuming. This adds no backend API or upload. See [GLASSES_RECORDINGS.md](GLASSES_RECORDINGS.md) for storage, permission, recovery and device validation details.
