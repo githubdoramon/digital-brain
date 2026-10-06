@@ -1,6 +1,6 @@
 # Local glasses audio recordings
 
-Android Mentra Live, SDK 3.1.1. A new native build is required.
+Android Mentra Live, SDK 3.2.1. A new native build is required.
 
 ## User behavior
 

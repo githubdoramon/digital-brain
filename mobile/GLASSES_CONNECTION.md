@@ -1,6 +1,6 @@
 # Mentra Live connection and firmware maintenance
 
-This restoration supports Android Mentra Live through exact npm version `@mentra/bluetooth-sdk` 3.1.1. It requires a newly built native app; Expo Go and an older installed binary cannot supply the module.
+This restoration supports Android Mentra Live through exact npm version `@mentra/bluetooth-sdk` 3.2.1. It requires a newly built native app; Expo Go and an older installed binary cannot supply the module.
 
 ## Ownership and settings
 
