@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import time
 from typing import Any, Literal
 
-ScheduleKind = Literal["daily_utc", "debounced_async"]
+ScheduleKind = Literal["daily_utc", "daily_local", "debounced_async"]
 
 
 @dataclass(frozen=True)
@@ -18,10 +18,15 @@ class ScheduledJobSpec:
     retry_seconds: int | None
     description: str
     trigger_source: str
+    time_local: time | None = None
+    timezone_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["time_utc"] = self.time_utc.isoformat(timespec="minutes") if self.time_utc else None
+        payload["time_local"] = (
+            self.time_local.isoformat(timespec="minutes") if self.time_local else None
+        )
         return payload
 
 
@@ -53,6 +58,23 @@ DAILY_BRIEFING = ScheduledJobSpec(
         "through /agents/daily-briefing/run."
     ),
     trigger_source="backend scheduler and external trigger",
+)
+
+EMERGENCY_STOCK = ScheduledJobSpec(
+    job_type="emergency_stock_daily",
+    label="Emergency stock",
+    worker_module="emergency_stock_jobs",
+    schedule_kind="daily_local",
+    time_utc=None,
+    poll_seconds=60,
+    retry_seconds=300,
+    description=(
+        "Checks emergency stock once per local calendar day, updates the configured Google "
+        "Sheet and Bring list, and notifies about actions."
+    ),
+    trigger_source="backend scheduler and external trigger",
+    time_local=time(hour=5, minute=0),
+    timezone_name="Europe/Lisbon",
 )
 
 MEETING_TRANSCRIPT = ScheduledJobSpec(
@@ -130,6 +152,7 @@ CONTACT_TAG_ENRICHMENT = ScheduledJobSpec(
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
+    EMERGENCY_STOCK,
     MEETING_TRANSCRIPT,
     EVENT_TAG_ENRICHMENT,
     DOCUMENT_TAG_ENRICHMENT,
@@ -187,6 +210,18 @@ def _load_runtime_status() -> dict[str, dict[str, Any]]:
     except Exception as exc:
         status[DAILY_BRIEFING.job_type] = {
             "job_type": DAILY_BRIEFING.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+
+    try:
+        import emergency_stock_jobs
+
+        emergency_stock = emergency_stock_jobs.get_worker_status()
+        status[str(emergency_stock.get("job_type"))] = emergency_stock
+    except Exception as exc:
+        status[EMERGENCY_STOCK.job_type] = {
+            "job_type": EMERGENCY_STOCK.job_type,
             "worker_alive": False,
             "error": str(exc),
         }

@@ -3,10 +3,9 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 import skills
-import telegram_bot
 from agent.state import AgentState
 from auth import get_current_user, require_service_api_key
 from observability.logger import get_runtime_logger
@@ -154,26 +153,6 @@ def create_automation_router() -> APIRouter:
             llm_model=llm_model_override,
             timeout_seconds=timeout_seconds,
         )
-
-    @router.post("/webhooks/telegram/messages")
-    async def handle_telegram_messages(
-        payload: dict[str, Any],
-        request: Request,
-    ):
-        try:
-            return telegram_bot.process_update(
-                payload,
-                secret_token=request.headers.get("X-Telegram-Bot-Api-Secret-Token"),
-            )
-        except telegram_bot.TelegramAuthError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        except telegram_bot.TelegramConfigError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except telegram_bot.TelegramProcessingError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except telegram_bot.TelegramUploadError as exc:
-            logger.exception("[telegram_bot] upload error=%s", exc)
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @router.get("/agents/emergency-stock/run")
     def run_emergency_stock_endpoint(

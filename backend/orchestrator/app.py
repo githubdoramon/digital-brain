@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import contact_tag_jobs
 import conversations
 import daily_briefing_jobs
+import emergency_stock_jobs
 import document_enhancement_jobs
 import document_tag_jobs
 import event_tag_jobs
@@ -148,11 +149,13 @@ async def lifespan(_app: FastAPI):
     document_enhancement_jobs.start_worker()
     contact_tag_jobs.start_worker()
     daily_briefing_jobs.start_worker()
+    emergency_stock_jobs.start_worker()
     proposed_event_jobs.start_worker()
     try:
         yield
     finally:
         proposed_event_jobs.stop_worker()
+        emergency_stock_jobs.stop_worker()
         daily_briefing_jobs.stop_worker()
         contact_tag_jobs.stop_worker()
         document_tag_jobs.stop_worker()

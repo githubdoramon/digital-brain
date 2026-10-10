@@ -48,11 +48,9 @@ def _load_base_auth() -> tuple[str, str, str | None]:
     return base_url, api_key, face_api_key
 
 
-def get_immich_config(require_device: bool = False) -> ImmichConfig:
+def get_immich_config() -> ImmichConfig:
     base_url, api_key, face_api_key = _load_base_auth()
     device_id = (os.getenv("IMMICH_DEVICE_ID") or "").strip() or None
-    if require_device and not device_id:
-        device_id = "telegram-bot"
     return ImmichConfig(
         base_url=base_url, api_key=api_key, face_api_key=face_api_key, device_id=device_id
     )

@@ -18,20 +18,12 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
     header: "x-service-api-key",
   },
   {
-    prefix: "/api/orchestrator/ingest/events/notes",
-    header: "x-service-api-key",
-  },
-  {
     prefix: "/api/gate",
     header: "x-service-api-key",
   },
   {
     prefix: "/api/orchestrator/agents/",
     header: "x-service-api-key",
-  },
-  {
-    prefix: "/api/webhooks/telegram",
-    header: "x-telegram-bot-api-secret-token",
   },
 ];
 

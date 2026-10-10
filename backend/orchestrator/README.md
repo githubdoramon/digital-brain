@@ -76,16 +76,3 @@ uvicorn app:api --reload
 ## Deployment
 
 Make sure to set `GOOGLE_CLIENT_IDS` and a non-empty `ALLOWED_USERS` in your deployment environment.
-
-If you enable Telegram photo ingest, also set:
-
-```bash
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_ALLOWED_CHAT_IDS=123456789
-TELEGRAM_WEBHOOK_SECRET=...
-IMMICH_SERVER_URL=...
-IMMICH_API_KEY=...
-```
-
-The Telegram integration is fail-closed: when `TELEGRAM_BOT_TOKEN` is configured, both
-`TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_WEBHOOK_SECRET` are required.

@@ -63,6 +63,7 @@ Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 | Document                                                                                                                | Purpose                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | [OVERVIEW.md](backend/orchestrator/docs/architecture/OVERVIEW.md)                                                       | System architecture and request flow                                    |
+| [EXTERNAL_AUTOMATIONS.md](backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md)                               | Recovered external automation scope and migration status                |
 | [ADDING_TOOLS.md](backend/orchestrator/docs/architecture/ADDING_TOOLS.md)                                               | Complete guide to adding new tools                                      |
 | [ADDING_INTENTS.md](backend/orchestrator/docs/architecture/ADDING_INTENTS.md)                                           | Guide to creating new intent types                                      |
 | [TOOL_GROUPS.md](backend/orchestrator/docs/architecture/TOOL_GROUPS.md)                                                 | Tool group reference and patterns                                       |
@@ -128,7 +129,7 @@ backend/orchestrator/
 │   ├── generated_pdfs.py     # Generated PDF download routes
 │   ├── user.py               # Mobile settings/device + user facts routes
 │   ├── system.py             # Versions, logs, and gate access routes
-│   ├── automation.py         # Tools, skills, agents, and telegram webhook routes
+│   ├── automation.py         # Tools, skills, and agent routes
 │   ├── daily_briefing.py     # Daily briefing API routes
 │   └── news.py               # News topics/preview/interactions routes
 ├── mcp/                        # Model Context Protocol
@@ -227,6 +228,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Proposed events flow**: the `proposed_events_daily` worker runs after 04:00 UTC; the cutoff only controls eligibility, while each run scans a rolling two-local-day window in the latest captured timezone. Stable stay identity (user, local date, start time, and location signature) prevents repeated scans from creating duplicate proposals when additional samples extend a stay. Location samples use 75m spatial stay clusters; matching normalized venue names bridge adjacent fragments with intermittent place-ID enrichment, and same-place segments merge when their gap is under 30 minutes. Unresolved clusters query Google Places at up to three representative points and reuse a separate lookup/coverage cache within a configurable 150m tolerance. High-confidence internal places bypass Google and are never overwritten. The LLM may rank only supplied candidates; mobile exposes the top three, and only the user's selected candidate creates a new internal place. See `backend/orchestrator/docs/architecture/OVERVIEW.md` for the full enrichment, overlap, notification, and acceptance contract.
 - **Proposed event review content**: the mobile review screen lets users edit title, summary, local start/end, participants, and linked place before acceptance. Generated summaries must add meaningful event content and remain blank when the evidence only establishes a timed stay; duration belongs in the proposal metadata/reason, not the event summary.
 - **Daily briefing schedule**: daily briefing remains externally triggerable through `/agents/daily-briefing/run`, but the backend also runs a `daily_briefing` polling worker that enqueues/processes one briefing per active user after 05:00 UTC using the user's latest captured timezone when available.
+- **Emergency stock schedule**: `emergency_stock_daily` is enqueued once per Lisbon-local calendar day after 05:00 and processed through the shared `async_jobs` queue. Failures retry after five minutes; the service-key endpoint remains available for manual/external runs. See `backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md`.
 - **Scheduled jobs registry**: `backend/orchestrator/scheduled_jobs.py` is the single source of truth for scheduled/background job metadata (job type, worker module, UTC trigger time, poll interval, retry interval, and trigger source). `/system/jobs` and `/mobile/system/jobs` expose the registry plus worker liveness. Update this registry whenever a scheduled/background worker is added or its timing changes.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Validation feedback visibility is mandatory**: if tool results are compacted before being re-injected into the LLM context, preserve raw validation/error payloads (`valid=false`, `error`, `suggestions`, or handler error results) instead of flattening them into empty success-shaped payloads. Otherwise the model cannot repair the actual argument mistake.
@@ -368,7 +370,6 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 ### Webhooks
 
 - `POST /webhooks/contacts` – Sync/unlink contacts
-- `POST /webhooks/telegram/messages` – Telegram messages
 
 ### System
 
