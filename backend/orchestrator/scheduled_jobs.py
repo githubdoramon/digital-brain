@@ -77,6 +77,23 @@ EMERGENCY_STOCK = ScheduledJobSpec(
     timezone_name="Europe/Lisbon",
 )
 
+DATABASE_BACKUP = ScheduledJobSpec(
+    job_type="database_backup_daily",
+    label="Encrypted database backup",
+    worker_module="database_backup_jobs",
+    schedule_kind="daily_local",
+    time_utc=None,
+    poll_seconds=60,
+    retry_seconds=300,
+    description=(
+        "Creates a custom-format PostgreSQL dump, compresses and encrypts it, then uploads "
+        "the encrypted artifact to the configured S3 bucket."
+    ),
+    trigger_source="backend scheduler",
+    time_local=time(hour=0, minute=0),
+    timezone_name="Europe/Lisbon",
+)
+
 MEETING_TRANSCRIPT = ScheduledJobSpec(
     job_type="meeting_transcript",
     label="Meeting transcript ingest",
@@ -153,6 +170,7 @@ SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
     EMERGENCY_STOCK,
+    DATABASE_BACKUP,
     MEETING_TRANSCRIPT,
     EVENT_TAG_ENRICHMENT,
     DOCUMENT_TAG_ENRICHMENT,
@@ -222,6 +240,18 @@ def _load_runtime_status() -> dict[str, dict[str, Any]]:
     except Exception as exc:
         status[EMERGENCY_STOCK.job_type] = {
             "job_type": EMERGENCY_STOCK.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+
+    try:
+        import database_backup_jobs
+
+        backup = database_backup_jobs.get_worker_status()
+        status[str(backup.get("job_type"))] = backup
+    except Exception as exc:
+        status[DATABASE_BACKUP.job_type] = {
+            "job_type": DATABASE_BACKUP.job_type,
             "worker_alive": False,
             "error": str(exc),
         }
