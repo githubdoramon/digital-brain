@@ -35,9 +35,14 @@ The backend encrypts the token with Fernet before storing it in
 `google_calendar_connections`; access and refresh tokens are never returned to
 the browser. Selected calendar IDs are stored with the connection.
 
-Configure `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`, and
-`GOOGLE_CALENDAR_TOKEN_ENCRYPTION_KEY` in the existing `backend/.env`. The OAuth
-client values must match the frontend's existing Google OAuth client. Add
+Configure `GOOGLE_CALENDAR_TOKEN_ENCRYPTION_KEY` in the existing
+`backend/.env`. Calendar token refresh uses `GOOGLE_CLIENT_ID` (or the first
+`GOOGLE_CLIENT_IDS` entry) and `GOOGLE_CLIENT_SECRET` when present in the
+orchestrator environment; the optional `GOOGLE_CALENDAR_CLIENT_ID` and
+`GOOGLE_CALENDAR_CLIENT_SECRET` values override them. The selected OAuth client
+values must match the client that issued the Calendar refresh token. In the repository's Compose setup,
+`frontend/web/.env` is passed only to the frontend and `backend/.env` is passed
+to the orchestrator. Add
 `https://YOUR_FRONTEND_HOST/api/google-calendar/callback` as an authorized
 redirect URI for that client, and enable the Google Calendar API in its Cloud
 project. The frontend uses `NEXTAUTH_URL` as the public callback origin and

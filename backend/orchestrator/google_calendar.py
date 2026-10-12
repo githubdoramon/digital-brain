@@ -31,7 +31,18 @@ def _fernet() -> Fernet:
 
 
 def _oauth_client() -> tuple[str, str]:
-    client_id = (os.getenv("GOOGLE_CALENDAR_CLIENT_ID") or os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    client_id = (
+        os.getenv("GOOGLE_CALENDAR_CLIENT_ID")
+        or os.getenv("GOOGLE_CLIENT_ID")
+        or next(
+            (
+                value.strip()
+                for value in os.getenv("GOOGLE_CLIENT_IDS", "").split(",")
+                if value.strip()
+            ),
+            "",
+        )
+    ).strip()
     client_secret = (os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
     if not client_id or not client_secret:
         raise GoogleCalendarError("Google Calendar OAuth client is not configured")
