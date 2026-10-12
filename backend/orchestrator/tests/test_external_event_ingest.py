@@ -355,6 +355,7 @@ def test_format_meeting_transcript_merges_adjacent_fragments_by_speaker():
 
 def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypatch):
     monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: None)
+    monkeypatch.setattr("events._get_event_ids_by_google_event_id", lambda *_args, **_kwargs: [])
     monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
     monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
