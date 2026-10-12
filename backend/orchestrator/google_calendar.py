@@ -223,7 +223,7 @@ def record_sync_result(user_email: str, *, error: str | None = None, reconciled:
         cur.execute(
             """
             UPDATE google_calendar_connections
-            SET last_sync_at = CASE WHEN %s IS NULL THEN NOW() ELSE last_sync_at END,
+            SET last_sync_at = CASE WHEN %s::text IS NULL THEN NOW() ELSE last_sync_at END,
                 last_reconciliation_at = CASE WHEN %s THEN NOW() ELSE last_reconciliation_at END,
                 last_error = %s
             WHERE user_email = %s

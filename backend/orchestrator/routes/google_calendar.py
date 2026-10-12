@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field
 
 import google_calendar
 from auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleCalendarCredentialIn(BaseModel):
@@ -50,6 +53,7 @@ def create_google_calendar_router() -> APIRouter:
         try:
             return {"calendars": google_calendar.list_calendars(email)}
         except google_calendar.GoogleCalendarError as exc:
+            logger.warning("Google Calendar calendar-list request failed: %s", exc)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @router.put("/integrations/google-calendar/calendars")

@@ -71,8 +71,9 @@ and the most recent safe error are available in the frontend and `GET
 /system/jobs`.
 
 Google API and token-refresh failures surface only the HTTP status and a bounded
-provider error code (for example, `accessNotConfigured` or `invalid_grant`);
-provider response bodies and credentials are never exposed to the frontend.
+provider error code (for example, `accessNotConfigured` or `invalid_grant`) in
+the frontend and orchestrator logs; provider response bodies and credentials
+are never exposed.
 
 ## Microsoft 365 Calendar Sync
 
