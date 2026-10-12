@@ -40,8 +40,11 @@ Configure `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`, and
 client values must match the frontend's existing Google OAuth client. Add
 `https://YOUR_FRONTEND_HOST/api/google-calendar/callback` as an authorized
 redirect URI for that client, and enable the Google Calendar API in its Cloud
-project. The connection requests only the calendar-list-readonly and
-events-readonly scopes. Generate a Fernet key once with:
+project. The frontend uses `NEXTAUTH_URL` as the public callback origin and
+requires a public HTTPS domain in production; do not use a bind address such as
+`0.0.0.0`. For local development, use `http://localhost:3000`. The connection
+requests only the calendar-list-readonly and events-readonly scopes. Generate a
+Fernet key once with:
 
 ```bash
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
@@ -83,11 +86,10 @@ the existing Digital Brain summary.
 
 Configure `MICROSOFT_CALENDAR_CLIENT_ID`, `MICROSOFT_CALENDAR_CLIENT_SECRET`,
 and `MICROSOFT_CALENDAR_TOKEN_ENCRYPTION_KEY` in the existing `backend/.env`.
-The optional `MICROSOFT_CALENDAR_TENANT_ID` defaults to `organizations`, which
-accepts work or school accounts from any Microsoft Entra tenant. Set it only if
-the app should be restricted to a particular tenant. Configure the matching
-client ID and client secret in `frontend/web/.env`; set the tenant ID there
-only when overriding the default. Add
+The OAuth flow uses the `organizations` authority, so the Entra app registration
+must support accounts in any organizational directory. The account picker lets
+the user choose the connected work or school account. Configure the matching
+client ID and client secret in `frontend/web/.env`. Add
 `https://YOUR_FRONTEND_HOST/api/microsoft-calendar/callback` as a Web redirect
 URI in the Entra app registration. Grant delegated `User.Read` and
 `Calendars.Read`; the tenant may require administrator consent. Generate a

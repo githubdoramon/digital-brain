@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
 import {
   createOAuthState,
   getMicrosoftOAuthConfig,
@@ -16,11 +17,11 @@ export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.redirect(new URL("/auth/signin", request.url));
   try {
-    const { clientId, tenant } = getMicrosoftOAuthConfig();
+    const { clientId } = getMicrosoftOAuthConfig();
     const state = createOAuthState();
-    const redirectUri = new URL("/api/microsoft-calendar/callback", request.nextUrl.origin).toString();
+    const redirectUri = getOAuthCallbackUrl(request.url, "/api/microsoft-calendar/callback");
     const authorizationUrl = new URL(
-      `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/authorize`
+      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize"
     );
     authorizationUrl.search = new URLSearchParams({
       client_id: clientId,
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
       redirect_uri: redirectUri,
       response_mode: "query",
       scope: MICROSOFT_CALENDAR_SCOPES.join(" "),
-      login_hint: session.user.email,
+      prompt: "select_account",
       state,
     }).toString();
     const response = NextResponse.redirect(authorizationUrl);

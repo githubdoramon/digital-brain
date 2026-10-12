@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from db import get_conn
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+MICROSOFT_AUTHORITY = "organizations"
 GRAPH_TIMEOUT_SECONDS = 20
 
 
@@ -50,17 +51,16 @@ def _fernet() -> Fernet:
         raise MicrosoftCalendarError("Microsoft Calendar token encryption key is invalid") from exc
 
 
-def _oauth_config() -> tuple[str, str, str]:
+def _oauth_config() -> tuple[str, str]:
     client_id = os.getenv("MICROSOFT_CALENDAR_CLIENT_ID", "").strip()
     client_secret = os.getenv("MICROSOFT_CALENDAR_CLIENT_SECRET", "").strip()
-    tenant = os.getenv("MICROSOFT_CALENDAR_TENANT_ID", "organizations").strip() or "organizations"
     if not client_id or not client_secret:
         raise MicrosoftCalendarError("Microsoft Calendar OAuth client is not configured")
-    return client_id, client_secret, tenant
+    return client_id, client_secret
 
 
-def _token_url(tenant: str) -> str:
-    return f"https://login.microsoftonline.com/{quote(tenant, safe='')}/oauth2/v2.0/token"
+def _token_url() -> str:
+    return f"https://login.microsoftonline.com/{MICROSOFT_AUTHORITY}/oauth2/v2.0/token"
 
 
 def store_connection(owner_email: str, connected_email: str, refresh_token: str) -> dict[str, Any]:
@@ -295,10 +295,10 @@ def _get_access_token(owner_email: str) -> str:
     connection = get_connection(owner_email)
     if not connection:
         raise MicrosoftCalendarError("Microsoft Calendar is not connected")
-    client_id, client_secret, tenant = _oauth_config()
+    client_id, client_secret = _oauth_config()
     try:
         response = requests.post(
-            _token_url(tenant),
+            _token_url(),
             data={
                 "client_id": client_id,
                 "client_secret": client_secret,

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
 import {
   createOAuthState,
   GOOGLE_CALENDAR_SCOPES,
@@ -22,11 +23,11 @@ export async function GET(request: NextRequest) {
   try {
     const { clientId } = getGoogleOAuthClient();
     const state = createOAuthState();
-    const callbackUrl = new URL("/api/google-calendar/callback", request.nextUrl.origin);
+    const callbackUrl = getOAuthCallbackUrl(request.url, "/api/google-calendar/callback");
     const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     authorizationUrl.search = new URLSearchParams({
       client_id: clientId,
-      redirect_uri: callbackUrl.toString(),
+      redirect_uri: callbackUrl,
       response_type: "code",
       scope: ["openid", "email", "profile", ...GOOGLE_CALENDAR_SCOPES].join(" "),
       access_type: "offline",

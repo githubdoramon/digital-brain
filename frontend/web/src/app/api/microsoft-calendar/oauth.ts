@@ -12,10 +12,9 @@ export const MICROSOFT_CALENDAR_SCOPES = [
 
 export { createOAuthState, isValidOAuthState };
 
-export function getMicrosoftOAuthConfig(): { clientId: string; clientSecret: string; tenant: string } {
+export function getMicrosoftOAuthConfig(): { clientId: string; clientSecret: string } {
   const clientId = process.env.MICROSOFT_CALENDAR_CLIENT_ID?.trim();
   const clientSecret = process.env.MICROSOFT_CALENDAR_CLIENT_SECRET?.trim();
-  const tenant = process.env.MICROSOFT_CALENDAR_TENANT_ID?.trim() || "organizations";
   if (!clientId || !clientSecret) throw new Error("Microsoft Calendar OAuth is not configured");
-  return { clientId, clientSecret, tenant };
+  return { clientId, clientSecret };
 }

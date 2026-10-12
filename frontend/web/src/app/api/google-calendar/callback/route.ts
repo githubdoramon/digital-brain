@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
 import {
   getGoogleOAuthClient,
   GOOGLE_CALENDAR_STATE_COOKIE,
@@ -52,7 +53,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const { clientId, clientSecret } = getGoogleOAuthClient();
-    const callbackUrl = new URL("/api/google-calendar/callback", request.nextUrl.origin).toString();
+    const callbackUrl = getOAuthCallbackUrl(request.url, "/api/google-calendar/callback");
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

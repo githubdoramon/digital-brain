@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
 import {
   getMicrosoftOAuthConfig,
   isValidOAuthState,
@@ -32,10 +33,10 @@ export async function GET(request: NextRequest) {
   if (!code || request.nextUrl.searchParams.get("error")) return redirectWithError(request, "authorization_failed");
 
   try {
-    const { clientId, clientSecret, tenant } = getMicrosoftOAuthConfig();
-    const redirectUri = new URL("/api/microsoft-calendar/callback", request.nextUrl.origin).toString();
+    const { clientId, clientSecret } = getMicrosoftOAuthConfig();
+    const redirectUri = getOAuthCallbackUrl(request.url, "/api/microsoft-calendar/callback");
     const tokenResponse = await fetch(
-      `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`,
+      "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
