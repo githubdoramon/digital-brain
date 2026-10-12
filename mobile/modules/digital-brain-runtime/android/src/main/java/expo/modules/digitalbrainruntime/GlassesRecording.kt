@@ -31,7 +31,7 @@ object GlassesRecording {
   private var startedAt = 0L
   @Volatile private var lastPcm = 0L
   private var reason = GlassesRecordingStop.USER
-  private var message: String? = null
+  @Volatile private var message: String? = null
   private var savedUri: String? = null
   private var initialized = false
   private var wake: PowerManager.WakeLock? = null
@@ -132,7 +132,7 @@ object GlassesRecording {
   }
   fun stop(value: GlassesRecordingStop = GlassesRecordingStop.USER) {
     if (!capturing) return
-    state = GlassesRecordingState.SAVING; reason = value; message = value.description
+    state = GlassesRecordingState.SAVING; reason = value; message = "Finishing your recording…"
     runCatching { RuntimeGlasses.setRecordingMic(false) }
     main.removeCallbacks(watchdog); unwatchCalls()
     writer?.finish()
@@ -143,6 +143,7 @@ object GlassesRecording {
     if (saving || state != GlassesRecordingState.SAVING) return
     val c = context ?: return
     saving = true
+    message = "Preparing your recording…"
     // Keep the CPU awake until local encoding and the verified SAF copy finish.
     if (wake?.isHeld != true) wake = c.getSystemService(PowerManager::class.java)
       .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:GlassesSave").apply { acquire(30 * 60_000L) }
@@ -155,10 +156,12 @@ object GlassesRecording {
         if (pcm.length() % 2 != 0L) java.io.RandomAccessFile(pcm, "rw").use { it.setLength(pcm.length() - 1) }
         if (pcm.length() > 0) {
           if (!output.exists() || output.length() == 0L) {
+            message = "Preparing your recording…"
             val temp = File(dir, "encoding.m4a"); temp.delete()
             GlassesM4aEncoder.encode(pcm, temp)
             check(temp.renameTo(output))
           }
+          message = "Preparing the Recordings folder…"
           val base = checkNotNull(DocumentFile.fromTreeUri(c, Uri.parse(metadata.getString("baseUri"))))
           check(base.canWrite()) { "Folder permission unavailable" }
           val folder = base.findFile("Recordings") ?: base.createDirectory("Recordings")
@@ -166,9 +169,28 @@ object GlassesRecording {
           val prior = metadata.optString("targetUri").takeIf { it.isNotBlank() }?.let { DocumentFile.fromSingleUri(c, Uri.parse(it)) }
           val target = prior?.takeIf { it.exists() } ?: checkNotNull(folder.createFile("audio/mp4", metadata.getString("name")))
           metadata.put("targetUri", target.uri.toString()); writeJournal(c, metadata)
-          val copied = output.inputStream().use { input ->
-            checkNotNull(c.contentResolver.openOutputStream(target.uri, "wt")).use { out -> input.copyTo(out).also { out.flush() } }
+          message = "Saving to Recordings…"
+          val copied = output.inputStream().buffered().use { input ->
+            checkNotNull(c.contentResolver.openOutputStream(target.uri, "wt")).buffered().use { out ->
+              val buffer = ByteArray(64 * 1024)
+              var total = 0L
+              var lastReported = 0L
+              while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                out.write(buffer, 0, count)
+                total += count
+                if (total - lastReported >= 4L * 1024 * 1024 || total == output.length()) {
+                  val percent = (total * 100 / output.length()).toInt().coerceIn(0, 100)
+                  message = "Saving to Recordings… $percent%"
+                  lastReported = total
+                }
+              }
+              out.flush()
+              total
+            }
           }
+          message = "Checking your saved recording…"
           check(copied == output.length() && target.length() == copied && copied > 0)
           result = target.uri.toString()
         }

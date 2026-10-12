@@ -70,6 +70,10 @@ Connection status, worker health, latest sync and weekly reconciliation times,
 and the most recent safe error are available in the frontend and `GET
 /system/jobs`.
 
+Google API and token-refresh failures surface only the HTTP status and a bounded
+provider error code (for example, `accessNotConfigured` or `invalid_grant`);
+provider response bodies and credentials are never exposed to the frontend.
+
 ## Microsoft 365 Calendar Sync
 
 The frontend uses a separate Microsoft Entra web app registration and delegated

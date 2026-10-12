@@ -175,7 +175,7 @@ async function apiRequest<T = unknown>(
 
   if (!response.ok) {
     const errorBody = (await response.json().catch(() => undefined)) as { detail?: string } | undefined;
-    throw new Error(errorBody?.detail || `Request failed: ${response.statusText}`);
+    throw new Error(errorBody?.detail || `Request failed (HTTP ${response.status})`);
   }
 
   if (response.status === 204) {

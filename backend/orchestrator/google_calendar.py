@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -253,7 +254,11 @@ def _google_get(user_email: str, path: str, *, params: dict[str, Any]) -> dict[s
     except requests.RequestException as exc:
         raise GoogleCalendarError("Google Calendar could not be reached") from exc
     if not response.ok:
-        raise GoogleCalendarError(f"Google Calendar API returned HTTP {response.status_code}")
+        error_code = _provider_error_code(response)
+        suffix = f" ({error_code})" if error_code else ""
+        raise GoogleCalendarError(
+            f"Google Calendar API returned HTTP {response.status_code}{suffix}"
+        )
     try:
         payload = response.json()
     except ValueError as exc:
@@ -282,7 +287,12 @@ def _get_access_token(user_email: str) -> str:
     except requests.RequestException as exc:
         raise GoogleCalendarError("Google Calendar authorization could not be refreshed") from exc
     if not response.ok:
-        raise GoogleCalendarError("Google Calendar authorization expired; reconnect the account")
+        error_code = _provider_error_code(response)
+        suffix = f" ({error_code})" if error_code else ""
+        raise GoogleCalendarError(
+            "Google Calendar authorization refresh failed"
+            f"{suffix}; reconnect the account if the problem persists"
+        )
     try:
         payload = response.json()
     except ValueError as exc:
@@ -294,6 +304,38 @@ def _get_access_token(user_email: str) -> str:
     if refreshed_token and refreshed_token != connection["refresh_token"]:
         _replace_refresh_token(user_email, refreshed_token)
     return str(access_token)
+
+
+_SAFE_PROVIDER_ERROR_CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+
+
+def _provider_error_code(response: requests.Response) -> str | None:
+    """Extract a short machine-readable provider code without exposing response bodies."""
+    try:
+        payload = response.json()
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    error = payload.get("error")
+    candidates: list[Any] = []
+    if isinstance(error, str):
+        candidates.append(error)
+    elif isinstance(error, dict):
+        details = error.get("errors")
+        if isinstance(details, list):
+            candidates.extend(
+                item.get("reason")
+                for item in details
+                if isinstance(item, dict)
+            )
+        candidates.extend((error.get("status"), error.get("code")))
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and _SAFE_PROVIDER_ERROR_CODE.fullmatch(candidate):
+            return candidate
+    return None
 
 
 def _replace_refresh_token(user_email: str, refresh_token: str) -> None:

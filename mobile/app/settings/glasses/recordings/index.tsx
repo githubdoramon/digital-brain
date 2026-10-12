@@ -255,7 +255,6 @@ export default function GlassesRecordingsScreen() {
                           : 'GLASSES OFFLINE'}
                 </Text>
               </View>
-              <Text style={styles.format}>M4A · AAC</Text>
             </View>
             <View style={[styles.micHalo, active && styles.activeHalo]}>
               <Ionicons
@@ -524,7 +523,6 @@ const styles = StyleSheet.create({
   liveText: { color: theme.colors.accentDeep },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.teal },
   liveDot: { backgroundColor: theme.colors.accent },
-  format: { color: theme.colors.mutedInk, fontSize: 11, fontWeight: '600' },
   micHalo: {
     alignSelf: 'center',
     width: 80,
