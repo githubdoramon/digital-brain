@@ -16,5 +16,8 @@ export function getMicrosoftOAuthConfig(): { clientId: string; clientSecret: str
   const clientId = process.env.MICROSOFT_CALENDAR_CLIENT_ID?.trim();
   const clientSecret = process.env.MICROSOFT_CALENDAR_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) throw new Error("Microsoft Calendar OAuth is not configured");
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(clientId)) {
+    throw new Error("Microsoft Calendar client ID must be the Application (client) ID GUID");
+  }
   return { clientId, clientSecret };
 }

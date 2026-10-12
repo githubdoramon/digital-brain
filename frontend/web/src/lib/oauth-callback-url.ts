@@ -1,15 +1,14 @@
 import { isIP } from "node:net";
 
-export function getOAuthCallbackUrl(requestUrl: string, callbackPath: string): string {
+export function getPublicAppUrl(requestUrl: string): URL {
   const configuredUrl = process.env.NEXTAUTH_URL?.trim();
   if (process.env.NODE_ENV === "production" && !configuredUrl) {
     throw new Error("NEXTAUTH_URL must be configured in production");
   }
 
   const appUrl = new URL(configuredUrl || requestUrl);
-  if (!configuredUrl && process.env.NODE_ENV !== "production" && appUrl.hostname === "0.0.0.0") {
-    appUrl.protocol = "http:";
-    appUrl.hostname = "localhost";
+  if (appUrl.hostname === "0.0.0.0") {
+    throw new Error("Use localhost locally or set NEXTAUTH_URL to the public app URL");
   }
 
   if (process.env.NODE_ENV === "production") {
@@ -21,5 +20,9 @@ export function getOAuthCallbackUrl(requestUrl: string, callbackPath: string): s
     }
   }
 
-  return new URL(callbackPath, appUrl.origin).toString();
+  return appUrl;
+}
+
+export function getOAuthCallbackUrl(requestUrl: string, callbackPath: string): string {
+  return new URL(callbackPath, getPublicAppUrl(requestUrl).origin).toString();
 }

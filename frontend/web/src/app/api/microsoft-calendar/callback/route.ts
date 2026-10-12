@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
+import { getOAuthCallbackUrl, getPublicAppUrl } from "@/lib/oauth-callback-url";
 import {
   getMicrosoftOAuthConfig,
   isValidOAuthState,
@@ -17,7 +17,10 @@ type MicrosoftProfile = { mail?: string | null; userPrincipalName?: string | nul
 
 function redirectWithError(request: NextRequest, code: string) {
   const response = NextResponse.redirect(
-    new URL(`/system/calendars?provider=microsoft&error=${encodeURIComponent(code)}`, request.nextUrl.origin)
+    new URL(
+      `/system/calendars?provider=microsoft&error=${encodeURIComponent(code)}`,
+      getPublicAppUrl(request.url).origin
+    )
   );
   response.cookies.set(MICROSOFT_CALENDAR_STATE_COOKIE, "", { path: "/api/microsoft-calendar", maxAge: 0 });
   return response;
@@ -77,9 +80,12 @@ export async function GET(request: NextRequest) {
       body: JSON.stringify({ connectedEmail, refreshToken: tokens.refresh_token }),
       cache: "no-store",
     });
-    if (!saveResponse.ok) return redirectWithError(request, "connection_save_failed");
+    if (!saveResponse.ok) {
+      console.error(`[microsoft-calendar.oauth] Backend rejected connection save with HTTP ${saveResponse.status}`);
+      return redirectWithError(request, "connection_save_failed");
+    }
     const response = NextResponse.redirect(
-      new URL("/system/calendars?provider=microsoft&connected=1", request.nextUrl.origin)
+      new URL("/system/calendars?provider=microsoft&connected=1", getPublicAppUrl(request.url).origin)
     );
     response.cookies.set(MICROSOFT_CALENDAR_STATE_COOKIE, "", {
       path: "/api/microsoft-calendar",

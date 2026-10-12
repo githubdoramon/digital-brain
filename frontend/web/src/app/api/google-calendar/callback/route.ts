@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { getOAuthCallbackUrl } from "@/lib/oauth-callback-url";
+import { getOAuthCallbackUrl, getPublicAppUrl } from "@/lib/oauth-callback-url";
 import {
   getGoogleOAuthClient,
   GOOGLE_CALENDAR_STATE_COOKIE,
@@ -25,7 +25,10 @@ type GoogleUserInfo = {
 
 function redirectWithError(request: NextRequest, code: string) {
   const response = NextResponse.redirect(
-    new URL(`/system/calendars?provider=google&error=${encodeURIComponent(code)}`, request.nextUrl.origin)
+    new URL(
+      `/system/calendars?provider=google&error=${encodeURIComponent(code)}`,
+      getPublicAppUrl(request.url).origin
+    )
   );
   response.cookies.set(GOOGLE_CALENDAR_STATE_COOKIE, "", {
     path: "/api/google-calendar",
@@ -95,10 +98,13 @@ export async function GET(request: NextRequest) {
       body: JSON.stringify({ refreshToken: tokens.refresh_token }),
       cache: "no-store",
     });
-    if (!saveResponse.ok) return redirectWithError(request, "connection_save_failed");
+    if (!saveResponse.ok) {
+      console.error(`[google-calendar.oauth] Backend rejected connection save with HTTP ${saveResponse.status}`);
+      return redirectWithError(request, "connection_save_failed");
+    }
 
     const response = NextResponse.redirect(
-      new URL("/system/calendars?provider=google&connected=1", request.nextUrl.origin)
+      new URL("/system/calendars?provider=google&connected=1", getPublicAppUrl(request.url).origin)
     );
     response.cookies.set(GOOGLE_CALENDAR_STATE_COOKIE, "", {
       path: "/api/google-calendar",

@@ -89,7 +89,8 @@ and `MICROSOFT_CALENDAR_TOKEN_ENCRYPTION_KEY` in the existing `backend/.env`.
 The OAuth flow uses the `organizations` authority, so the Entra app registration
 must support accounts in any organizational directory. The account picker lets
 the user choose the connected work or school account. Configure the matching
-client ID and client secret in `frontend/web/.env`. Add
+Application (client) ID and client secret Value in `frontend/web/.env`; the ID
+is a GUID and is distinct from the secret Value. Add
 `https://YOUR_FRONTEND_HOST/api/microsoft-calendar/callback` as a Web redirect
 URI in the Entra app registration. Grant delegated `User.Read` and
 `Calendars.Read`; the tenant may require administrator consent. Generate a
