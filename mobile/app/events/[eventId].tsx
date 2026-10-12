@@ -41,6 +41,7 @@ type EventDetail = {
   } | null;
   types?: string[] | null;
   external_id?: string | null;
+  is_cancelled?: boolean;
   action_items?: EventActionItem[] | null;
   photos?: EventPhoto[] | null;
 };
@@ -523,7 +524,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       onAddPhoto={eventId ? handleAddPhoto : undefined}
       onRemovePhoto={eventId ? handleRemovePhoto : undefined}
       editable={isEditing}
-      headerKicker={isEditing ? 'Event editor' : 'Linked event'}
+      headerKicker={event?.is_cancelled ? 'Canceled event' : isEditing ? 'Event editor' : 'Linked event'}
       headerTitle={title}
       headerSubtitle={subtitle}
       doneLabel={isSaving ? 'Saving...' : 'Save changes'}

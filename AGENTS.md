@@ -127,6 +127,8 @@ backend/orchestrator/
 │   ├── places.py             # Place lookup and place-contact routes
 │   ├── todos.py              # Todo routes
 │   ├── events.py             # Event/meeting routes and ingest routes
+│   ├── google_calendar.py    # Calendar connection and calendar selection routes
+│   ├── microsoft_calendar.py # Microsoft Graph Calendar connection and API client
 │   ├── documents.py          # Document routes and ingest routes
 │   ├── generated_pdfs.py     # Generated PDF download routes
 │   ├── user.py               # Mobile settings/device + user facts routes
@@ -143,6 +145,10 @@ backend/orchestrator/
 ├── conversations.py            # Thread management
 ├── documents.py                # Document storage
 ├── events.py                   # Event management
+├── google_calendar.py          # Encrypted Calendar OAuth credentials and Google API client
+├── google_calendar_sync_jobs.py # Scheduled Calendar polling and weekly reconciliation
+├── microsoft_calendar.py       # Encrypted Microsoft Graph Calendar OAuth and API client
+├── microsoft_calendar_sync_jobs.py # Microsoft Calendar polling and weekly reconciliation
 ├── contacts.py                 # Contact management
 ├── retrieval.py                # Vector search
 ├── user_facts.py               # User facts/preferences (persistent)
@@ -232,6 +238,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Daily briefing schedule**: daily briefing remains externally triggerable through `/agents/daily-briefing/run`, but the backend also runs a `daily_briefing` polling worker that enqueues/processes one briefing per active user after 05:00 UTC using the user's latest captured timezone when available.
 - **Emergency stock schedule**: `emergency_stock_daily` is enqueued once per Lisbon-local calendar day after 05:00 and processed through the shared `async_jobs` queue. Failures retry after five minutes; the service-key endpoint remains available for manual/external runs. See `backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md`.
 - **Database backup**: `database_backup_daily` runs through the orchestrator's shared `async_jobs` queue at midnight Europe/Lisbon, retries failures after five minutes, and encrypts a PG16 custom-format dump with gzip and AES-256-CBC/PBKDF2 before uploading to the fixed S3 object `backup.sql.gz.enc` through the runtime AWS role. Configure `DB_BACKUP_PASSPHRASE`, `DB_BACKUP_S3_BUCKET`, and optional `DB_BACKUP_S3_PREFIX` in the existing `backend/.env`; the S3 bucket lifecycle policy owns retention. See `backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md`.
+- **Google Calendar sync**: the web frontend connects the signed-in Google account separately with read-only Calendar access and lets the user select calendars. The orchestrator stores the refresh token encrypted, polls every five minutes for expanded events from 14 days back through 60 days ahead, and checks the prior and next two weeks each Sunday at 03:00 Europe/Lisbon. Keep canceled meetings in history/details with linked transcript data, but exclude them from upcoming searches and daily briefings. Append updated Calendar descriptions to existing Digital Brain summaries without duplicating the previous description. See `backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md`.
+- **Microsoft 365 Calendar sync**: the web frontend provides a separate delegated Microsoft connection and calendar selection. Store its refresh token encrypted; poll every five minutes for occurrences 14 days back through 60 days ahead, and reconcile the prior and next two weeks each Sunday at 03:00 Europe/Lisbon. Keep canceled meetings in history with linked records, exclude them from upcoming views and briefings, and append Microsoft Calendar descriptions to existing summaries. See `backend/orchestrator/docs/architecture/EXTERNAL_AUTOMATIONS.md`.
 - **Scheduled jobs registry**: `backend/orchestrator/scheduled_jobs.py` is the single source of truth for scheduled/background job metadata (job type, worker module, UTC or local trigger time and timezone, poll interval, retry interval, and trigger source). `/system/jobs` and `/mobile/system/jobs` expose the registry plus worker liveness. Update this registry whenever a scheduled/background worker is added or its timing changes.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Validation feedback visibility is mandatory**: if tool results are compacted before being re-injected into the LLM context, preserve raw validation/error payloads (`valid=false`, `error`, `suggestions`, or handler error results) instead of flattening them into empty success-shaped payloads. Otherwise the model cannot repair the actual argument mistake.

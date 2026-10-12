@@ -245,6 +245,8 @@ def create_events_router(
 
         if not include_future:
             where_clauses.append("(e.start_date IS NULL OR e.start_date <= NOW())")
+        else:
+            where_clauses.append("(e.is_cancelled = FALSE OR e.start_date <= NOW())")
 
         if meeting_only:
             where_clauses.append(
@@ -281,7 +283,8 @@ def create_events_router(
                        e.title,
                        e.summary,
                        e.start_date,
-                       e.end_date
+                       e.end_date,
+                       e.is_cancelled
                 FROM events e
                 {where_sql}
                 ORDER BY e.start_date DESC NULLS LAST, e.id DESC

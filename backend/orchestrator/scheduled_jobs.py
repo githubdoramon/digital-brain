@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import time
 from typing import Any, Literal
 
-ScheduleKind = Literal["daily_utc", "daily_local", "debounced_async"]
+ScheduleKind = Literal["daily_utc", "daily_local", "debounced_async", "polling"]
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class ScheduledJobSpec:
     trigger_source: str
     time_local: time | None = None
     timezone_name: str | None = None
+    run_interval_seconds: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -74,7 +75,6 @@ EMERGENCY_STOCK = ScheduledJobSpec(
     ),
     trigger_source="backend scheduler and external trigger",
     time_local=time(hour=5, minute=0),
-    timezone_name="Europe/Lisbon",
 )
 
 DATABASE_BACKUP = ScheduledJobSpec(
@@ -166,6 +166,44 @@ CONTACT_TAG_ENRICHMENT = ScheduledJobSpec(
     trigger_source="contact persistence",
 )
 
+GOOGLE_CALENDAR_SYNC = ScheduledJobSpec(
+    job_type="google_calendar_sync",
+    label="Google Calendar sync",
+    worker_module="google_calendar_sync_jobs",
+    schedule_kind="polling",
+    time_utc=None,
+    poll_seconds=30,
+    retry_seconds=300,
+    time_local=time(hour=3, minute=0),
+    timezone_name="Europe/Lisbon",
+    run_interval_seconds=300,
+    description=(
+        "Polls selected Google calendars every five minutes, syncs meeting occurrences across "
+        "the recent two-week and upcoming two-month window, and reconciles the recent and "
+        "upcoming two weeks each Sunday at 03:00 Europe/Lisbon."
+    ),
+    trigger_source="backend scheduler",
+)
+
+MICROSOFT_CALENDAR_SYNC = ScheduledJobSpec(
+    job_type="microsoft_calendar_sync",
+    label="Microsoft Calendar sync",
+    worker_module="microsoft_calendar_sync_jobs",
+    schedule_kind="polling",
+    time_utc=None,
+    poll_seconds=30,
+    retry_seconds=300,
+    time_local=time(hour=3, minute=0),
+    timezone_name="Europe/Lisbon",
+    run_interval_seconds=300,
+    description=(
+        "Polls selected Microsoft 365 calendars every five minutes, syncs meeting occurrences "
+        "across the recent two-week and upcoming two-month window, and reconciles the recent "
+        "and upcoming two weeks each Sunday at 03:00 Europe/Lisbon."
+    ),
+    trigger_source="backend scheduler",
+)
+
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
@@ -176,6 +214,8 @@ SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     DOCUMENT_TAG_ENRICHMENT,
     DOCUMENT_ENHANCEMENT,
     CONTACT_TAG_ENRICHMENT,
+    GOOGLE_CALENDAR_SYNC,
+    MICROSOFT_CALENDAR_SYNC,
 )
 
 
@@ -264,6 +304,28 @@ def _load_runtime_status() -> dict[str, dict[str, Any]]:
     except Exception as exc:
         status[MEETING_TRANSCRIPT.job_type] = {
             "job_type": MEETING_TRANSCRIPT.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import google_calendar_sync_jobs
+
+        calendar_sync = google_calendar_sync_jobs.get_worker_status()
+        status[str(calendar_sync.get("job_type"))] = calendar_sync
+    except Exception as exc:
+        status[GOOGLE_CALENDAR_SYNC.job_type] = {
+            "job_type": GOOGLE_CALENDAR_SYNC.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import microsoft_calendar_sync_jobs
+
+        calendar_sync = microsoft_calendar_sync_jobs.get_worker_status()
+        status[str(calendar_sync.get("job_type"))] = calendar_sync
+    except Exception as exc:
+        status[MICROSOFT_CALENDAR_SYNC.job_type] = {
+            "job_type": MICROSOFT_CALENDAR_SYNC.job_type,
             "worker_alive": False,
             "error": str(exc),
         }

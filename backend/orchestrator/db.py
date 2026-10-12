@@ -100,6 +100,7 @@ def fetch_events(ids: list[str]):
                    e.title,
                    e.summary,
                    e.external_id,
+                   e.is_cancelled,
                    p.place_id, p.name AS place_name, p.city, p.country, p.lat, p.lon
             FROM events e
             LEFT JOIN places p ON p.place_id = e.place_id

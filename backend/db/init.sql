@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS events (
   summary TEXT,
   raw JSONB DEFAULT '{}'::JSONB,
   external_id TEXT UNIQUE,
+  is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
   what_embed VECTOR(768),              -- 768 for nomic-embed-text, 1536 for OpenAI text-embedding-3-*
   what_tsv tsvector,
   CHECK (

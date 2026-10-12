@@ -24,6 +24,7 @@ type MeetingListItem = {
   start_date?: string | null;
   end_date?: string | null;
   summary?: string | null;
+  is_cancelled?: boolean;
 };
 
 type MeetingDetailResponse = MeetingListItem & {
@@ -372,8 +373,8 @@ export default function MeetingsPage() {
                       <span style={{ color: "rgba(247, 243, 234, 0.58)", fontSize: "0.78rem" }}>
                         {formatMeetingDate(meeting.start_date)}
                       </span>
-                      <span style={{ color: active ? "#d6b47b" : "rgba(247, 243, 234, 0.42)", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700 }}>
-                        {meeting.summary?.trim() ? "Summary available" : "Transcript memory"}
+                      <span style={{ color: meeting.is_cancelled ? "#c66d60" : active ? "#d6b47b" : "rgba(247, 243, 234, 0.42)", fontSize: "0.72rem", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700 }}>
+                        {meeting.is_cancelled ? "Canceled" : meeting.summary?.trim() ? "Summary available" : "Transcript memory"}
                       </span>
                     </button>
                   );

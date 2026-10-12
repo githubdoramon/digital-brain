@@ -67,6 +67,7 @@ class EventIn(BaseModel):
     summary: str | None = ""
     raw: dict[str, Any] | None = Field(default_factory=dict)
     external_id: str | None = Field(default=None, alias="externalId")
+    is_cancelled: bool = Field(default=False, alias="isCancelled")
 
     @field_validator("attendees_emails", mode="before")
     @classmethod

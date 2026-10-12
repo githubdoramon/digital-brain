@@ -32,6 +32,7 @@ type MeetingResponse = {
   start_date?: string | null;
   end_date?: string | null;
   summary?: string | null;
+  is_cancelled?: boolean;
   people?: string[] | null;
   tags?: string[] | null;
   types?: string[] | null;
@@ -52,6 +53,7 @@ type MeetingDetail = {
   startDate: string | null;
   endDate: string | null;
   summary: string | null;
+  isCancelled: boolean;
   people: string[];
   tags: string[];
   types: string[];
@@ -193,6 +195,7 @@ function normalizeMeeting(response: MeetingResponse): MeetingDetail {
     startDate: response.start_date ?? null,
     endDate: response.end_date ?? null,
     summary: response.summary ?? null,
+    isCancelled: Boolean(response.is_cancelled),
     people: Array.isArray(response.people) ? response.people.map(String) : [],
     tags: Array.isArray(response.tags) ? response.tags.map(String) : [],
     types: Array.isArray(response.types) ? response.types.map(String) : [],
@@ -388,6 +391,9 @@ export default function MeetingDetailPage() {
         <>
           <header style={{ display: "grid", gap: "8px" }}>
             <h1 style={{ fontSize: "2rem", fontWeight: 600, color: "#0f172a" }}>{title}</h1>
+            {meeting.isCancelled && (
+              <span style={{ color: "#991b1b", fontWeight: 600, width: "fit-content" }}>Canceled</span>
+            )}
             <p style={{ color: "#475569", maxWidth: "60ch" }}>
               Review the full context, attendees, and notes for this meeting. Raw content is rendered with
               Markdown so you can read transcripts and summaries comfortably.

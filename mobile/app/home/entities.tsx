@@ -191,6 +191,7 @@ function EventCard({
         <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
           <View style={styles.cardBody}>
             <Text style={styles.cardTitle}>{String(event.title || '').trim() || 'Untitled event'}</Text>
+            {event.is_cancelled ? <Text style={styles.cardCancelled}>Canceled</Text> : null}
             <Text style={styles.cardSubtitle}>{formatEventDate(event.start_date)}</Text>
             {event.summary ? (
               <Text style={styles.cardMeta} numberOfLines={2}>
@@ -1079,6 +1080,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: theme.colors.ink,
+  },
+  cardCancelled: {
+    color: theme.colors.accent,
+    fontSize: 12,
+    fontWeight: '700',
   },
   cardSubtitle: {
     fontSize: 13,

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from enum import Enum
 from itertools import combinations
 from typing import Any, Callable
@@ -275,6 +275,231 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     return normalized_event_id
 
 
+def ingest_google_calendar_event(calendar_id: str, payload: dict[str, Any]) -> str:
+    """Upsert one expanded Google Calendar occurrence using calendar-scoped identity."""
+    return ingest_calendar_event("google", calendar_id, payload)
+
+
+def ingest_calendar_event(provider: str, calendar_id: str, payload: dict[str, Any]) -> str:
+    """Upsert one expanded occurrence using provider and calendar scoped identity."""
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in {"google", "microsoft"}:
+        raise ValueError("Unsupported calendar provider")
+    provider_event_id = str(payload.get("id") or "").strip()
+    normalized_calendar_id = str(calendar_id or "").strip()
+    if not provider_event_id or not normalized_calendar_id:
+        raise ValueError("Calendar and event IDs are required")
+
+    external_identifier = f"{normalized_provider}:{normalized_calendar_id}:{provider_event_id}"
+    existing_id = _get_event_id_by_external_id(external_identifier)
+    if not existing_id and normalized_provider == "google":
+        existing_id = _get_event_id_by_external_id(f"google:{provider_event_id}")
+    normalized_event_id = existing_id or f"{external_identifier}:{uuid4().hex[:8]}"
+    existing_event = _get_event_by_id(normalized_event_id) if existing_id else None
+    if (
+        existing_event
+        and not existing_event.get("is_cancelled")
+        and payload.get("updated")
+        and (existing_event.get("raw") or {}).get("calendarUpdatedAt", (existing_event.get("raw") or {}).get("googleUpdatedAt")) == payload.get("updated")
+    ):
+        return normalized_event_id
+
+    start_value = payload.get("start") or {}
+    end_value = payload.get("end") or {}
+    start_date = _parse_google_event_datetime(start_value)
+    if start_date is None:
+        return ""
+    description = str(payload.get("description") or "").strip()
+    existing_raw = (existing_event or {}).get("raw") or {}
+    previous_description = str(existing_raw.get("calendarDescription") or existing_raw.get("googleCalendarDescription") or "")
+    summary = _append_google_calendar_description(
+        str((existing_event or {}).get("summary") or ""),
+        previous_description,
+        description,
+        provider_name="Google Calendar" if normalized_provider == "google" else "Microsoft Calendar",
+    )
+    raw = {
+        "source": existing_raw.get("source") or f"{normalized_provider}_calendar_sync",
+        "calendarProvider": normalized_provider,
+        "calendarSynced": True,
+        "calendarId": normalized_calendar_id,
+        "calendarEventId": provider_event_id,
+        "calendarStatus": payload.get("status") or "confirmed",
+        "calendarUpdatedAt": payload.get("updated"),
+        "calendarDescription": description,
+        "calendarLocation": payload.get("location"),
+        "recurringEventId": payload.get("recurringEventId"),
+        "originalStartTime": payload.get("originalStartTime"),
+        "htmlLink": payload.get("htmlLink"),
+    }
+    if normalized_provider == "google":
+        raw.update({
+            "googleCalendarSynced": True,
+            "googleCalendarId": normalized_calendar_id,
+            "googleEventId": provider_event_id,
+            "googleCalendarStatus": payload.get("status") or "confirmed",
+            "googleUpdatedAt": payload.get("updated"),
+            "googleCalendarDescription": description,
+            "googleCalendarLocation": payload.get("location"),
+        })
+    raw = {**existing_raw, **raw}
+    attendees = payload.get("attendees") or []
+    attendee_emails = [
+        str(attendee.get("email") or "").strip()
+        for attendee in attendees
+        if isinstance(attendee, dict) and attendee.get("email")
+    ]
+    raw["attendees"] = attendee_emails
+    event = EventIn(
+        id=normalized_event_id,
+        startDate=start_date,
+        endDate=_parse_google_event_datetime(end_value),
+        title=str(payload.get("summary") or ""),
+        summary=summary,
+        attendeesEmails=attendee_emails,
+        types=["meeting"],
+        raw=raw,
+        externalId=external_identifier,
+        isCancelled=False,
+    )
+    if existing_event:
+        event = _merge_event(existing_event, event, mode=EventMergeMode.AUTHORITATIVE_EXTERNAL)
+        event.raw = raw
+        event.summary = summary
+        event.external_id = external_identifier
+        event.is_cancelled = False
+
+    contact_cache: dict[str, tuple[str | None, bool]] = {}
+    current_user = _load_current_user_from_env()
+    unique_contacts, attendee_contacts_by_domain = _resolve_attendee_contacts(
+        attendee_emails,
+        contact_cache=contact_cache,
+        current_user=current_user,
+    )
+    event.people = unique_contacts
+    _create_coworker_relationships(attendee_contacts_by_domain)
+    ingest_event(event)
+    return normalized_event_id
+
+
+def _parse_google_event_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, dict):
+        return None
+    date_time = value.get("dateTime")
+    if isinstance(date_time, str) and date_time.strip():
+        normalized = date_time.strip()
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    date_value = value.get("date")
+    if isinstance(date_value, str) and date_value.strip():
+        day = date.fromisoformat(date_value.strip())
+        return datetime.combine(day, time.min, tzinfo=timezone.utc)
+    return None
+
+
+def _append_google_calendar_description(
+    existing_summary: str,
+    previous_description: str,
+    new_description: str,
+    *,
+    provider_name: str = "Google Calendar",
+) -> str:
+    section_title = f"{provider_name} description:"
+    marker = f"\n\n{section_title}\n"
+    summary = existing_summary.strip()
+    old_suffix = f"{marker}{previous_description}" if previous_description else ""
+    description_only = f"{section_title}\n{previous_description}"
+    if previous_description and summary == description_only:
+        summary = ""
+    elif old_suffix and summary.endswith(old_suffix):
+        summary = summary[: -len(old_suffix)].rstrip()
+    if not new_description:
+        return summary
+    if summary:
+        return f"{summary}{marker}{new_description}"
+    return f"{section_title}\n{new_description}"
+
+
+def mark_google_calendar_event_cancelled(calendar_id: str, google_event_id: str) -> bool:
+    return mark_calendar_event_cancelled("google", calendar_id, google_event_id)
+
+
+def mark_calendar_event_cancelled(provider: str, calendar_id: str, event_id: str) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in {"google", "microsoft"}:
+        raise ValueError("Unsupported calendar provider")
+    external_identifier = f"{normalized_provider}:{str(calendar_id).strip()}:{str(event_id).strip()}"
+    if external_identifier.endswith(":"):
+        return False
+    raw_field = "googleCalendarStatus" if normalized_provider == "google" else "calendarStatus"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE events
+            SET is_cancelled = TRUE,
+                raw = jsonb_set(COALESCE(raw, '{{}}'::jsonb), '{{{raw_field}}}', '"cancelled"'::jsonb, TRUE)
+            WHERE external_id = %s
+               OR (%s = 'google' AND external_id = %s AND (raw->>'googleCalendarId' IS NULL OR raw->>'googleCalendarId' = %s))
+            """,
+            (
+                external_identifier,
+                normalized_provider,
+                f"google:{str(event_id).strip()}",
+                str(calendar_id).strip(),
+            ),
+        )
+        changed = cur.rowcount > 0
+        conn.commit()
+        return changed
+
+
+def list_google_calendar_event_ids(
+    calendar_id: str,
+    *,
+    start_date: datetime,
+    end_date: datetime,
+) -> list[str]:
+    return list_calendar_event_ids(
+        "google", calendar_id, start_date=start_date, end_date=end_date
+    )
+
+
+def list_calendar_event_ids(
+    provider: str,
+    calendar_id: str,
+    *,
+    start_date: datetime,
+    end_date: datetime,
+) -> list[str]:
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in {"google", "microsoft"}:
+        raise ValueError("Unsupported calendar provider")
+    calendar_field = "googleCalendarId" if normalized_provider == "google" else "calendarId"
+    event_field = "googleEventId" if normalized_provider == "google" else "calendarEventId"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT raw->>'{event_field}' AS event_id
+            FROM events
+            WHERE raw->>'{calendar_field}' = %s
+              AND (raw->>'calendarProvider' = %s OR %s = 'google')
+              AND start_date >= %s
+              AND start_date < %s
+              AND is_cancelled = FALSE
+            """,
+            (str(calendar_id).strip(), normalized_provider, normalized_provider, start_date, end_date),
+        )
+        return list(
+            dict.fromkeys(
+                str(row["event_id"])
+                for row in cur.fetchall()
+                if row.get("event_id")
+            )
+        )
+
+
 def ingest_meeting_transcript(
     payload: MeetingTranscriptPayload,
     *,
@@ -374,6 +599,23 @@ def ingest_meeting_transcript(
     if existing_event:
         event = _merge_event(existing_event, event, mode=EventMergeMode.AUTHORITATIVE_EXTERNAL)
         event.summary = summary
+        existing_raw = existing_event.get("raw") or {}
+        previous_calendar_description = str(
+            existing_raw.get("calendarDescription")
+            or existing_raw.get("googleCalendarDescription")
+            or ""
+        )
+        if previous_calendar_description:
+            event.summary = _append_google_calendar_description(
+                summary,
+                "",
+                previous_calendar_description,
+                provider_name=(
+                    "Microsoft Calendar"
+                    if existing_raw.get("calendarProvider") == "microsoft"
+                    else "Google Calendar"
+                ),
+            )
 
     ingest_event(event)
     created_todo_ids = _create_current_user_todos_from_action_items(
@@ -430,6 +672,15 @@ def _resolve_meeting_transcript_event_id(
 ) -> str:
     if external_identifier:
         existing_id = _get_event_id_by_external_id(external_identifier)
+        if not existing_id and external_identifier.startswith("google:"):
+            google_event_id = external_identifier.removeprefix("google:").rsplit(":", 1)[-1]
+            matching_calendar_events = _get_event_ids_by_google_event_id(
+                google_event_id,
+                title=title,
+                start_date=start_date,
+            )
+            if len(matching_calendar_events) == 1:
+                existing_id = matching_calendar_events[0]
         if existing_id:
             return existing_id
 
@@ -442,6 +693,43 @@ def _resolve_meeting_transcript_event_id(
 
     normalized_session = _slugify(session_id or start_date.strftime("%Y%m%dT%H%M%S"))
     return f"meeting-transcript:{normalized_session}-{_slugify(title)}-{uuid4().hex[:8]}"
+
+
+def _get_event_ids_by_google_event_id(
+    google_event_id: str,
+    *,
+    title: str,
+    start_date: datetime,
+) -> list[str]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM events
+            WHERE external_id LIKE 'google:%'
+              AND right(external_id, length(%s) + 1) = ':' || %s
+              AND lower(COALESCE(title, '')) = lower(%s)
+              AND start_date::date = %s::date
+            ORDER BY start_date DESC
+            """,
+            (google_event_id, google_event_id, title, start_date),
+        )
+        matching_rows = cur.fetchall()
+    if matching_rows:
+        return [str(row["id"]) for row in matching_rows]
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM events
+            WHERE external_id LIKE 'google:%'
+              AND right(external_id, length(%s) + 1) = ':' || %s
+            ORDER BY start_date DESC
+            """,
+            (google_event_id, google_event_id),
+        )
+        return [str(row["id"]) for row in cur.fetchall()]
 
 
 def _speaker_label_map(payload: MeetingTranscriptPayload) -> dict[str, str]:
@@ -973,6 +1261,7 @@ def get_meeting(meeting_id: str) -> dict[str, Any] | None:
               e.title,
               e.summary,
               e.external_id,
+              e.is_cancelled,
               e.raw,
               e.place_id,
               p.name AS place_name,
@@ -1014,6 +1303,7 @@ def get_meeting(meeting_id: str) -> dict[str, Any] | None:
             "tags": row.get("tags") or [],
             "types": row.get("types") or [],
             "external_id": row.get("external_id"),
+            "is_cancelled": bool(row.get("is_cancelled")),
             "raw": raw_data,
             "place": (
                 {
@@ -1106,9 +1396,10 @@ def ingest_event(event: EventIn) -> None:
               summary,
               raw,
               external_id,
+              is_cancelled,
               what_embed
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (id) DO UPDATE
               SET start_date=EXCLUDED.start_date,
                   end_date=EXCLUDED.end_date,
@@ -1119,6 +1410,7 @@ def ingest_event(event: EventIn) -> None:
                   summary=EXCLUDED.summary,
                   raw=EXCLUDED.raw,
                   external_id=EXCLUDED.external_id,
+                  is_cancelled=EXCLUDED.is_cancelled,
                   what_embed=EXCLUDED.what_embed
             """,
             (
@@ -1132,6 +1424,7 @@ def ingest_event(event: EventIn) -> None:
                 event.summary or "",
                 json.dumps(event.raw or {}),
                 event.external_id,
+                event.is_cancelled,
                 emb,
             ),
         )
@@ -1331,6 +1624,7 @@ def get_events(ids: list[str]) -> list[dict[str, Any]]:
             "title": r.get("title"),
             "summary": r.get("summary"),
             "external_id": r.get("external_id"),
+            "is_cancelled": bool(r.get("is_cancelled")),
             "photos": photos_by_event.get(r["id"], []),
             "place": (
                 {
@@ -1463,7 +1757,8 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
               title,
               summary,
               raw,
-              external_id
+              external_id,
+              is_cancelled
             FROM events
             WHERE id = %s
             LIMIT 1
@@ -1493,6 +1788,7 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
             "summary": row["summary"],
             "raw": raw_data,
             "external_id": row["external_id"],
+            "is_cancelled": bool(row.get("is_cancelled")),
             "photos": event_photos_service.list_event_photos(normalized),
         }
 
@@ -1556,7 +1852,8 @@ def _merge_event(
         title=incoming.title or existing.get("title") or "",
         summary=merged_summary,
         raw=merged_raw,
-        externalId=incoming.external_id or existing.get("external_id"),
+        externalId=existing.get("external_id") or incoming.external_id,
+        isCancelled=bool(existing.get("is_cancelled")) or incoming.is_cancelled,
     )
 
 

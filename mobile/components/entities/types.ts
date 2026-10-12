@@ -53,6 +53,7 @@ export type EventListItem = {
   summary?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  is_cancelled?: boolean;
 };
 
 export type EventSearchResponse = {

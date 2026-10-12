@@ -16,7 +16,9 @@ import document_enhancement_jobs
 import document_tag_jobs
 import emergency_stock_jobs
 import event_tag_jobs
+import google_calendar_sync_jobs
 import meeting_transcript_jobs
+import microsoft_calendar_sync_jobs
 import proposed_event_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
@@ -37,6 +39,8 @@ from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
 from routes.glasses_media import create_glasses_media_router
+from routes.google_calendar import create_google_calendar_router
+from routes.microsoft_calendar import create_microsoft_calendar_router
 from routes.news import create_news_router
 from routes.places import create_places_router
 from routes.proposed_events import create_proposed_events_router
@@ -153,9 +157,13 @@ async def lifespan(_app: FastAPI):
     emergency_stock_jobs.start_worker()
     database_backup_jobs.start_worker()
     proposed_event_jobs.start_worker()
+    google_calendar_sync_jobs.start_worker()
+    microsoft_calendar_sync_jobs.start_worker()
     try:
         yield
     finally:
+        google_calendar_sync_jobs.stop_worker()
+        microsoft_calendar_sync_jobs.stop_worker()
         proposed_event_jobs.stop_worker()
         database_backup_jobs.stop_worker()
         emergency_stock_jobs.stop_worker()
@@ -179,6 +187,8 @@ api.include_router(create_places_router())
 api.include_router(create_proposed_events_router())
 api.include_router(create_todos_router())
 api.include_router(create_events_router())
+api.include_router(create_google_calendar_router())
+api.include_router(create_microsoft_calendar_router())
 api.include_router(create_documents_router())
 api.include_router(create_glasses_media_router())
 api.include_router(create_generated_pdfs_router())

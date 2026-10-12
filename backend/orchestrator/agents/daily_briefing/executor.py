@@ -418,6 +418,7 @@ def _fetch_events_for_span(start: datetime, end: datetime) -> list[dict[str, Any
             FROM events AS e
             LEFT JOIN places AS p ON p.place_id = e.place_id
             WHERE e.start_date >= %s AND e.start_date < %s
+              AND e.is_cancelled = FALSE
             ORDER BY e.start_date ASC
             """,
             (start, end),
@@ -711,6 +712,7 @@ def _fetch_similar_by_attendee_overlap(
             LEFT JOIN places AS p ON p.place_id = e.place_id
             LEFT JOIN event_contacts ec ON ec.event_id = e.id
             WHERE e.id <> %s
+              AND e.is_cancelled = FALSE
               AND e.start_date < %s
             GROUP BY
               e.id,
@@ -815,6 +817,7 @@ def _fetch_similar_by_title(
             FROM events AS e
             LEFT JOIN places AS p ON p.place_id = e.place_id
             WHERE e.id <> %s
+              AND e.is_cancelled = FALSE
               AND e.title IS NOT NULL
               AND lower(e.title) = lower(%s)
               AND e.start_date < %s
@@ -863,6 +866,7 @@ def _fetch_similar_by_recurrence(
             FROM events AS e
             LEFT JOIN places AS p ON p.place_id = e.place_id
             WHERE e.id <> %s
+              AND e.is_cancelled = FALSE
               AND e.start_date < %s
               AND (
                 e.raw->>'recurringEventId' = %s
