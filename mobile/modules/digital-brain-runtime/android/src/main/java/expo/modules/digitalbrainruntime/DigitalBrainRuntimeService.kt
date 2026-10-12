@@ -38,6 +38,7 @@ class DigitalBrainRuntimeService : Service() {
       "attempt" to startId,
       "owner_enabled" to (RuntimeFeature.LOCATION in DigitalBrainRuntime.owners(this)),
     ))
+    if (intent?.action == "stop_glasses_listening") runCatching { GlassesListening.configure(this, false, null) }.onFailure { GlassesListening.runtimeStopped() }
     if (intent?.action == "stop_glasses_recording") GlassesRecording.stop()
     refresh(forceNotification = true)
     if (foregroundTypes == 0) return START_NOT_STICKY
@@ -70,7 +71,7 @@ class DigitalBrainRuntimeService : Service() {
     } else 0
     val wantsGlasses = RuntimeFeature.GLASSES in owners && RuntimeGlasses.signedIn(this)
     val glassesTypes = if (wantsGlasses && RuntimeGlasses.permitted(this)) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
-    val recordingTypes = if (GlassesRecording.capturing && glassesTypes != 0 && granted(Manifest.permission.RECORD_AUDIO))
+    val recordingTypes = if ((GlassesRecording.capturing || GlassesListening.foregroundOwned) && glassesTypes != 0 && granted(Manifest.permission.RECORD_AUDIO))
       ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
     val types = locationTypes or glassesTypes or recordingTypes
     if (wantsLocation && !locationPermitted) {
@@ -122,7 +123,8 @@ class DigitalBrainRuntimeService : Service() {
   private fun showNotification(types: Int) {
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel("digital_brain_runtime", "Digital Brain activity", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
-    val body = if (GlassesRecording.capturing) "Glasses microphone is active. Tap Stop recording to save."
+    val body = if (GlassesListening.foregroundOwned && !GlassesRecording.capturing) "Listening for speech through your glasses"
+      else if (GlassesRecording.capturing) "Glasses microphone is active. Tap Stop recording to save."
       else when (types) {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
         ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
@@ -130,7 +132,7 @@ class DigitalBrainRuntimeService : Service() {
       }
     val builder = NotificationCompat.Builder(this, "digital_brain_runtime")
       .setSmallIcon(android.R.drawable.ic_dialog_info)
-      .setContentTitle(if (GlassesRecording.capturing) "Recording from glasses" else "Digital Brain activity")
+      .setContentTitle(if (GlassesRecording.capturing) "Recording from glasses" else if (GlassesListening.foregroundOwned) "Glasses listening" else "Digital Brain activity")
       .setContentText(body)
       .setStyle(NotificationCompat.BigTextStyle().bigText(body))
       .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
@@ -138,6 +140,11 @@ class DigitalBrainRuntimeService : Service() {
       val stop = Intent(this, DigitalBrainRuntimeService::class.java).setAction("stop_glasses_recording")
       builder.addAction(android.R.drawable.ic_media_pause, "Stop recording",
         PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+    }
+    if (GlassesListening.foregroundOwned) {
+      val stopListening = Intent(this, DigitalBrainRuntimeService::class.java).setAction("stop_glasses_listening")
+      builder.addAction(android.R.drawable.ic_media_pause, "Stop listening",
+        PendingIntent.getService(this, 2, stopListening, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
     }
     packageManager.getLaunchIntentForPackage(packageName)?.let {
       builder.setContentIntent(PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))

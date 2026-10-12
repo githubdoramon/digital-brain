@@ -71,9 +71,18 @@ function normalizeWhisperFilePath(fileUri: string) {
   return fileUri;
 }
 
+let modelFilePromise: Promise<{ uri: string; cached: boolean }> | null = null;
 async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => void) {
+  if (!modelFilePromise)
+    modelFilePromise = downloadModelFile(onStatus).finally(() => {
+      modelFilePromise = null;
+    });
+  return modelFilePromise;
+}
+
+async function downloadModelFile(onStatus?: (status: LocalTranscriptionStatus) => void) {
   const info = await FileSystem.getInfoAsync(MODEL_FILE_URI);
-  if (info.exists && !info.isDirectory) {
+  if (info.exists && !info.isDirectory && info.size > 100_000_000) {
     return { uri: MODEL_FILE_URI, cached: true };
   }
 
@@ -83,7 +92,7 @@ async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => 
   try {
     const result = await FileSystem.createDownloadResumable(
       MODEL_URL,
-      MODEL_FILE_URI,
+      `${MODEL_FILE_URI}.download`,
       {},
       (progressEvent) => {
         if (!progressEvent.totalBytesExpectedToWrite) {
@@ -98,17 +107,36 @@ async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => 
       },
     ).downloadAsync();
 
-    if (!result?.uri) {
+    const downloaded = await FileSystem.getInfoAsync(`${MODEL_FILE_URI}.download`);
+    if (
+      !result?.uri ||
+      result.status !== 200 ||
+      !downloaded.exists ||
+      downloaded.isDirectory ||
+      downloaded.size < 100_000_000
+    ) {
       throw new Error('The Whisper model download did not complete.');
     }
 
-    return { uri: result.uri, cached: false };
+    await FileSystem.deleteAsync(MODEL_FILE_URI, { idempotent: true });
+    await FileSystem.moveAsync({ from: result.uri, to: MODEL_FILE_URI });
+    return { uri: MODEL_FILE_URI, cached: false };
   } catch (error) {
+    await FileSystem.deleteAsync(`${MODEL_FILE_URI}.download`, { idempotent: true }).catch(
+      () => undefined,
+    );
     throw new LocalTranscriptionError(
       'download_failed',
       error instanceof Error ? error.message : 'The Whisper model could not be downloaded.',
     );
   }
+}
+
+export async function prepareEnglishWhisperModel(
+  onStatus?: (status: LocalTranscriptionStatus) => void,
+): Promise<string> {
+  const file = await ensureModelFile(onStatus);
+  return file.uri;
 }
 
 async function getWhisperContext(
@@ -137,7 +165,8 @@ async function getWhisperContext(
             ? Math.round((modelInfo.size / (1024 * 1024)) * 10) / 10
             : null,
         model_modified_at_ms:
-          modelInfo.exists && 'modificationTime' in modelInfo &&
+          modelInfo.exists &&
+          'modificationTime' in modelInfo &&
           typeof modelInfo.modificationTime === 'number'
             ? Math.round(modelInfo.modificationTime * 1_000)
             : null,

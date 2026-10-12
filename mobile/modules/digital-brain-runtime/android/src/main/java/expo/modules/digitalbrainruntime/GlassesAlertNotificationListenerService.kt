@@ -118,9 +118,11 @@ class GlassesAlertNotificationListenerService : NotificationListenerService() {
   private fun processCall(post: StatusBarNotification): GlassesCallKind {
     val value = kind(post.notification)
     val callType = post.notification.extras?.getInt("android.callType", 0) ?: 0
-    if (GlassesRecordingPolicy.callInterrupts(value == GlassesCallKind.INCOMING, callType,
+    val interrupted = GlassesRecordingPolicy.callInterrupts(value == GlassesCallKind.INCOMING, callType,
       post.notification.category == Notification.CATEGORY_CALL,
-      post.notification.flags and Notification.FLAG_ONGOING_EVENT != 0)) {
+      post.notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+    GlassesListening.callNotification(post.key, interrupted)
+    if (interrupted) {
       GlassesRecording.stop(GlassesRecordingStop.CALL)
     }
     val dialer = getSystemService(TelecomManager::class.java)?.defaultDialerPackage
@@ -154,6 +156,7 @@ class GlassesAlertNotificationListenerService : NotificationListenerService() {
     }
   }
   override fun onNotificationRemoved(post: StatusBarNotification) {
+    GlassesListening.callNotification(post.key, false)
     seen.remove(post.key)
     dialerSources.remove(post.key)
     calls.ended(post.key)

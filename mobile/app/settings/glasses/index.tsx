@@ -215,6 +215,17 @@ export default function GlassesSettingsScreen() {
               onPress={() => router.push('/settings/glasses/recordings')}
             />
           </Card>
+          <Card style={styles.card}>
+            <Text style={styles.title}>Listening</Text>
+            <Text style={styles.body}>
+              Save speech from your glasses as timestamped transcripts.
+            </Text>
+            <Button
+              label="Glasses listening"
+              variant="secondary"
+              onPress={() => router.push('/settings/glasses/listening')}
+            />
+          </Card>
           {loadError && (
             <Card style={styles.card}>
               <Text style={styles.error}>{loadError}</Text>

@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import contacts as contacts_service
 import event_media_suggestions
 import event_photos as event_photos_service
 import events as events_service
@@ -417,6 +418,9 @@ def accept_proposal(
             ]
         )
     )
+    self_contact_id = contacts_service.get_self_contact_id(user_email)
+    if self_contact_id and self_contact_id not in resolved_contacts:
+        resolved_contacts.append(self_contact_id)
     event = EventIn(
         id=event_id,
         startDate=resolved_start_at,
@@ -570,9 +574,6 @@ def _materialize_selected_place(
         raise ValueError("Selected place candidate is not available")
 
     linked_place_id = google_place_cache.get_canonical_place_id(selected_id)
-    if linked_place_id:
-        return linked_place_id
-
     cached_candidate = google_place_cache.get_candidate(selected_id) or candidate
     title = str(cached_candidate.get("title") or "").strip()
     lat = _safe_optional_float(cached_candidate.get("lat"))
@@ -580,16 +581,30 @@ def _materialize_selected_place(
     if not title or lat is None or lon is None:
         raise ValueError("Selected place candidate is incomplete")
 
-    internal_place_id = f"plc_{_safe_place_slug(title)}_{uuid4().hex[:6]}"
+    canonical_place_id = linked_place_id or existing_place_id
+    existing_place = places_service.get_place(canonical_place_id) if canonical_place_id else None
+    internal_place_id = canonical_place_id or f"plc_{_safe_place_slug(title)}_{uuid4().hex[:6]}"
     places_service.ingest_place(
         PlaceIn(
             place_id=internal_place_id,
             name=title,
-            address=str(cached_candidate.get("formatted_address") or "").strip() or None,
-            city=str(cached_candidate.get("city") or "").strip() or None,
-            country=str(cached_candidate.get("country") or "").strip() or None,
+            aliases=(existing_place or {}).get("aliases") or [],
+            description=(existing_place or {}).get("description"),
+            address=(
+                str(cached_candidate.get("formatted_address") or "").strip()
+                or (existing_place or {}).get("address")
+            ),
+            city=(
+                str(cached_candidate.get("city") or "").strip()
+                or (existing_place or {}).get("city")
+            ),
+            country=(
+                str(cached_candidate.get("country") or "").strip()
+                or (existing_place or {}).get("country")
+            ),
             lat=lat,
             lon=lon,
+            geohash=(existing_place or {}).get("geohash"),
         )
     )
     google_place_cache.link_canonical_place(selected_id, internal_place_id)
@@ -809,7 +824,15 @@ def _build_candidate(
         event_lat=segment.lat,
         event_lon=segment.lon,
     )
-    return _enrich_candidate_with_history(candidate, segment=segment, timezone_name=timezone_name)
+    candidate = _enrich_candidate_with_history(
+        candidate,
+        segment=segment,
+        timezone_name=timezone_name,
+    )
+    self_contact_id = contacts_service.get_self_contact_id(user_email)
+    if self_contact_id and self_contact_id not in candidate["suggested_contact_ids"]:
+        candidate["suggested_contact_ids"].append(self_contact_id)
+    return candidate
 
 
 def _segment_skip_reason(segment: StaySegment, ignores: set[tuple[str, str]]) -> str:
@@ -1054,7 +1077,9 @@ def _build_place_context(segment: StaySegment) -> dict[str, Any]:
     is_certain_known_place = bool(segment.place_id and segment.known_place_confidence == "high")
     google_candidates = []
     google_search = None
-    if not is_certain_known_place:
+    existing_address = str((existing_place or {}).get("address") or "").strip()
+    needs_google_place_details = not is_certain_known_place or not existing_address
+    if needs_google_place_details:
         google_candidates, google_search = _lookup_google_place_candidates(segment)
     web_context = (
         _search_place_web_context(search_query)
@@ -1482,6 +1507,11 @@ def _apply_llm_enrichment(
         if str(candidate_id or "").strip() in valid_candidate_ids
     ]
     ranked_candidate_ids = list(dict.fromkeys(ranked_candidate_ids))[:3]
+    if selected_candidate_id in valid_candidate_ids:
+        ranked_candidate_ids = [
+            selected_candidate_id,
+            *[candidate_id for candidate_id in ranked_candidate_ids if candidate_id != selected_candidate_id],
+        ][:3]
     proposed_place_name = ""
     candidate["evidence"]["llm_enrichment"] = {
         "used": True,
@@ -2346,9 +2376,18 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
             evidence = {}
     if isinstance(evidence, dict):
         place_intelligence = evidence.get("place_intelligence")
+        llm_enrichment = evidence.get("llm_enrichment")
+        selected_id = (
+            str(llm_enrichment.get("selected_place_candidate_id") or "").strip()
+            if isinstance(llm_enrichment, dict)
+            else ""
+        )
         if isinstance(place_intelligence, dict):
-            candidates = [item for item in (place_intelligence.get("candidates") or []) if isinstance(item, dict)]
-            llm_enrichment = evidence.get("llm_enrichment")
+            candidates = [
+                item
+                for item in (place_intelligence.get("candidates") or [])
+                if isinstance(item, dict)
+            ]
             ranked_ids = (
                 llm_enrichment.get("ranked_place_candidate_ids")
                 if isinstance(llm_enrichment, dict)
@@ -2361,9 +2400,17 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
                 for item in candidates
                 if str(item.get("provider_place_id") or "").strip()
             }
+            if selected_id and selected_id in by_id:
+                ranked_ids = [selected_id, *[item for item in ranked_ids if item != selected_id]]
             ordered = [by_id[provider_id] for provider_id in ranked_ids if provider_id in by_id]
             ordered.extend(item for item in candidates if item not in ordered)
             output["place_candidates"] = ordered[:3]
+            visible_candidate_ids = {
+                str(item.get("provider_place_id") or "") for item in ordered[:3]
+            }
+            output["selected_place_candidate_id"] = (
+                selected_id if selected_id in visible_candidate_ids else None
+            )
     proposal_id = str(output.get("proposal_id") or "").strip()
     if proposal_id and "media_suggestions" not in output:
         try:

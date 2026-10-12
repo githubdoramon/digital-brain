@@ -128,12 +128,7 @@ def create_and_upload_backup() -> dict[str, Any]:
     database_host = os.getenv("POSTGRES_HOST", "db")
     database_port = os.getenv("POSTGRES_PORT", "5432")
     prefix = os.getenv("DB_BACKUP_S3_PREFIX", "").strip("/")
-    region = (
-        os.getenv("DB_BACKUP_AWS_REGION")
-        or os.getenv("AWS_REGION")
-        or os.getenv("AWS_DEFAULT_REGION")
-        or None
-    )
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or None
 
     filename = "backup.sql.gz.enc"
     key = f"{prefix}/{filename}" if prefix else filename

@@ -30,6 +30,7 @@ const BACKGROUND_DISTANCE_INTERVAL_METERS = 5;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
 const ANDROID_NATIVE_LOCATION_INTERVAL_MS = 10 * 60 * 1000;
 const ANDROID_NATIVE_MAX_BATCH_DELAY_MS = 60 * 60 * 1000;
+const MAX_STORABLE_LOCATION_ACCURACY_METERS = 50;
 const ANDROID_LOCATION_MODE = 'hybrid_quiet_until_moving';
 const IOS_LOCATION_MODE = 'continuous_background_updates';
 const ANDROID_GEOFENCE_RADIUS_METERS = 30;
@@ -767,6 +768,18 @@ async function queueBackgroundLocation(
 
   const accuracyRaw = Number(sample.coords?.accuracy);
   const accuracy = Number.isFinite(accuracyRaw) ? Math.round(accuracyRaw * 10) / 10 : undefined;
+  if (accuracy !== undefined && accuracy > MAX_STORABLE_LOCATION_ACCURACY_METERS) {
+    reportLocationDebugEvent('background_location_accuracy_rejected', {
+      payload: {
+        accuracy_m: accuracy,
+        threshold_meters: MAX_STORABLE_LOCATION_ACCURACY_METERS,
+        source: 'expo_location',
+        captured_at: capturedAt,
+        debug_request_id: debugRequestId,
+      },
+    });
+    return;
+  }
 
   await updateAndroidHybridTrackingForSample({
     lat: latitude,

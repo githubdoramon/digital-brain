@@ -152,10 +152,15 @@ class RuntimeLocationCapture(private val context: Context, private val onCommitt
       val selected = mutableListOf<Location>()
       var timeTriggered = 0
       var movementTriggered = 0
+      var accuracyRejected = 0
       synchronized(sampleLock) {
         var baseline = lastCapturedLocation
         for (location in ordered) {
           if (baseline != null && location.time <= baseline.time) continue
+          if (location.hasAccuracy() && location.accuracy > MAX_STORABLE_LOCATION_ACCURACY_METERS) {
+            accuracyRejected++
+            continue
+          }
           val elapsed = baseline?.let { location.time - it.time } ?: Long.MAX_VALUE
           val distance = baseline?.distanceTo(location) ?: Float.POSITIVE_INFINITY
           val trigger = when {
@@ -180,6 +185,8 @@ class RuntimeLocationCapture(private val context: Context, private val onCommitt
         "lane" to lane,
         "candidate_count" to ordered.size,
         "captured_count" to selected.size,
+        "accuracy_rejected_count" to accuracyRejected,
+        "max_accuracy_meters" to MAX_STORABLE_LOCATION_ACCURACY_METERS,
         "time_triggered_count" to timeTriggered,
         "movement_triggered_count" to movementTriggered,
         "timer_reset" to (movementTriggered > 0),
@@ -256,6 +263,7 @@ class RuntimeLocationCapture(private val context: Context, private val onCommitt
     const val LOCATION_INTERVAL_MS = 600_000L
     const val MOVEMENT_MIN_INTERVAL_MS = 60_000L
     const val MOVEMENT_DISTANCE_METERS = 50f
+    const val MAX_STORABLE_LOCATION_ACCURACY_METERS = 50f
     const val MAX_BATCH_DELAY_MS = 3_600_000L
 
     fun isoTimestamp(timestamp: Long): String = java.text.SimpleDateFormat(

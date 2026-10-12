@@ -59,6 +59,7 @@ object RuntimeGlasses {
     check(prefs(c).edit().putBoolean("signed_in", value).commit())
     if (!value) stop()
     DigitalBrainRuntime.refresh(c, allowStart = value)
+    if (value && DigitalBrainRuntime.activityVisible) GlassesListening.resumeForeground(c)
   }
 
   fun start(c: Context) {
@@ -80,7 +81,9 @@ object RuntimeGlasses {
           if (discovery) { discovery = false; record("scan_finished"); scheduleRetry() }
         }
         override fun onError(value: BluetoothError) { if (generation == sessionGeneration) { error = value.code; record("sdk_error", value.code) } }
-        override fun onMicPcm(event: MicPcmEvent) { if (generation == sessionGeneration) GlassesRecording.pcm(event) }
+        override fun onMicPcm(event: MicPcmEvent) { if (generation == sessionGeneration) { GlassesRecording.pcm(event); GlassesListening.pcm(event) } }
+        override fun onSpeakingStatus(event: SpeakingStatusEvent) { if (generation == sessionGeneration) GlassesListening.speaking(event.speaking) }
+        override fun onVoiceActivityDetectionStatus(event: VoiceActivityDetectionStatusEvent) { if (generation == sessionGeneration) GlassesListening.vadStatus(event.voiceActivityDetectionEnabled) }
         override fun onPhotoStatus(event: PhotoStatusEvent) { if (generation == sessionGeneration) scheduleMediaSync() }
         override fun onVideoRecordingStatus(event: VideoRecordingStatusEvent) { if (generation == sessionGeneration) scheduleMediaSync() }
         override fun onButtonPress(event: ButtonPressEvent) { if (generation == sessionGeneration && event.pressType == "short") scheduleMediaSync() }
@@ -120,6 +123,7 @@ object RuntimeGlasses {
   }
 
   fun stop() {
+    GlassesListening.runtimeStopped()
     GlassesRecording.stop(GlassesRecordingStop.RUNTIME_STOPPED)
     context?.let { GlassesMediaWorker.cancel(it) }
     GlassesAlertPlayback.stop()
@@ -177,10 +181,12 @@ object RuntimeGlasses {
     val wasReady = state?.glasses?.ready == true
     state = value
     if (!alertsReady()) {
+      GlassesListening.pause()
       GlassesRecording.stop(GlassesRecordingStop.DISCONNECTED)
       GlassesAlertPlayback.stop()
     }
     GlassesAlertNotificationListenerService.connectionChanged()
+    context?.let { GlassesListening.reconcile(it) }
     if (value.glasses.ready && !wasReady) {
       cancelRetry(); deadline?.let(handler::removeCallbacks); deadline = null; attempting = false
       error = null; record("connected_ready")
@@ -291,6 +297,7 @@ object RuntimeGlasses {
     val current = requireNotNull(sdk)
     GlassesRecording.stop(GlassesRecordingStop.DISCONNECTED)
     updateActive = true; updateStatus = "starting"; firmwareError = null
+    GlassesListening.pause()
     GlassesAlertPlayback.stop()
     context?.let { prefs(it).edit().putBoolean("update_active", true).apply() }
     try {
@@ -370,6 +377,11 @@ object RuntimeGlasses {
     val identity = prefs(c).getString("address", null) ?: prefs(c).getString("name", null) ?: return null
     return GlassesMediaDevice(sdk!!, GlassesMediaStore.hash(identity), (glasses.wifi as? WifiStatus.Connected)?.localIp, glasses.hotspot)
   }
+  fun setListeningMic(enabled: Boolean) {
+    if (enabled) check(alertsReady()) { "Connect glasses to listen" }
+    sdk?.setVoiceActivityDetectionEnabled(enabled)
+    sdk?.setMicState(enabled, useGlassesMic = true, sendTranscript = false, sendLc3Data = false)
+  }
   fun setRecordingMic(enabled: Boolean) {
     if (enabled) check(alertsReady()) { "Glasses microphone is unavailable" }
     if (enabled) sdk?.setVoiceActivityDetectionEnabled(false)
@@ -402,7 +414,7 @@ object RuntimeGlasses {
     )
   }
   fun diagnostics(c: Context): Map<String, Any?> = snapshot(c).filterKeys { it !in setOf("savedName", "devices", "wifi") } +
-    mapOf("recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
+    mapOf("listening" to GlassesListening.diagnostics(), "recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
       // UI status may contain SDK-provided error text. Export structured media events instead.
       "media" to GlassesMediaStore.status(c).filterKeys { it in setOf("pending", "transport") })
 }

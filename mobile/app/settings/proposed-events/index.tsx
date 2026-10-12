@@ -56,6 +56,7 @@ type ProposedEvent = {
   suggested_summary?: string | null;
   suggested_contact_ids?: string[];
   place_candidates?: PlaceCandidate[];
+  selected_place_candidate_id?: string | null;
   accepted_event_id?: string | null;
   event_id?: string | null;
   media_suggestions?: EventPhoto[];
@@ -235,7 +236,28 @@ export default function ProposedEventsScreen() {
         const merged = { ...current };
         next.forEach((proposal) => {
           if (merged[proposal.proposal_id] == null) {
-            merged[proposal.proposal_id] = proposal.place_name || '';
+            const selectedCandidate = proposal.place_candidates?.find(
+              (candidate) =>
+                candidate.provider_place_id === proposal.selected_place_candidate_id,
+            );
+            merged[proposal.proposal_id] =
+              selectedCandidate?.title || proposal.place_name || '';
+          }
+        });
+        return merged;
+      });
+      setSelectedPlaceById((current) => {
+        const merged = { ...current };
+        next.forEach((proposal) => {
+          if (!Object.prototype.hasOwnProperty.call(merged, proposal.proposal_id)) {
+            const selectedCandidateId = proposal.selected_place_candidate_id;
+            merged[proposal.proposal_id] =
+              selectedCandidateId &&
+              proposal.place_candidates?.some(
+                (candidate) => candidate.provider_place_id === selectedCandidateId,
+              )
+                ? selectedCandidateId
+                : null;
           }
         });
         return merged;

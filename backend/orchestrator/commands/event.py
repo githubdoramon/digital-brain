@@ -765,6 +765,14 @@ def confirm_event_command(
             for created_contact in created_contacts:
                 all_contact_ids.append(created_contact["contact_id"])
 
+        try:
+            self_contact_id = contacts_service.get_self_contact_id(user_email)
+        except Exception:
+            logger.warning("[event_confirm] Unable to resolve current user contact", exc_info=True)
+            self_contact_id = None
+        if self_contact_id and self_contact_id not in all_contact_ids:
+            all_contact_ids.append(self_contact_id)
+
         logger.info(
             "[event_confirm] Participant override=%s, contact_ids=%d, "
             "resolution_contacts=%d, created_contacts=%d",

@@ -59,3 +59,7 @@ Native automatic downloads and Immich uploads are implemented in the separate [m
 ## Local audio recording
 
 Settings → Glasses → Recordings supports explicit Start/Stop, M4A output in the selected Digital Brain folder, playback, rename and confirmed deletion. Capture and saving stay native while the screen is locked. Calls/disconnects stop and save without resuming. This adds no backend API or upload. See [GLASSES_RECORDINGS.md](GLASSES_RECORDINGS.md) for storage, permission, recovery and device validation details.
+
+## Optional speech listening
+
+Glasses → Listening is a separate toggle, initially off, for hardware-VAD English transcription on the phone and timestamped transcript export. It shares the native microphone foreground service with manual recording, which takes priority and disables VAD for continuous M4A capture. See [GLASSES_LISTENING.md](GLASSES_LISTENING.md).

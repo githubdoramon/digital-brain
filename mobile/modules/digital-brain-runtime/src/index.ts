@@ -133,6 +133,10 @@ export type GlassesAlertApp = { packageName: string; label: string };
 type DigitalBrainRuntimeModule = NativeModule & {
   setGlassesSignedIn(signedIn: boolean): Promise<void>;
   setGlassesEnabled(enabled: boolean): Promise<void>;
+  getGlassesListeningStatus(): Promise<GlassesListeningStatus>;
+  setGlassesListeningMinimumVolume(value: number): Promise<void>;
+  setGlassesListening(enabled: boolean, modelUri: string | null): Promise<void>;
+  exportGlassesTranscripts(baseUri: string): Promise<string>;
   syncGlassesMedia(): Promise<void>;
   getGlassesStatus(): Promise<GlassesStatus>;
   scanGlasses(): Promise<void>;
@@ -187,4 +191,15 @@ export type GlassesRecordingStatus = {
     positionMs: number;
     error: string | null;
   };
+};
+
+export type GlassesListeningStatus = {
+  minimumVolume: number;
+  audioLevel: number;
+  enabled: boolean;
+  active: boolean;
+  status: string;
+  count: number;
+  pending: number;
+  lastTranscriptAtMs: number | null;
 };

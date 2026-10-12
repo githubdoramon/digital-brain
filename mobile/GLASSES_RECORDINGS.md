@@ -29,3 +29,5 @@ Playback uses native MediaPlayer and audio focus. It stops on screen exit/backgr
 JVM tests cover long-session sample timestamps, PCM format/buffer bounds and missed-versus-active call interruption policy. Android compilation and TypeScript/lint checks validate integration; they do not prove physical glasses capture, AAC encoder behavior or storage-provider playback.
 
 Device checks: start with connected glasses; record while locked for several minutes; stop and play the resulting M4A; rename/delete it; interrupt with a cellular and an app call and disconnect; verify no automatic resume; simulate a revoked destination grant and retry; kill the process during capture then open Recordings to recover. Compare battery use with recording stopped and active. Force-stop/power loss cannot guarantee continuous capture.
+
+Optional glasses listening pauses before manual microphone capture starts and may resume after saving completes if its separate setting and armed session remain active. Recording remains continuous, VAD-disabled M4A capture. See [GLASSES_LISTENING.md](GLASSES_LISTENING.md).

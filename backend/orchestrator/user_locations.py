@@ -11,6 +11,7 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 LOCATION_DEDUPE_MIN_DISTANCE_METERS = 50.0
+MAX_STORABLE_LOCATION_ACCURACY_METERS = 50.0
 CAPTURE_LOCATION_TOLERANCE_SECONDS = 10 * 60
 
 

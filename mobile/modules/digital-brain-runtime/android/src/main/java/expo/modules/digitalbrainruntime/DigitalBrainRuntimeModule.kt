@@ -3,6 +3,7 @@ package expo.modules.digitalbrainruntime
 import expo.modules.kotlin.functions.Coroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -27,6 +28,20 @@ class DigitalBrainRuntimeModule : Module() {
         if (!enabled) RuntimeGlasses.stop()
       }
     }
+    OnActivityEntersForeground {
+      kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
+        DigitalBrainRuntime.activityVisible = true
+        appContext.reactContext?.applicationContext?.let { GlassesListening.resumeForeground(it) }
+      }
+    }
+    OnActivityEntersBackground { DigitalBrainRuntime.activityVisible = false }
+    AsyncFunction("getGlassesListeningStatus") Coroutine { -> withContext(Dispatchers.Main) { GlassesListening.snapshot(context()) } }
+    AsyncFunction("setGlassesListening") Coroutine { enabled: Boolean, modelUri: String? -> withContext(Dispatchers.Main) {
+      check(!enabled || appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to start listening" }
+      GlassesListening.configure(context(), enabled, modelUri)
+    } }
+    AsyncFunction("setGlassesListeningMinimumVolume") Coroutine { value: Int -> withContext(Dispatchers.Main) { GlassesListening.setMinimumVolume(context(), value) } }
+    AsyncFunction("exportGlassesTranscripts") Coroutine { baseUri: String -> withContext(Dispatchers.IO) { GlassesListening.export(context(), baseUri) } }
     AsyncFunction("syncGlassesMedia") { GlassesMediaWorker.enqueue(context(), manual = true) }
     AsyncFunction("getGlassesRecordingStatus") Coroutine { -> withContext(Dispatchers.Main) {
       GlassesRecording.snapshot(context()) + mapOf("playback" to GlassesRecordingPlayback.snapshot())

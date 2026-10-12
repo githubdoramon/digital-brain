@@ -42,9 +42,9 @@ configuration readiness are listed by the authenticated `GET /system/jobs`
 endpoint.
 
 Configure `DB_BACKUP_PASSPHRASE`, `DB_BACKUP_S3_BUCKET`, and
-`DB_BACKUP_S3_PREFIX` in the existing `backend/.env`. The optional
-`DB_BACKUP_AWS_REGION` overrides the AWS SDK's default region. PostgreSQL
-connection settings come from the existing `POSTGRES_HOST`, `POSTGRES_PORT`,
+`DB_BACKUP_S3_PREFIX`, and `AWS_DEFAULT_REGION` in the existing `backend/.env`.
+`AWS_REGION` is also honored when present. PostgreSQL connection settings come
+from the existing `POSTGRES_HOST`, `POSTGRES_PORT`,
 `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`; optional
 `DB_BACKUP_POSTGRES_USER` and `DB_BACKUP_POSTGRES_DB` override the database user
 and name. `docker-compose.yml` already provides `backend/.env` to the

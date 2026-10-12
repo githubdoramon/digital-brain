@@ -91,6 +91,7 @@ object GlassesRecording {
       { main.post { stop(GlassesRecordingStop.STORAGE) } },
       { main.post { if (state == GlassesRecordingState.RECORDING) stop(GlassesRecordingStop.STORAGE); save() } })
     state = GlassesRecordingState.RECORDING
+    GlassesListening.pause()
     lastPcm = SystemClock.elapsedRealtime()
     var writerStarted = false
     try {

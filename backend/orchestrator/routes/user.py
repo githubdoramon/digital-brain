@@ -215,7 +215,7 @@ def create_user_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Device not found")
         return {"ok": True}
 
-    @router.post("/mobile/location", response_model=UserLocationOut)
+    @router.post("/mobile/location", response_model=None)
     def update_mobile_location(
         payload: UserLocationUpdateIn,
         request: Request,
@@ -224,6 +224,18 @@ def create_user_router() -> APIRouter:
         email = user.get("email") or user.get("user_email")
         if not email:
             raise HTTPException(status_code=400, detail="User email is missing")
+        if (
+            payload.accuracy_m is not None
+            and payload.accuracy_m > user_locations.MAX_STORABLE_LOCATION_ACCURACY_METERS
+        ):
+            logger.info(
+                "[mobile/location] Discarded low-accuracy fix accuracy_m=%.1f threshold_m=%.1f source=%s debug_request_id=%s",
+                payload.accuracy_m,
+                user_locations.MAX_STORABLE_LOCATION_ACCURACY_METERS,
+                payload.source or "unknown",
+                request.headers.get("x-location-debug-request-id") or "none",
+            )
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         logger.info(
             "[mobile/location] Received location update user=%s lat=%.6f lon=%.6f source=%s captured_at=%s debug_request_id=%s batch_id=%s sample_index=%s/%s app_state=%s",
             email,

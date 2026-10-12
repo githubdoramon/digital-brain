@@ -3646,6 +3646,26 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Update extracted "who" from contact agent results
     resolution["contacts"] = _dedupe_contacts(resolution.get("contacts", []))
+    try:
+        self_contact = contacts_service.find_self_contact(user_email) if user_email else None
+    except Exception:
+        logger.warning("[event] Unable to resolve current user contact", exc_info=True)
+        self_contact = None
+    self_contact_id = str((self_contact or {}).get("contact_id") or "").strip()
+    if self_contact_id and all(
+        str(contact.get("contact_id") or "").strip() != self_contact_id
+        for contact in resolution["contacts"]
+        if isinstance(contact, dict)
+    ):
+        resolution["contacts"].append(
+            {
+                "contact_id": self_contact_id,
+                "display_name": str((self_contact or {}).get("display_name") or "You").strip(),
+                "query": "current user",
+                "confidence": "high",
+                "match_source": "current_user",
+            }
+        )
     resolution["new_entities"]["contacts"] = _dedupe_contacts(
         resolution.get("new_entities", {}).get("contacts", [])
     )
