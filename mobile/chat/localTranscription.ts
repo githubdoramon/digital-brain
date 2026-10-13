@@ -2,7 +2,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { initWhisper, type WhisperContext } from 'whisper.rn';
 
-import { appendVoiceTranscriptionDebugLog } from '@/debug/voiceTranscriptionDebug';
 import { normalizeTranscriptText } from '@/chat/voiceState';
 
 export type LocalTranscriptionStage = 'downloading_model' | 'loading_model' | 'transcribing';
@@ -265,19 +264,6 @@ export async function transcribeAudioFile(
     }
     const text = normalizeTranscriptText(result.result);
 
-    await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
-      fileUri,
-      normalizedFilePath,
-      modelFileName: LOCAL_WHISPER_MODEL_FILE_NAME,
-      audioContainer: fileUri.split('.').pop() ?? null,
-      rawText: result.result,
-      normalizedText: text,
-      language: result.language,
-      isAborted: result.isAborted,
-      segmentCount: result.segments.length,
-      segments: result.segments,
-    }).catch(() => undefined);
-
     if (!text) {
       throw new LocalTranscriptionError('no_speech', 'No speech was detected in that recording.');
     }
@@ -291,13 +277,6 @@ export async function transcribeAudioFile(
       segments: result.segments,
     };
   } catch (error) {
-    await appendVoiceTranscriptionDebugLog('voice_transcription_failure', {
-      fileUri,
-      normalizedFilePath: normalizeWhisperFilePath(fileUri),
-      modelFileName: LOCAL_WHISPER_MODEL_FILE_NAME,
-      error: error instanceof Error ? error.message : String(error),
-    }).catch(() => undefined);
-
     if (error instanceof LocalTranscriptionError) {
       throw error;
     }

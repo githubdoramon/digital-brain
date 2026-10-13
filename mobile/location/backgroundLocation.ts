@@ -6,33 +6,29 @@ import { Platform } from 'react-native';
 import {
   drainQueuedBackgroundLocations,
   enqueueBackgroundLocationEntry,
-  getQueuedBackgroundLocationSummary,
 } from '@/location/backgroundLocationQueue';
 import {
   ensureBackgroundLocationDrainTaskRegistered,
-  getBackgroundLocationDrainWorkerStatus,
   unregisterBackgroundLocationDrainTask,
 } from '@/location/backgroundLocationDrainTask';
 import {
-  BACKGROUND_LOCATION_DRAIN_TASK,
   BACKGROUND_LOCATION_GEOFENCE_TASK,
   BACKGROUND_LOCATION_TASK,
 } from '@/location/backgroundLocationTaskNames';
-import { reportLocationDebugEvent } from '@/location/debugState';
+
 import { API_BASE_URL } from '@/api/client';
 import { getLocationRuntimeState } from '@/location/runtimeState';
 import { hasSharedLocationRuntime } from '@/location/foregroundLocation';
-import RuntimeNative, { type AppRuntimeStatus } from '@/modules/digital-brain-runtime/src';
+
+import RuntimeNative from '@/modules/digital-brain-runtime/src';
 import { isLocationTrackingEnabled } from '@/location/trackingPreference';
 
 const BACKGROUND_TRACKING_STATE_KEY = 'digitalbrain.backgroundLocationTrackingState';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 5;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
-const ANDROID_NATIVE_LOCATION_INTERVAL_MS = 10 * 60 * 1000;
-const ANDROID_NATIVE_MAX_BATCH_DELAY_MS = 60 * 60 * 1000;
+
 const MAX_STORABLE_LOCATION_ACCURACY_METERS = 50;
-const ANDROID_LOCATION_MODE = 'hybrid_quiet_until_moving';
-const IOS_LOCATION_MODE = 'continuous_background_updates';
+
 const ANDROID_GEOFENCE_RADIUS_METERS = 30;
 const ANDROID_RELIABLE_START_DISTANCE_METERS = 30;
 const ANDROID_STATIONARY_RADIUS_METERS = 30;
@@ -62,7 +58,7 @@ type PostedBackgroundLocation = {
   capturedAtMs: number;
 };
 
-type BackgroundTaskRegistrationSnapshot = {
+type _BackgroundTaskRegistrationSnapshot = {
   locationTaskRegistered: boolean;
   drainTaskRegistered: boolean;
   geofenceTaskRegistered: boolean;
@@ -71,7 +67,7 @@ type BackgroundTaskRegistrationSnapshot = {
   geofenceTaskDefined: boolean;
 };
 
-type BackgroundExecutionDiagnostics = {
+type _BackgroundExecutionDiagnostics = {
   platform: string;
   locationServicesEnabled?: boolean;
   providerStatus?: Record<string, unknown>;
@@ -79,7 +75,7 @@ type BackgroundExecutionDiagnostics = {
   backgroundPermissionDetails?: Record<string, unknown>;
 };
 
-type AndroidTaskDiagnostics = {
+type _AndroidTaskDiagnostics = {
   taskManagerAvailable: boolean | null;
   backgroundLocationAvailable: boolean | null;
   registeredTasks: Record<string, unknown>[];
@@ -97,13 +93,6 @@ type AndroidTrackingState = {
   updatedAt: string;
   reason?: string;
 };
-
-function getLocationMode(mode?: AndroidCaptureMode): string {
-  if (Platform.OS !== 'android') {
-    return IOS_LOCATION_MODE;
-  }
-  return `${ANDROID_LOCATION_MODE}:${mode ?? 'quiet'}`;
-}
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -156,10 +145,7 @@ async function getAndroidTrackingState(): Promise<AndroidTrackingState> {
       ...parsed,
       mode: parsed.mode === 'reliable' ? 'reliable' : 'quiet',
     };
-  } catch (error) {
-    reportLocationDebugEvent('background_tracking_state_read_error', {
-      error,
-    });
+  } catch {
     return getDefaultAndroidTrackingState();
   }
 }
@@ -232,135 +218,6 @@ function calculateDistanceMeters(
   return earthRadiusMeters * arc;
 }
 
-function buildDebugErrorPayload(error: unknown): {
-  message: string;
-  status?: number;
-  authExpired?: boolean;
-  contentType?: string;
-  bodyPreview?: string;
-  requestUrl?: string;
-  requestMethod?: string;
-  tokenPresent?: boolean;
-  authDiagnostics?: Record<string, unknown>;
-  fetchFailed?: boolean;
-} {
-  const errorWithMeta = error as Error & {
-    status?: number;
-    authExpired?: boolean;
-    contentType?: string;
-    bodyPreview?: string;
-    requestUrl?: string;
-    requestMethod?: string;
-    tokenPresent?: boolean;
-    authDiagnostics?: Record<string, unknown>;
-    fetchFailed?: boolean;
-  };
-  return {
-    message: errorWithMeta?.message || 'Unknown error',
-    ...(typeof errorWithMeta?.status === 'number' ? { status: errorWithMeta.status } : {}),
-    ...(typeof errorWithMeta?.authExpired === 'boolean'
-      ? { authExpired: errorWithMeta.authExpired }
-      : {}),
-    ...(typeof errorWithMeta?.contentType === 'string'
-      ? { contentType: errorWithMeta.contentType }
-      : {}),
-    ...(typeof errorWithMeta?.bodyPreview === 'string'
-      ? { bodyPreview: errorWithMeta.bodyPreview }
-      : {}),
-    ...(typeof errorWithMeta?.requestUrl === 'string'
-      ? { requestUrl: errorWithMeta.requestUrl }
-      : {}),
-    ...(typeof errorWithMeta?.requestMethod === 'string'
-      ? { requestMethod: errorWithMeta.requestMethod }
-      : {}),
-    ...(typeof errorWithMeta?.tokenPresent === 'boolean'
-      ? { tokenPresent: errorWithMeta.tokenPresent }
-      : {}),
-    ...(errorWithMeta?.authDiagnostics ? { authDiagnostics: errorWithMeta.authDiagnostics } : {}),
-    ...(typeof errorWithMeta?.fetchFailed === 'boolean'
-      ? { fetchFailed: errorWithMeta.fetchFailed }
-      : {}),
-  };
-}
-
-async function getTaskRegistrationSnapshot(): Promise<BackgroundTaskRegistrationSnapshot> {
-  const [locationTaskRegistered, drainTaskRegistered] = await Promise.all([
-    Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
-    TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
-  ]);
-  const geofenceTaskRegistered = await Location.hasStartedGeofencingAsync(
-    BACKGROUND_LOCATION_GEOFENCE_TASK,
-  ).catch(() => false);
-
-  return {
-    locationTaskRegistered,
-    drainTaskRegistered,
-    geofenceTaskRegistered,
-    locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-    geofenceTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK),
-  };
-}
-
-function buildPermissionDetails(permission: {
-  status?: string;
-  granted?: boolean;
-  canAskAgain?: boolean;
-  expires?: string | number;
-  ios?: Record<string, unknown>;
-  android?: Record<string, unknown>;
-}): Record<string, unknown> {
-  return {
-    status: permission.status,
-    granted: permission.granted,
-    can_ask_again: permission.canAskAgain,
-    expires: permission.expires,
-    ...(permission.ios ? { ios: permission.ios } : {}),
-    ...(permission.android ? { android: permission.android } : {}),
-  };
-}
-
-async function getBackgroundExecutionDiagnostics(): Promise<BackgroundExecutionDiagnostics> {
-  const [locationServicesEnabled, providerStatus, foregroundPermission, backgroundPermission] =
-    await Promise.all([
-      Location.hasServicesEnabledAsync().catch(() => undefined),
-      Location.getProviderStatusAsync().catch(() => undefined),
-      Location.getForegroundPermissionsAsync().catch(() => undefined),
-      Location.getBackgroundPermissionsAsync().catch(() => undefined),
-    ]);
-
-  return {
-    platform: Platform.OS,
-    ...(typeof locationServicesEnabled === 'boolean' ? { locationServicesEnabled } : {}),
-    ...(providerStatus ? { providerStatus: providerStatus as Record<string, unknown> } : {}),
-    ...(foregroundPermission
-      ? { foregroundPermissionDetails: buildPermissionDetails(foregroundPermission) }
-      : {}),
-    ...(backgroundPermission
-      ? { backgroundPermissionDetails: buildPermissionDetails(backgroundPermission) }
-      : {}),
-  };
-}
-
-async function getAndroidTaskDiagnostics(): Promise<AndroidTaskDiagnostics> {
-  const [taskManagerAvailable, backgroundLocationAvailable, registeredTasks, locationTaskOptions] =
-    await Promise.all([
-      TaskManager.isAvailableAsync().catch(() => null),
-      Location.isBackgroundLocationAvailableAsync().catch(() => null),
-      TaskManager.getRegisteredTasksAsync().catch(() => []),
-      TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(() => null),
-    ]);
-
-  return {
-    taskManagerAvailable,
-    backgroundLocationAvailable,
-    registeredTasks: Array.isArray(registeredTasks)
-      ? (registeredTasks as Record<string, unknown>[])
-      : [],
-    locationTaskOptions: (locationTaskOptions as Record<string, unknown> | null) ?? null,
-  };
-}
-
 async function ensureAndroidGeofence(anchor: {
   lat: number;
   lon: number;
@@ -381,29 +238,12 @@ async function ensureAndroidGeofence(anchor: {
         notifyOnExit: true,
       },
     ]);
-    reportLocationDebugEvent('background_geofence_started', {
-      payload: {
-        reason: anchor.reason,
-        lat: anchor.lat,
-        lon: anchor.lon,
-        captured_at: anchor.capturedAt,
-        radius_meters: ANDROID_GEOFENCE_RADIUS_METERS,
-        location_mode: getLocationMode('quiet'),
-      },
-      recordInHistory: false,
-    });
-  } catch (error) {
-    reportLocationDebugEvent('background_geofence_start_error', {
-      error,
-      payload: {
-        reason: anchor.reason,
-        radius_meters: ANDROID_GEOFENCE_RADIUS_METERS,
-      },
-    });
+  } catch {
+    /* Best effort; keep the existing recovery path. */
   }
 }
 
-async function stopAndroidGeofence(reason: string): Promise<void> {
+async function stopAndroidGeofence(_reason: string): Promise<void> {
   if (Platform.OS !== 'android') {
     return;
   }
@@ -415,25 +255,14 @@ async function stopAndroidGeofence(reason: string): Promise<void> {
   }
   try {
     await Location.stopGeofencingAsync(BACKGROUND_LOCATION_GEOFENCE_TASK);
-    reportLocationDebugEvent('background_geofence_stopped', {
-      payload: {
-        reason,
-      },
-      recordInHistory: false,
-    });
-  } catch (error) {
-    reportLocationDebugEvent('background_geofence_stop_error', {
-      error,
-      payload: {
-        reason,
-      },
-    });
+  } catch {
+    /* Best effort; keep the existing recovery path. */
   }
 }
 
 async function applyAndroidLocationTaskMode(
   mode: AndroidCaptureMode,
-  reason: string,
+  _reason: string,
 ): Promise<void> {
   if (Platform.OS !== 'android' || hasSharedLocationRuntime()) {
     return;
@@ -451,25 +280,9 @@ async function applyAndroidLocationTaskMode(
   }
 
   if (alreadyStarted) {
-    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((error) => {
-      reportLocationDebugEvent('background_tracking_stop_before_mode_switch_error', {
-        error,
-        payload: {
-          reason,
-          location_mode: getLocationMode(mode),
-        },
-      });
-    });
+    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((_error) => {});
   }
 
-  reportLocationDebugEvent('background_tracking_mode_start_requested', {
-    payload: {
-      reason,
-      location_mode: getLocationMode(mode),
-      task_options: desiredOptions as Record<string, unknown>,
-    },
-    recordInHistory: false,
-  });
   await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, desiredOptions);
 }
 
@@ -492,18 +305,6 @@ async function transitionAndroidTrackingMode(
     .then(async () => {
       const currentState = await getAndroidTrackingState();
       if (mode === 'reliable' && getLocationRuntimeState().appState !== 'active') {
-        reportLocationDebugEvent('background_tracking_reliable_deferred', {
-          payload: {
-            reason,
-            app_state: getLocationRuntimeState().appState,
-            previous_mode: currentState.mode,
-            location_mode: getLocationMode(currentState.mode),
-            anchor_lat: anchor?.lat ?? currentState.anchorLat,
-            anchor_lon: anchor?.lon ?? currentState.anchorLon,
-            anchor_captured_at: anchor?.capturedAt ?? currentState.anchorCapturedAt,
-          },
-          recordInHistory: false,
-        });
         if (
           currentState.mode === 'quiet' &&
           typeof currentState.anchorLat === 'number' &&
@@ -541,18 +342,6 @@ async function transitionAndroidTrackingMode(
 
       await applyAndroidLocationTaskMode(mode, reason);
       await setAndroidTrackingState(nextState);
-      reportLocationDebugEvent('background_tracking_mode_changed', {
-        payload: {
-          reason,
-          previous_mode: currentState.mode,
-          location_mode: getLocationMode(mode),
-          anchor_lat: nextState.anchorLat,
-          anchor_lon: nextState.anchorLon,
-          anchor_captured_at: nextState.anchorCapturedAt,
-          stationary_since_ms: nextState.stationarySinceMs,
-        },
-        recordInHistory: false,
-      });
 
       if (
         mode === 'quiet' &&
@@ -664,22 +453,6 @@ async function queueBackgroundLocation(
     runtimeState.appState === 'active' &&
     sampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-    reportLocationDebugEvent('background_location_invalid', {
-      message: 'Invalid background coordinates',
-      payload: {
-        debug_request_id: debugRequestId,
-        batch_id: context.batchId,
-        sample_index: context.sampleIndex,
-        sample_count: context.sampleCount,
-        batch_first_captured_at: context.batchFirstCapturedAt,
-        batch_last_captured_at: context.batchLastCapturedAt,
-        execution_context: context.executionContext,
-        sample_age_seconds: sampleAgeSeconds,
-        is_buffered_flush: isBufferedFlush,
-        api_base_url: API_BASE_URL,
-        app_state: runtimeState.appState,
-      },
-    });
     return;
   }
 
@@ -694,22 +467,6 @@ async function queueBackgroundLocation(
       elapsedSeconds >= 0 &&
       elapsedSeconds < BACKGROUND_POST_DEDUPE_MIN_SECONDS
     ) {
-      reportLocationDebugEvent('background_sync_skipped', {
-        message: 'Skipped near-duplicate buffered background sample',
-        recordInHistory: false,
-        payload: {
-          debug_request_id: debugRequestId,
-          batch_id: context.batchId,
-          sample_index: context.sampleIndex,
-          sample_count: context.sampleCount,
-          batch_first_captured_at: context.batchFirstCapturedAt,
-          batch_last_captured_at: context.batchLastCapturedAt,
-          moved_meters: Math.round(movedMeters),
-          elapsed_seconds: Math.round(elapsedSeconds),
-          api_base_url: API_BASE_URL,
-          app_state: runtimeState.appState,
-        },
-      });
       return;
     }
   }
@@ -720,48 +477,9 @@ async function queueBackgroundLocation(
       lon: longitude,
     });
     if (capturedAtMs <= lastAcceptedBufferedLocation.capturedAtMs) {
-      reportLocationDebugEvent('background_buffered_sync_skipped', {
-        message: 'Skipped stale buffered sample during active flush',
-        recordInHistory: false,
-        payload: {
-          debug_request_id: debugRequestId,
-          batch_id: context.batchId,
-          sample_index: context.sampleIndex,
-          sample_count: context.sampleCount,
-          batch_first_captured_at: context.batchFirstCapturedAt,
-          batch_last_captured_at: context.batchLastCapturedAt,
-          execution_context: context.executionContext,
-          sample_age_seconds: sampleAgeSeconds,
-          is_buffered_flush: true,
-          last_accepted_captured_at: new Date(
-            lastAcceptedBufferedLocation.capturedAtMs,
-          ).toISOString(),
-          api_base_url: API_BASE_URL,
-          app_state: runtimeState.appState,
-        },
-      });
       return;
     }
     if (movedMetersFromBuffered < BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS) {
-      reportLocationDebugEvent('background_buffered_sync_skipped', {
-        message: 'Skipped buffered sample below movement threshold during active flush',
-        recordInHistory: false,
-        payload: {
-          debug_request_id: debugRequestId,
-          batch_id: context.batchId,
-          sample_index: context.sampleIndex,
-          sample_count: context.sampleCount,
-          batch_first_captured_at: context.batchFirstCapturedAt,
-          batch_last_captured_at: context.batchLastCapturedAt,
-          execution_context: context.executionContext,
-          sample_age_seconds: sampleAgeSeconds,
-          is_buffered_flush: true,
-          moved_meters: Math.round(movedMetersFromBuffered),
-          threshold_meters: BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS,
-          api_base_url: API_BASE_URL,
-          app_state: runtimeState.appState,
-        },
-      });
       return;
     }
   }
@@ -769,15 +487,6 @@ async function queueBackgroundLocation(
   const accuracyRaw = Number(sample.coords?.accuracy);
   const accuracy = Number.isFinite(accuracyRaw) ? Math.round(accuracyRaw * 10) / 10 : undefined;
   if (accuracy !== undefined && accuracy > MAX_STORABLE_LOCATION_ACCURACY_METERS) {
-    reportLocationDebugEvent('background_location_accuracy_rejected', {
-      payload: {
-        accuracy_m: accuracy,
-        threshold_meters: MAX_STORABLE_LOCATION_ACCURACY_METERS,
-        source: 'expo_location',
-        captured_at: capturedAt,
-        debug_request_id: debugRequestId,
-      },
-    });
     return;
   }
 
@@ -786,16 +495,7 @@ async function queueBackgroundLocation(
     lon: longitude,
     capturedAt,
     capturedAtMs,
-  }).catch((error) => {
-    reportLocationDebugEvent('background_tracking_mode_update_error', {
-      error,
-      payload: {
-        captured_at: capturedAt,
-        execution_context: context.executionContext,
-        app_state: getLocationRuntimeState().appState,
-      },
-    });
-  });
+  }).catch((_error) => {});
 
   lastPostedBackgroundLocation = {
     lat: latitude,
@@ -830,26 +530,6 @@ async function queueBackgroundLocation(
     isBufferedFlush,
     enqueuedAt: new Date().toISOString(),
     attemptCount: 0,
-  });
-
-  reportLocationDebugEvent('background_queue_ready_for_drain', {
-    payload: {
-      debug_request_id: debugRequestId,
-      batch_id: context.batchId,
-      sample_index: context.sampleIndex,
-      sample_count: context.sampleCount,
-      batch_first_captured_at: context.batchFirstCapturedAt,
-      batch_last_captured_at: context.batchLastCapturedAt,
-      execution_context: context.executionContext,
-      sample_age_seconds: sampleAgeSeconds,
-      is_buffered_flush: isBufferedFlush,
-      lat: latitude,
-      lon: longitude,
-      captured_at: capturedAt,
-      api_base_url: API_BASE_URL,
-      app_state: runtimeState.appState,
-    },
-    recordInHistory: false,
   });
 }
 
@@ -897,13 +577,7 @@ async function ensureAndroidQuietAnchor(reason: string): Promise<AndroidTracking
       reason,
     });
     return nextState;
-  } catch (error) {
-    reportLocationDebugEvent('background_quiet_anchor_error', {
-      error,
-      payload: {
-        reason,
-      },
-    });
+  } catch {
     return state;
   }
 }
@@ -956,39 +630,11 @@ async function reconcileAndroidReliableMode(reason: string): Promise<AndroidTrac
 }
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
-  TaskManager.defineTask(
-    BACKGROUND_LOCATION_GEOFENCE_TASK,
-    async ({ data, error, executionInfo }) => {
-      // Android location work moved to the native runtime. Keep this task
-      // definition for iOS and upgrade cleanup, but never run Android work in JS.
-      if (Platform.OS === 'android') return;
-      const eventType = (data as { eventType?: number } | undefined)?.eventType;
-      const region = (data as { region?: Location.LocationRegion } | undefined)?.region;
-      if (error) {
-        reportLocationDebugEvent('background_geofence_error', {
-          error,
-          payload: {
-            execution_info_event_id: executionInfo?.eventId,
-            location_mode: getLocationMode((await getAndroidTrackingState()).mode),
-          },
-        });
-        return;
-      }
-
-      reportLocationDebugEvent('background_geofence_event', {
-        payload: {
-          event_type: eventType,
-          region_identifier: region?.identifier,
-          region_latitude: region?.latitude,
-          region_longitude: region?.longitude,
-          region_radius: region?.radius,
-          execution_info_event_id: executionInfo?.eventId,
-          location_mode: getLocationMode((await getAndroidTrackingState()).mode),
-        },
-        recordInHistory: false,
-      });
-    },
-  );
+  TaskManager.defineTask(BACKGROUND_LOCATION_GEOFENCE_TASK, async () => {
+    // Android location work moved to the native runtime. Keep this task
+    // definition for iOS and upgrade cleanup, but never run Android work in JS.
+    if (Platform.OS === 'android') return;
+  });
 }
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
@@ -996,17 +642,6 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
     // Android capture and upload are native-only. This definition remains for
     // iOS and safely absorbs stale Android callbacks after upgrade.
     if (Platform.OS === 'android') return;
-    const [taskRegistration, executionDiagnostics] = await Promise.all([
-      getTaskRegistrationSnapshot().catch(() => ({
-        locationTaskRegistered: false,
-        drainTaskRegistered: false,
-        geofenceTaskRegistered: false,
-        locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-        drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-        geofenceTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK),
-      })),
-      getBackgroundExecutionDiagnostics().catch(() => ({ platform: Platform.OS })),
-    ]);
     const locations = (
       (data as { locations?: BackgroundLocationSample[] } | undefined)?.locations ?? []
     ).filter(Boolean);
@@ -1021,85 +656,15 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
     const batchLastCapturedAt = batchTimestamps.length
       ? new Date(batchTimestamps[batchTimestamps.length - 1]).toISOString()
       : null;
-    const oldestSampleAgeSeconds = batchTimestamps.length
-      ? Math.max(0, Math.round((Date.now() - batchTimestamps[0]) / 1000))
-      : 0;
+
     const executionContext =
       executionInfo?.appState ?? getLocationRuntimeState().appState ?? 'unknown';
 
     if (error) {
-      reportLocationDebugEvent('background_task_error', {
-        error,
-        payload: {
-          reason: 'task_invocation_error',
-          running_in_background: executionContext !== 'active',
-          batch_id: batchId,
-          sample_count: locations.length,
-          batch_first_captured_at: batchFirstCapturedAt,
-          batch_last_captured_at: batchLastCapturedAt,
-          execution_context: executionContext,
-          oldest_sample_age_seconds: oldestSampleAgeSeconds,
-          execution_info_event_id: executionInfo?.eventId,
-          task_registration: taskRegistration,
-          execution_diagnostics: executionDiagnostics,
-        },
-      });
       return;
     }
 
-    reportLocationDebugEvent('background_task_batch_received', {
-      payload: {
-        running_in_background: executionContext !== 'active',
-        batch_id: batchId,
-        sample_count: locations.length,
-        batch_first_captured_at: batchFirstCapturedAt,
-        batch_last_captured_at: batchLastCapturedAt,
-        execution_context: executionContext,
-        oldest_sample_age_seconds: oldestSampleAgeSeconds,
-        execution_info_event_id: executionInfo?.eventId,
-        task_registration: taskRegistration,
-        execution_diagnostics: executionDiagnostics,
-        will_flush_buffered_samples:
-          executionContext === 'active' &&
-          oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS,
-      },
-    });
-
-    if (
-      executionContext === 'active' &&
-      oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS
-    ) {
-      reportLocationDebugEvent('background_buffered_flush_detected', {
-        payload: {
-          batch_id: batchId,
-          sample_count: locations.length,
-          batch_first_captured_at: batchFirstCapturedAt,
-          batch_last_captured_at: batchLastCapturedAt,
-          execution_context: executionContext,
-          oldest_sample_age_seconds: oldestSampleAgeSeconds,
-        },
-        recordInHistory: false,
-      });
-    }
-
     if (!locations.length) {
-      reportLocationDebugEvent('background_task_empty', {
-        message: 'Background task had no location samples',
-        payload: {
-          reason: 'no_location_samples',
-          request_attempted: false,
-          running_in_background: executionContext !== 'active',
-          batch_id: batchId,
-          sample_count: locations.length,
-          batch_first_captured_at: batchFirstCapturedAt,
-          batch_last_captured_at: batchLastCapturedAt,
-          execution_context: executionContext,
-          oldest_sample_age_seconds: oldestSampleAgeSeconds,
-          execution_info_event_id: executionInfo?.eventId,
-          task_registration: taskRegistration,
-          execution_diagnostics: executionDiagnostics,
-        },
-      });
       return;
     }
 
@@ -1113,248 +678,11 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           batchLastCapturedAt,
           executionContext,
         });
-      } catch (taskError) {
-        const errorPayload = buildDebugErrorPayload(taskError);
-        reportLocationDebugEvent('background_queue_error', {
-          message: errorPayload.message,
-          error: taskError,
-          payload: {
-            reason: 'queue_error',
-            request_attempted: false,
-            batch_id: batchId,
-            sample_index: index + 1,
-            sample_count: locations.length,
-            batch_first_captured_at: batchFirstCapturedAt,
-            batch_last_captured_at: batchLastCapturedAt,
-            execution_context: executionContext,
-            oldest_sample_age_seconds: oldestSampleAgeSeconds,
-            status: errorPayload.status,
-            auth_expired: errorPayload.authExpired,
-            fetch_failed: errorPayload.fetchFailed,
-            content_type: errorPayload.contentType,
-            response_preview: errorPayload.bodyPreview,
-            request_url: errorPayload.requestUrl,
-            request_method: errorPayload.requestMethod,
-            token_present: errorPayload.tokenPresent,
-            api_base_url: API_BASE_URL,
-            app_state: getLocationRuntimeState().appState,
-            running_in_background: executionContext !== 'active',
-            execution_info_event_id: executionInfo?.eventId,
-            task_registration: taskRegistration,
-            execution_diagnostics: executionDiagnostics,
-            ...(errorPayload.authDiagnostics ?? {}),
-          },
-        });
+      } catch {
+        /* Best effort; keep the existing recovery path. */
       }
     }
   });
-}
-
-export type BackgroundLocationDebugStatus = {
-  sharedRuntime?: AppRuntimeStatus | null;
-  locationMode: string;
-  androidCaptureMode: AndroidCaptureMode | null;
-  configuredDistanceIntervalMeters: number;
-  configuredTimeIntervalMs: number;
-  configuredMaxBatchDelayMs: number | null;
-  foregroundPermission: string;
-  backgroundPermission: string;
-  locationServicesEnabled: boolean | null;
-  backgroundLocationAvailable: boolean | null;
-  taskManagerAvailable: boolean | null;
-  taskStarted: boolean;
-  taskDefined: boolean;
-  drainTaskRegistered: boolean;
-  drainTaskDefined: boolean;
-  geofenceTaskRegistered: boolean;
-  geofenceTaskDefined: boolean;
-  backgroundTaskStatus: string;
-  queuedLocationCount: number;
-  oldestQueuedCapturedAt: string | null;
-  newestQueuedCapturedAt: string | null;
-  providerStatus: Record<string, unknown> | null;
-  registeredTasks: Record<string, unknown>[];
-  locationTaskOptions: Record<string, unknown> | null;
-};
-
-export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
-  const sharedRuntime = hasSharedLocationRuntime();
-  if (!sharedRuntime)
-    await reconcileAndroidReliableMode('status_reconcile').catch((error) => {
-      reportLocationDebugEvent('background_tracking_reconcile_error', {
-        error,
-      });
-    });
-  const [
-    foregroundPermission,
-    backgroundPermission,
-    sharedRuntimeStatus,
-    drainTaskRegistered,
-    backgroundTaskStatus,
-    queueSummary,
-    trackingState,
-    geofenceTaskRegistered,
-    locationServicesEnabled,
-    providerStatus,
-    backgroundLocationAvailable,
-    taskManagerAvailable,
-    registeredTasks,
-    locationTaskOptions,
-  ] = await Promise.all([
-    Location.getForegroundPermissionsAsync(),
-    Location.getBackgroundPermissionsAsync(),
-    sharedRuntime ? RuntimeNative!.getAppRuntimeStatus() : Promise.resolve(null),
-    TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
-    getBackgroundLocationDrainWorkerStatus(),
-    getQueuedBackgroundLocationSummary(),
-    getAndroidTrackingState(),
-    Location.hasStartedGeofencingAsync(BACKGROUND_LOCATION_GEOFENCE_TASK).catch(() => false),
-    Location.hasServicesEnabledAsync().catch(() => null),
-    Location.getProviderStatusAsync().catch(() => null),
-    Location.isBackgroundLocationAvailableAsync().catch(() => null),
-    TaskManager.isAvailableAsync().catch(() => null),
-    TaskManager.getRegisteredTasksAsync().catch(() => []),
-    TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(() => null),
-  ]);
-
-  const resolvedSharedRuntimeStatus = sharedRuntimeStatus as AppRuntimeStatus | null;
-  const taskStarted = resolvedSharedRuntimeStatus
-    ? resolvedSharedRuntimeStatus.locationActive
-    : await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-  const nativeUploadSnapshot = {
-    native_upload_run_count: resolvedSharedRuntimeStatus?.nativeUploadRunCount ?? null,
-    native_upload_sample_count: resolvedSharedRuntimeStatus?.nativeUploadSampleCount ?? null,
-    native_upload_last_run_at:
-      resolvedSharedRuntimeStatus?.nativeUploadLastRunAtMs != null
-        ? new Date(resolvedSharedRuntimeStatus.nativeUploadLastRunAtMs).toISOString()
-        : null,
-    native_upload_last_duration_ms: resolvedSharedRuntimeStatus?.nativeUploadLastDurationMs ?? null,
-    native_upload_last_outcome: resolvedSharedRuntimeStatus?.nativeUploadLastOutcome ?? null,
-    native_upload_last_http_status: resolvedSharedRuntimeStatus?.nativeUploadLastHttpStatus ?? null,
-    native_upload_last_queue_size: resolvedSharedRuntimeStatus?.nativeUploadLastQueueSize ?? null,
-    native_location_queue_size: resolvedSharedRuntimeStatus?.nativeLocationQueueSize ?? null,
-    native_upload_recent_runs: (resolvedSharedRuntimeStatus?.nativeUploadRecentRuns ?? []).map(
-      (run) => ({
-        at: new Date(run.atMs).toISOString(),
-        duration_ms: run.durationMs,
-        uploaded: run.uploaded,
-        queued: run.queued,
-        outcome: run.outcome,
-        http_status: run.httpStatus,
-        process_cpu_ms: run.processCpuMs,
-        device_awake_ms: run.deviceAwakeMs,
-        battery_charge_delta_uah: run.batteryChargeDeltaMicroAh,
-      }),
-    ),
-  };
-
-  const resolvedBackgroundTaskStatus = backgroundTaskStatus;
-
-  const androidTaskDiagnostics = await getAndroidTaskDiagnostics().catch(() => ({
-    taskManagerAvailable: null,
-    backgroundLocationAvailable: null,
-    registeredTasks: [],
-    locationTaskOptions: null,
-  }));
-
-  reportLocationDebugEvent('background_worker_status_snapshot', {
-    payload: {
-      location_task_started: taskStarted,
-      location_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-      drain_task_registered: drainTaskRegistered,
-      drain_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-      geofence_task_registered: geofenceTaskRegistered,
-      geofence_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK),
-      background_task_status: resolvedBackgroundTaskStatus,
-      location_services_enabled: locationServicesEnabled,
-      background_location_available: backgroundLocationAvailable,
-      task_manager_available: taskManagerAvailable,
-      provider_status: providerStatus,
-      registered_tasks: registeredTasks,
-      location_task_options: locationTaskOptions,
-      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      configured_time_interval_ms: sharedRuntime
-        ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
-        : BACKGROUND_TIME_INTERVAL_MS,
-      configured_max_batch_delay_ms: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
-      queued_location_count: queueSummary.queueSize,
-      oldest_queued_captured_at: queueSummary.oldestCapturedAt,
-      newest_queued_captured_at: queueSummary.newestCapturedAt,
-      location_mode: getLocationMode(trackingState.mode),
-      android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-      android_anchor_lat: trackingState.anchorLat,
-      android_anchor_lon: trackingState.anchorLon,
-      android_anchor_captured_at: trackingState.anchorCapturedAt,
-      android_stationary_since_ms: trackingState.stationarySinceMs,
-      android_geofence_radius_meters: ANDROID_GEOFENCE_RADIUS_METERS,
-      android_reliable_start_distance_meters: ANDROID_RELIABLE_START_DISTANCE_METERS,
-      android_stationary_radius_meters: ANDROID_STATIONARY_RADIUS_METERS,
-      android_stationary_min_ms: ANDROID_STATIONARY_MIN_MS,
-      ...nativeUploadSnapshot,
-    },
-    recordInHistory: false,
-  });
-
-  if (Platform.OS === 'android') {
-    reportLocationDebugEvent('android_background_diagnostics_snapshot', {
-      payload: {
-        background_task_status: resolvedBackgroundTaskStatus,
-        location_task_started: taskStarted,
-        drain_task_registered: drainTaskRegistered,
-        geofence_task_registered: geofenceTaskRegistered,
-        location_services_enabled: locationServicesEnabled,
-        provider_status: providerStatus,
-        task_manager_available: androidTaskDiagnostics.taskManagerAvailable,
-        background_location_available: androidTaskDiagnostics.backgroundLocationAvailable,
-        registered_tasks: androidTaskDiagnostics.registeredTasks,
-        location_task_options: androidTaskDiagnostics.locationTaskOptions,
-        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-        configured_time_interval_ms: sharedRuntime
-          ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
-          : BACKGROUND_TIME_INTERVAL_MS,
-        configured_max_batch_delay_ms: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
-        location_mode: getLocationMode(trackingState.mode),
-        android_capture_mode: trackingState.mode,
-        android_anchor_lat: trackingState.anchorLat,
-        android_anchor_lon: trackingState.anchorLon,
-        android_anchor_captured_at: trackingState.anchorCapturedAt,
-        android_stationary_since_ms: trackingState.stationarySinceMs,
-        ...nativeUploadSnapshot,
-      },
-      recordInHistory: false,
-    });
-  }
-
-  return {
-    sharedRuntime: resolvedSharedRuntimeStatus,
-    locationMode: sharedRuntime ? 'shared_foreground_runtime' : getLocationMode(trackingState.mode),
-    androidCaptureMode:
-      Platform.OS === 'android' ? (sharedRuntime ? 'reliable' : trackingState.mode) : null,
-    configuredDistanceIntervalMeters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-    configuredTimeIntervalMs: sharedRuntime
-      ? ANDROID_NATIVE_LOCATION_INTERVAL_MS
-      : BACKGROUND_TIME_INTERVAL_MS,
-    configuredMaxBatchDelayMs: sharedRuntime ? ANDROID_NATIVE_MAX_BATCH_DELAY_MS : null,
-    foregroundPermission: foregroundPermission.status,
-    backgroundPermission: backgroundPermission.status,
-    locationServicesEnabled,
-    backgroundLocationAvailable:
-      androidTaskDiagnostics.backgroundLocationAvailable ?? backgroundLocationAvailable,
-    taskManagerAvailable: androidTaskDiagnostics.taskManagerAvailable ?? taskManagerAvailable,
-    taskStarted,
-    taskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-    drainTaskRegistered,
-    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-    geofenceTaskRegistered,
-    geofenceTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK),
-    backgroundTaskStatus: resolvedBackgroundTaskStatus,
-    queuedLocationCount: queueSummary.queueSize,
-    oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
-    newestQueuedCapturedAt: queueSummary.newestCapturedAt,
-    providerStatus,
-    registeredTasks: androidTaskDiagnostics.registeredTasks,
-    locationTaskOptions: androidTaskDiagnostics.locationTaskOptions,
-  };
 }
 
 let trackingSyncGeneration = 0;
@@ -1370,10 +698,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => undefined);
     await stopAndroidGeofence('native_runtime_unavailable');
     await unregisterBackgroundLocationDrainTask();
-    reportLocationDebugEvent('background_tracking_blocked', {
-      message: 'Native Android location runtime is unavailable',
-      payload: { reason: 'native_runtime_unavailable', enabled },
-    });
+
     return;
   }
   if (sharedRuntime) {
@@ -1397,9 +722,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     if (generation !== trackingSyncGeneration) return;
     if (foregroundStatus !== 'granted') {
       await RuntimeNative!.setRuntimeLocationEnabled(false);
-      reportLocationDebugEvent('background_tracking_blocked', {
-        message: 'Location permission not granted',
-      });
+
       return;
     }
     const background = await Location.getBackgroundPermissionsAsync();
@@ -1410,9 +733,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     if (generation !== trackingSyncGeneration) return;
     if (backgroundStatus !== 'granted') {
       await RuntimeNative!.setRuntimeLocationEnabled(false);
-      reportLocationDebugEvent('background_tracking_blocked', {
-        message: 'Background location permission not granted',
-      });
+
       return;
     }
     // Android's location delivery and upload queue are handled by Kotlin.
@@ -1422,65 +743,32 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
     if (!googleWebClientId) {
       await RuntimeNative!.setRuntimeLocationEnabled(false);
-      reportLocationDebugEvent('background_tracking_blocked', {
-        message: 'Google web client ID is unavailable for native location uploads',
-        payload: { reason: 'native_upload_configuration_missing' },
-      });
+
       return;
     }
     try {
       await RuntimeNative!.configureRuntimeLocationUploader(API_BASE_URL, googleWebClientId);
-    } catch (error) {
+    } catch {
       await RuntimeNative!.setRuntimeLocationEnabled(false);
-      reportLocationDebugEvent('background_tracking_blocked', {
-        message: 'Native location uploader configuration failed',
-        error,
-        payload: { reason: 'native_upload_configuration_failed' },
-      });
+
       return;
     }
     if (generation !== trackingSyncGeneration) return;
     await RuntimeNative!.setRuntimeLocationEnabled(true);
     // Drain any durable queue left by the prior JS uploader while the app is
     // open. Future Android capture and delivery are native-only.
-    void drainQueuedBackgroundLocations('manual').catch((error) => {
-      reportLocationDebugEvent('legacy_background_queue_drain_error', { error });
-    });
-    reportLocationDebugEvent('shared_foreground_location_requested', {
-      payload: {
-        accuracy: 'balanced',
-        interval_ms: ANDROID_NATIVE_LOCATION_INTERVAL_MS,
-        max_batch_delay_ms: ANDROID_NATIVE_MAX_BATCH_DELAY_MS,
-        execution: 'native_capture_and_native_upload',
-      },
-    });
+    void drainQueuedBackgroundLocations('manual').catch((_error) => {});
+
     return;
   }
-  const taskRegistration = await getTaskRegistrationSnapshot().catch(() => ({
-    locationTaskRegistered: false,
-    drainTaskRegistered: false,
-    geofenceTaskRegistered: false,
-    locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-    geofenceTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK),
-  }));
+
   let trackingState = await getAndroidTrackingState();
-  reportLocationDebugEvent('background_tracking_sync_requested', {
-    payload: {
-      enabled,
-      task_registration: taskRegistration,
-      location_mode: getLocationMode(trackingState.mode),
-      android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
-    },
-  });
+
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
 
   if (!enabled) {
     if (alreadyStarted) {
       await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-      reportLocationDebugEvent('background_tracking_stopped');
     }
     await stopAndroidGeofence('tracking_disabled');
     await unregisterBackgroundLocationDrainTask();
@@ -1493,10 +781,6 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       ? foregroundPermission.status
       : (await Location.requestForegroundPermissionsAsync()).status;
   if (foregroundStatus !== 'granted') {
-    reportLocationDebugEvent('background_tracking_blocked', {
-      message: 'Foreground permission not granted',
-      payload: { foreground_status: foregroundStatus, reason: 'foreground_permission_not_granted' },
-    });
     return;
   }
 
@@ -1506,10 +790,6 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       ? backgroundPermission.status
       : (await Location.requestBackgroundPermissionsAsync()).status;
   if (backgroundStatus !== 'granted') {
-    reportLocationDebugEvent('background_tracking_blocked', {
-      message: 'Background permission not granted',
-      payload: { background_status: backgroundStatus, reason: 'background_permission_not_granted' },
-    });
     return;
   }
 
@@ -1524,22 +804,8 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     const optionsChanged = !areLocationTaskOptionsEqual(currentTaskOptions, taskOptions);
 
     if (!optionsChanged) {
-      await ensureBackgroundLocationDrainTaskRegistered().catch((error) => {
-        reportLocationDebugEvent('background_drain_task_register_error', {
-          error,
-        });
-      });
-      reportLocationDebugEvent('background_tracking_already_started', {
-        payload: {
-          platform: Platform.OS,
-          location_task_options: currentTaskOptions,
-          location_mode: getLocationMode(trackingState.mode),
-          android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-          configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-          configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
-        },
-        recordInHistory: false,
-      });
+      await ensureBackgroundLocationDrainTaskRegistered().catch((_error) => {});
+
       if (
         Platform.OS === 'android' &&
         trackingState.mode === 'quiet' &&
@@ -1556,67 +822,16 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       return;
     }
 
-    reportLocationDebugEvent('background_tracking_restart_requested', {
-      payload: {
-        platform: Platform.OS,
-        reason: 'task_options_changed',
-        current_task_options: currentTaskOptions,
-        desired_task_options: taskOptions as Record<string, unknown>,
-        location_mode: getLocationMode(trackingState.mode),
-        android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
-      },
-      recordInHistory: false,
-    });
-    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((error) => {
-      reportLocationDebugEvent('background_tracking_stop_before_restart_error', {
-        error,
-      });
-    });
+    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((_error) => {});
   }
 
   try {
-    reportLocationDebugEvent('background_tracking_start_requested', {
-      payload: {
-        platform: Platform.OS,
-        task_options: taskOptions as Record<string, unknown>,
-        location_mode: getLocationMode(trackingState.mode),
-        android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
-      },
-      recordInHistory: false,
-    });
     await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, taskOptions);
   } catch (error) {
-    reportLocationDebugEvent('background_tracking_start_error', {
-      message:
-        error instanceof Error ? error.message : 'Failed to start background location tracking',
-      error,
-      payload: {
-        reason: 'start_location_updates_failed',
-        task_registration: taskRegistration,
-      },
-    });
     throw error;
   }
-  await ensureBackgroundLocationDrainTaskRegistered().catch((error) => {
-    reportLocationDebugEvent('background_drain_task_register_error', {
-      error,
-    });
-  });
-  reportLocationDebugEvent('background_tracking_started', {
-    payload: {
-      platform: Platform.OS,
-      task_options: taskOptions as Record<string, unknown>,
-      location_mode: getLocationMode(trackingState.mode),
-      android_capture_mode: Platform.OS === 'android' ? trackingState.mode : null,
-      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
-    },
-    recordInHistory: false,
-  });
+  await ensureBackgroundLocationDrainTaskRegistered().catch((_error) => {});
+
   if (
     Platform.OS === 'android' &&
     trackingState.mode === 'quiet' &&

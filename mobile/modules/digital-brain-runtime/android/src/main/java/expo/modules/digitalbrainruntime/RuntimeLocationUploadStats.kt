@@ -1,8 +1,6 @@
 package expo.modules.digitalbrainruntime
 
 import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
 
 object RuntimeLocationUploadStats {
   private const val PREFS = "digital_brain_runtime_upload_stats"
@@ -14,8 +12,6 @@ object RuntimeLocationUploadStats {
   private const val LAST_HTTP_STATUS = "last_http_status"
   private const val LAST_QUEUE_SIZE = "last_queue_size"
   private const val RECENT_RUNS = "recent_runs"
-  private const val MAX_RECENT_RUNS = 30
-
   @Synchronized fun record(
     context: Context,
     durationMs: Long,
@@ -23,32 +19,9 @@ object RuntimeLocationUploadStats {
     uploadedCount: Int,
     httpStatus: Int?,
     queueSize: Int,
-    processCpuMs: Long,
-    deviceAwakeMs: Long,
-    batteryChargeDeltaMicroAh: Long,
   ) {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val atMs = System.currentTimeMillis()
-    val run = JSONObject()
-      .put("atMs", atMs)
-      .put("durationMs", durationMs)
-      .put("uploaded", uploadedCount)
-      .put("queued", queueSize)
-      .put("outcome", outcome)
-      .put("httpStatus", httpStatus ?: JSONObject.NULL)
-      .put("processCpuMs", processCpuMs)
-      .put("deviceAwakeMs", deviceAwakeMs)
-      .put("batteryChargeDeltaMicroAh", batteryChargeDeltaMicroAh)
-    val recentRuns = runCatching {
-      JSONArray(prefs.getString(RECENT_RUNS, "[]") ?: "[]")
-    }
-      .getOrElse { JSONArray() }
-    val boundedRuns = JSONArray()
-    val firstRetainedIndex = (recentRuns.length() - MAX_RECENT_RUNS + 1).coerceAtLeast(0)
-    for (index in firstRetainedIndex until recentRuns.length()) {
-      boundedRuns.put(recentRuns.getJSONObject(index))
-    }
-    boundedRuns.put(run)
     val editor = prefs.edit()
       .putLong(RUN_COUNT, prefs.getLong(RUN_COUNT, 0L) + 1)
       .putLong(UPLOADED_COUNT, prefs.getLong(UPLOADED_COUNT, 0L) + uploadedCount)
@@ -56,7 +29,7 @@ object RuntimeLocationUploadStats {
       .putLong(LAST_DURATION_MS, durationMs)
       .putString(LAST_OUTCOME, outcome)
       .putInt(LAST_QUEUE_SIZE, queueSize)
-      .putString(RECENT_RUNS, boundedRuns.toString())
+      .remove(RECENT_RUNS)
     if (httpStatus == null) {
       editor.remove(LAST_HTTP_STATUS)
     } else {
@@ -83,27 +56,7 @@ object RuntimeLocationUploadStats {
         null
       },
       "nativeUploadLastQueueSize" to prefs.getInt(LAST_QUEUE_SIZE, 0),
-      "nativeUploadRecentRuns" to readRecentRuns(prefs.getString(RECENT_RUNS, "[]") ?: "[]"),
     )
   }
 
-  private fun readRecentRuns(raw: String): List<Map<String, Any?>> {
-    return runCatching {
-      val runs = JSONArray(raw)
-      (0 until runs.length()).map { index ->
-        val run = runs.getJSONObject(index)
-        mapOf(
-          "atMs" to run.optLong("atMs"),
-          "durationMs" to run.optLong("durationMs"),
-          "uploaded" to run.optInt("uploaded"),
-          "queued" to run.optInt("queued"),
-          "outcome" to run.optString("outcome"),
-          "httpStatus" to run.takeUnless { it.isNull("httpStatus") }?.optInt("httpStatus"),
-          "processCpuMs" to run.optLong("processCpuMs"),
-          "deviceAwakeMs" to run.optLong("deviceAwakeMs"),
-          "batteryChargeDeltaMicroAh" to run.optLong("batteryChargeDeltaMicroAh"),
-        )
-      }
-    }.getOrDefault(emptyList())
-  }
 }

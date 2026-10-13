@@ -3,8 +3,6 @@ import * as SecureStore from 'expo-secure-store';
 
 import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
 import { configureGoogleSignIn } from '@/auth/googleSignin';
-import { getTokenDiagnostics } from '@/auth/tokenDiagnostics';
-import { reportLocationDebugEvent } from '@/location/debugState';
 
 async function clearStoredAuth(): Promise<void> {
   await Promise.all([
@@ -16,10 +14,6 @@ async function clearStoredAuth(): Promise<void> {
 }
 
 export async function refreshStoredGoogleIdToken(): Promise<string | null> {
-  const previousTokenDiagnostics = getTokenDiagnostics(await getStoredGoogleIdToken());
-  reportLocationDebugEvent('background_auth_refresh_attempt', {
-    payload: previousTokenDiagnostics,
-  });
   try {
     configureGoogleSignIn();
     const userInfo = await GoogleSignin.signInSilently();
@@ -41,29 +35,8 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
       }
     }
 
-    reportLocationDebugEvent('background_auth_refresh_success', {
-      payload: {
-        refresh_attempted: true,
-        refresh_succeeded: true,
-        previous_token_fingerprint: previousTokenDiagnostics.token_fingerprint,
-        ...getTokenDiagnostics(idToken),
-      },
-    });
     return idToken;
-  } catch (error) {
-    const errorWithMeta = error as Error & { status?: number; authExpired?: boolean };
-    reportLocationDebugEvent('background_auth_refresh_error', {
-      message: errorWithMeta?.message || 'Background auth refresh failed',
-      error,
-      payload: {
-        refresh_attempted: true,
-        refresh_succeeded: false,
-        previous_token_fingerprint: previousTokenDiagnostics.token_fingerprint,
-        status: errorWithMeta?.status,
-        auth_expired: errorWithMeta?.authExpired,
-        ...getTokenDiagnostics(null),
-      },
-    });
+  } catch {
     await clearStoredAuth();
     return null;
   }
@@ -71,8 +44,4 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
 
 export async function getStoredGoogleIdToken(): Promise<string | null> {
   return SecureStore.getItemAsync(AUTH_TOKEN_KEY);
-}
-
-export async function getStoredGoogleIdTokenDiagnostics(): Promise<Record<string, unknown>> {
-  return getTokenDiagnostics(await getStoredGoogleIdToken());
 }

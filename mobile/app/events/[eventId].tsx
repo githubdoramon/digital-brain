@@ -21,7 +21,7 @@ import {
 } from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { useSingleImagePicker } from '@/hooks/useImagePicker';
-import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
+
 import { resolvePickedImageAsset } from '@/media/pickedImageAsset';
 import { theme } from '@/theme';
 
@@ -44,21 +44,6 @@ type EventDetail = {
   is_cancelled?: boolean;
   action_items?: EventActionItem[] | null;
   photos?: EventPhoto[] | null;
-};
-
-type UploadEventPhotoResponse = {
-  ok: boolean;
-  photo?: EventPhoto & {
-    debug?: {
-      summary?: string | null;
-      resolution_method?: string | null;
-      client_has_gps?: boolean | null;
-      immich_has_gps?: boolean | null;
-      client_file_name?: string | null;
-      immich_original_file_name?: string | null;
-      mismatch?: boolean | null;
-    };
-  };
 };
 
 type Contact = {
@@ -418,7 +403,6 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       }
 
       setIsUploadingPhoto(true);
-      const debugSummaries: string[] = [];
       for (const asset of assets) {
         if (!asset?.uri) {
           continue;
@@ -430,46 +414,24 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
         const capturedAt = extractAssetCapturedAt(resolvedAsset);
         if (capturedAt) formData.append('captured_at', capturedAt);
         formData.append('source', 'mobile_event_editor');
-        formData.append('debug_client', JSON.stringify(resolvedAsset.debug));
         formData.append('file', {
           uri: resolvedAsset.uri,
           name: resolvedAsset.fileName || `event-photo-${Date.now()}.jpg`,
           type: resolvedAsset.mimeType || 'image/jpeg',
         } as unknown as Blob);
 
-        const response = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
+        await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
           method: 'POST',
           body: formData,
           token,
-        })) as UploadEventPhotoResponse;
-        console.info('[event-photos] upload response debug', response.photo?.debug || null);
-        await appendEventPhotoDebugLog('event-photo-upload-response', {
-          eventId,
-          assetId: response.photo?.asset_id ?? null,
-          debug: response.photo?.debug ?? null,
         });
-        const debugSummary = response.photo?.debug?.summary?.trim();
-        if (debugSummary) {
-          debugSummaries.push(debugSummary);
-        }
       }
 
       await reloadEvent();
-      if (debugSummaries.length === 1) {
-        showSuccess(debugSummaries[0]);
-      } else if (debugSummaries.length > 1) {
-        showSuccess(
-          `Linked ${debugSummaries.length} photos. Check latest upload logs for per-photo debug details.`,
-        );
-      } else {
-        showSuccess(`Linked ${assets.length} ${assets.length === 1 ? 'photo' : 'photos'}.`);
-      }
+      showSuccess(`Linked ${assets.length} ${assets.length === 1 ? 'photo' : 'photos'}.`);
     } catch (error) {
       console.warn('[events] photo upload failed', error);
-      void appendEventPhotoDebugLog('event-photo-upload-error', {
-        eventId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+
       showError(error instanceof Error ? error.message : 'Unable to attach that photo right now.');
     } finally {
       setIsUploadingPhoto(false);
@@ -524,7 +486,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       onAddPhoto={eventId ? handleAddPhoto : undefined}
       onRemovePhoto={eventId ? handleRemovePhoto : undefined}
       editable={isEditing}
-      headerKicker={event?.is_cancelled ? 'Canceled event' : isEditing ? 'Event editor' : 'Linked event'}
+      headerKicker={
+        event?.is_cancelled ? 'Canceled event' : isEditing ? 'Event editor' : 'Linked event'
+      }
       headerTitle={title}
       headerSubtitle={subtitle}
       doneLabel={isSaving ? 'Saving...' : 'Save changes'}

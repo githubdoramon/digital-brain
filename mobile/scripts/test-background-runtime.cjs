@@ -34,7 +34,6 @@ function load(file, mocks, globals = {}) {
   );
   return module.exports;
 }
-const debug = { reportLocationDebugEvent() {} };
 const runtime = {
   getLocationRuntimeState: () => ({ appState: 'background', lastAppStateChangeAt: null }),
 };
@@ -72,7 +71,6 @@ async function draining() {
         getStoredGoogleIdTokenDiagnostics: async () => ({}),
         refreshStoredGoogleIdToken: async () => 'fake-token',
       },
-      '@/location/debugState': debug,
       '@/location/runtimeState': runtime,
     },
     { Date: Clock },
@@ -149,7 +147,6 @@ async function permissionRace() {
       BACKGROUND_LOCATION_DRAIN_TASK: 'drain',
       BACKGROUND_LOCATION_GEOFENCE_TASK: 'geofence',
     },
-    '@/location/debugState': debug,
     '@/api/client': { API_BASE_URL: 'https://api.example.com' },
     '@/location/runtimeState': runtime,
     '@/location/foregroundLocation': { hasSharedLocationRuntime: () => true },
@@ -179,65 +176,36 @@ async function permissionRace() {
   await definitions.get('geofence')({});
   assert.equal(owners.length, before, 'Late legacy callbacks cannot resurrect Expo tracking');
 }
-async function debugExportBounds() {
-  const reads = [],
-    moves = [],
-    writes = [];
-  let size = 300 * 1024 * 1024;
-  const tail =
-    'partial line\n' +
-    JSON.stringify({
-      at: '2026-09-13T10:00:00Z',
-      eventName: 'foreground_runtime_work_finished',
-      payload: { durationMs: 10 },
-    }) +
-    '\n';
-  const mod = load(
-    'location/debugState.ts',
-    {
-      '@react-native-async-storage/async-storage': {
-        getItem: async () => null,
-        setItem: async () => {},
-      },
-      buffer: require('node:buffer'),
-      'expo-file-system/legacy': {
-        documentDirectory: 'file:///test/',
-        EncodingType: { Base64: 'base64', UTF8: 'utf8' },
-        getInfoAsync: async () => ({ exists: true, size }),
-        readAsStringAsync: async (_uri, options) => {
-          reads.push(options);
-          return Buffer.from(tail).toString('base64');
-        },
-        makeDirectoryAsync: async () => {},
-        deleteAsync: async () => {},
-        moveAsync: async (options) => {
-          moves.push(options);
-          size = 0;
-        },
-        writeAsStringAsync: async (_uri, text) => {
-          writes.push(text);
-          size += Buffer.byteLength(text);
-        },
+async function retiredDebugCleanup() {
+  const removed = [];
+  const mod = load('debug/retiredDebugArtifacts.ts', {
+    '@react-native-async-storage/async-storage': {
+      removeItem: async (key) => removed.push(key),
+    },
+    'expo-file-system/legacy': {
+      documentDirectory: 'file:///test/',
+      deleteAsync: async (uri, options) => {
+        assert.equal(options.idempotent, true);
+        removed.push(uri);
       },
     },
-    { console: { info() {}, warn() {} } },
+  });
+  await mod.clearRetiredDebugArtifacts();
+  assert.deepEqual(
+    removed.sort(),
+    [
+      'digitalbrain.locationDebugSnapshot',
+      'file:///test/digital-brain-location-debug-log.jsonl',
+      'file:///test/digital-brain-location-debug-log.jsonl.previous',
+      'file:///test/event-photo-debug-log.txt',
+      'file:///test/voice-debug/',
+    ].sort(),
+    'Upgrade deletes only retired private debug artifacts',
   );
-  const exported = await mod.readLocationDebugLogText({ backgroundOnly: true });
-  assert.match(exported, /older file history was omitted/);
-  assert.match(exported, /foreground_runtime_work_finished/);
-  assert.equal(reads[0].encoding, 'base64');
-  assert.equal(reads[0].length, 256 * 1024);
-  assert.equal(reads[0].position, 300 * 1024 * 1024 - 256 * 1024);
-  mod.reportLocationDebugEvent('background_sync_error', { payload: { huge: 'x'.repeat(100_000) } });
-  await new Promise(setImmediate);
-  assert.equal(moves.length, 1, 'Oversized legacy logs rotate without a full-file read');
-  assert.ok(Buffer.byteLength(writes[0]) < 16 * 1024, 'Large diagnostics cannot defeat log limits');
-  assert.equal(mod.getLocationDebugSnapshot().lastPayload.truncated, true);
-  assert.equal(reads.length, 1, 'Log rotation must not read historical contents');
 }
 
 (async () => {
-  await debugExportBounds();
+  await retiredDebugCleanup();
   await draining();
   await permissionRace();
   console.log(

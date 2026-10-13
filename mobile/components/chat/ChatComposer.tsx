@@ -20,10 +20,7 @@ import {
   type LocalTranscriptionStatus,
   transcribeAudioFile,
 } from '@/chat/localTranscription';
-import {
-  appendVoiceTranscriptionDebugLog,
-  copyLatestVoiceDebugAudio,
-} from '@/debug/voiceTranscriptionDebug';
+
 import {
   ensureVoiceRecordingReady,
   getVoiceRecordingErrorMessage,
@@ -34,7 +31,6 @@ import {
 import {
   formatVoiceDuration,
   mergeTranscriptIntoDraft,
-  normalizeTranscriptText,
   type VoiceComposerPhase,
 } from '@/chat/voiceState';
 import { theme } from '@/theme';
@@ -138,7 +134,8 @@ export function ChatComposer({
   const shouldShowVoiceBanner = voicePhase === 'starting' || voicePhase === 'recording';
   const shouldShowVoicePanel = voicePhase === 'locked' || voicePhase === 'transcribing';
   const sendButtonDisabled = !allowed || isSending || voicePhase === 'transcribing';
-  const sendButtonExpanded = isSendButtonPressed || voicePhase === 'starting' || voicePhase === 'recording';
+  const sendButtonExpanded =
+    isSendButtonPressed || voicePhase === 'starting' || voicePhase === 'recording';
   const shouldShowSlideHint = sendButtonExpanded && voicePhase !== 'locked';
 
   const resetVoiceUi = useCallback(() => {
@@ -158,7 +155,7 @@ export function ChatComposer({
         await recorder.stopRecording();
       }
     } catch {
-      // Ignore cleanup failures during cancellation.
+      /* Best effort; keep the existing recovery path. */
     }
   }, [recorder]);
 
@@ -206,36 +203,9 @@ export function ChatComposer({
       await restoreVoiceAudioMode().catch(() => undefined);
       const recording = await recorder.stopRecording();
       const recordingUri = requireRecordingUri(recording?.fileUri);
-      const recordingInfo = await copyLatestVoiceDebugAudio(recordingUri).catch(async () => {
-        return null;
-      });
-      await appendVoiceTranscriptionDebugLog('voice_recording_ready', {
-        recordingUri,
-        copiedAudioUri: recordingInfo?.uri ?? null,
-        copiedAudioSizeBytes: recordingInfo?.sizeBytes ?? null,
-        durationMillis: recording?.durationMs ?? recorder.durationMs,
-        sizeBytes: recording?.size ?? recorder.size,
-        mimeType: recording?.mimeType ?? null,
-        bitDepth: recording?.bitDepth ?? null,
-        channels: recording?.channels ?? null,
-        sampleRate: recording?.sampleRate ?? null,
-        recordingOptions: {
-          sampleRate: VOICE_RECORDING_OPTIONS.sampleRate,
-          channels: VOICE_RECORDING_OPTIONS.channels,
-          encoding: VOICE_RECORDING_OPTIONS.encoding,
-          output: VOICE_RECORDING_OPTIONS.output,
-          ios: VOICE_RECORDING_OPTIONS.ios,
-        },
-        draftBeforeTranscription: normalizeTranscriptText(latestInputRef.current),
-      }).catch(() => undefined);
+
       const transcription = await transcribeAudioFile(recordingUri, applyTranscriptionStatus);
-      await appendVoiceTranscriptionDebugLog('voice_transcription_applied', {
-        text: transcription.text,
-        rawText: transcription.rawText,
-        language: transcription.language,
-        modelFileName: transcription.modelFileName,
-        segmentCount: transcription.segments.length,
-      }).catch(() => undefined);
+
       onChangeInput(mergeTranscriptIntoDraft(latestInputRef.current, transcription.text));
       requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -243,11 +213,7 @@ export function ChatComposer({
       resetVoiceUi();
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
-      await appendVoiceTranscriptionDebugLog('voice_capture_failure', {
-        error: error instanceof Error ? error.message : String(error),
-        durationMillis: recorder.durationMs,
-        sizeBytes: recorder.size,
-      }).catch(() => undefined);
+
       resetVoiceUi();
       onErrorMessage(
         error instanceof VoiceRecordingError
@@ -255,14 +221,7 @@ export function ChatComposer({
           : getLocalTranscriptionErrorMessage(error),
       );
     }
-  }, [
-    applyTranscriptionStatus,
-    inputRef,
-    onChangeInput,
-    onErrorMessage,
-    recorder,
-    resetVoiceUi,
-  ]);
+  }, [applyTranscriptionStatus, inputRef, onChangeInput, onErrorMessage, recorder, resetVoiceUi]);
 
   const beginVoiceCapture = useCallback(async () => {
     longPressHandledRef.current = true;
@@ -283,9 +242,7 @@ export function ChatComposer({
       }
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
-      await appendVoiceTranscriptionDebugLog('voice_capture_start_failure', {
-        error: error instanceof Error ? error.message : String(error),
-      }).catch(() => undefined);
+
       resetVoiceUi();
       onErrorMessage(getVoiceRecordingErrorMessage(error));
     }
@@ -345,23 +302,26 @@ export function ChatComposer({
     void beginVoiceCapture();
   }, [beginVoiceCapture, canUseVoice, inputIsEmpty]);
 
-  const handleTouchMove = useCallback((event: GestureResponderEvent) => {
-    if (voicePhaseRef.current !== 'recording' || lockQueued || pointerStartYRef.current == null) {
-      return;
-    }
+  const handleTouchMove = useCallback(
+    (event: GestureResponderEvent) => {
+      if (voicePhaseRef.current !== 'recording' || lockQueued || pointerStartYRef.current == null) {
+        return;
+      }
 
-    const nextLiftDistance = Math.max(0, pointerStartYRef.current - event.nativeEvent.pageY);
-    setDragLiftDistance(nextLiftDistance);
+      const nextLiftDistance = Math.max(0, pointerStartYRef.current - event.nativeEvent.pageY);
+      setDragLiftDistance(nextLiftDistance);
 
-    if (nextLiftDistance >= LOCK_THRESHOLD_PX) {
-      setLockQueued(true);
-      setIsSendButtonPressed(false);
-      setDragLiftDistance(0);
-      pointerStartYRef.current = null;
-      setVoicePhase('locked');
-      setVoiceStatusText('Recording locked');
-    }
-  }, [lockQueued]);
+      if (nextLiftDistance >= LOCK_THRESHOLD_PX) {
+        setLockQueued(true);
+        setIsSendButtonPressed(false);
+        setDragLiftDistance(0);
+        pointerStartYRef.current = null;
+        setVoicePhase('locked');
+        setVoiceStatusText('Recording locked');
+      }
+    },
+    [lockQueued],
+  );
 
   const handlePressOut = useCallback(() => {
     pointerStartYRef.current = null;
@@ -439,7 +399,9 @@ export function ChatComposer({
           <View style={styles.voiceBannerDot} />
           <View style={styles.voiceBannerTextWrap}>
             <Text style={styles.voiceBannerTitle}>
-              {voicePhase === 'starting' ? 'Preparing voice capture' : formatVoiceDuration(recorder.durationMs)}
+              {voicePhase === 'starting'
+                ? 'Preparing voice capture'
+                : formatVoiceDuration(recorder.durationMs)}
             </Text>
             <Text style={styles.voiceBannerSubtitle}>{voiceBannerSubtitle}</Text>
           </View>
@@ -471,7 +433,10 @@ export function ChatComposer({
                 onPress={() => {
                   void cancelVoiceCapture();
                 }}
-                style={({ pressed }) => [styles.voiceActionButton, pressed && styles.voiceActionButtonPressed]}
+                style={({ pressed }) => [
+                  styles.voiceActionButton,
+                  pressed && styles.voiceActionButtonPressed,
+                ]}
               >
                 <Ionicons name="close" size={16} color={theme.colors.ink} />
               </Pressable>
@@ -481,7 +446,10 @@ export function ChatComposer({
                 onPress={() => {
                   void finalizeVoiceCapture();
                 }}
-                style={({ pressed }) => [styles.voiceActionButtonPrimary, pressed && styles.voiceActionButtonPressed]}
+                style={({ pressed }) => [
+                  styles.voiceActionButtonPrimary,
+                  pressed && styles.voiceActionButtonPressed,
+                ]}
               >
                 <Ionicons name="stop" size={16} color="#fff" />
               </Pressable>
@@ -538,11 +506,7 @@ export function ChatComposer({
                 },
               ]}
             >
-              <Ionicons
-                name="arrow-up"
-                size={16}
-                color={theme.colors.accentDeep}
-              />
+              <Ionicons name="arrow-up" size={16} color={theme.colors.accentDeep} />
             </View>
           )}
           <Pressable
@@ -560,7 +524,10 @@ export function ChatComposer({
             disabled={sendButtonDisabled}
             pressRetentionOffset={{ top: 220, bottom: 60, left: 60, right: 60 }}
             hitSlop={16}
-            {...({ onPressMove: handleTouchMove, onTouchMove: handleTouchMove } as Record<string, unknown>)}
+            {...({ onPressMove: handleTouchMove, onTouchMove: handleTouchMove } as Record<
+              string,
+              unknown
+            >)}
             style={({ pressed }) => [
               styles.inlineSendButton,
               pressed && styles.inlineSendButtonPressed,

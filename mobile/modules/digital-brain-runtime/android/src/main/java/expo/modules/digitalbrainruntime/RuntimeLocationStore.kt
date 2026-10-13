@@ -64,13 +64,7 @@ object RuntimeLocationStore {
       appended++
     }
     if (appended == 0) {
-      RuntimeLocationDiagnostics.record(context, "capture_batch_no_new_samples", mapOf(
-        "sample_count" to locations.size,
-        "invalid_count" to invalid,
-        "duplicate_count" to duplicate,
-        "queue_before" to previous.length(),
-        "queue_after" to previous.length(),
-      ))
+
       return
     }
 
@@ -83,21 +77,8 @@ object RuntimeLocationStore {
     val droppedSampleKeys = combined.take(dropped).map { item ->
       RuntimeLocationDebugId.requestId(item.getString("id"))
     }
-    RuntimeLocationDiagnostics.record(context, "capture_batch_persisted", mapOf(
-      "sample_count" to locations.size,
-      "valid_count" to (locations.size - invalid),
-      "invalid_count" to invalid,
-      "duplicate_count" to duplicate,
-      "added_count" to appended,
-      "dropped_count" to dropped,
-      "queue_before" to previous.length(),
-      "queue_after" to next.length(),
-      "sample_keys" to retainedSampleKeys,
-      "dropped_sample_keys" to droppedSampleKeys,
-      "captured_at_first" to locations.filter { it.time > 0 }.minOfOrNull { it.time }?.let(::isoTimestamp),
-      "captured_at_last" to locations.filter { it.time > 0 }.maxOfOrNull { it.time }?.let(::isoTimestamp),
-    ))
-    Log.i("DigitalBrainRuntime", "location_enqueued added=$appended count=${next.length()} dropped=$dropped")
+
+
   }
   @Synchronized fun pendingSamples(context: Context): List<RuntimeLocationSample> {
     val samples = read(context)
@@ -128,12 +109,7 @@ object RuntimeLocationStore {
       }
     }
     write(context, next)
-    RuntimeLocationDiagnostics.record(context, "samples_acknowledged", mapOf(
-      "sample_keys" to acknowledgedKeys,
-      "sample_count" to acknowledgedKeys.size,
-      "queue_before" to previous.length(),
-      "queue_after" to next.length(),
-    ))
+
   }
 
   private fun isoTimestamp(timestamp: Long): String = java.text.SimpleDateFormat(

@@ -1,12 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { apiFetch, API_BASE_URL } from '@/api/client';
-import {
-  getStoredGoogleIdToken,
-  getStoredGoogleIdTokenDiagnostics,
-  refreshStoredGoogleIdToken,
-} from '@/auth/backgroundToken';
-import { reportLocationDebugEvent } from '@/location/debugState';
+import { apiFetch } from '@/api/client';
+import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
+
 import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_QUEUE_KEY = 'digitalbrain.backgroundLocationQueue';
@@ -58,7 +54,7 @@ export type HistoricalLocationSample = {
 
 let pendingDrainTrigger: DrainTrigger | null = null;
 
-type ApiFetchError = Error & {
+type _ApiFetchError = Error & {
   status?: number;
   authExpired?: boolean;
   contentType?: string;
@@ -70,28 +66,6 @@ type ApiFetchError = Error & {
   fetchFailed?: boolean;
 };
 
-function describeSyncFailure(error: ApiFetchError): string {
-  if (error.fetchFailed) {
-    return 'request_failed_before_response';
-  }
-  if (error.authExpired) {
-    return 'auth_expired';
-  }
-  if (typeof error.status === 'number') {
-    if (error.status >= 500) {
-      return 'backend_server_error';
-    }
-    if (error.status >= 400) {
-      return 'backend_client_error';
-    }
-    return 'unexpected_http_status';
-  }
-  if (error.contentType && !error.contentType.includes('application/json')) {
-    return 'unexpected_response_content_type';
-  }
-  return 'unknown_request_error';
-}
-
 async function readQueue(): Promise<QueuedBackgroundLocationEntry[]> {
   try {
     const raw = await AsyncStorage.getItem(BACKGROUND_LOCATION_QUEUE_KEY);
@@ -100,10 +74,7 @@ async function readQueue(): Promise<QueuedBackgroundLocationEntry[]> {
     }
     const parsed = JSON.parse(raw) as QueuedBackgroundLocationEntry[];
     return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    reportLocationDebugEvent('background_queue_read_error', {
-      error,
-    });
+  } catch {
     return [];
   }
 }
@@ -201,27 +172,8 @@ export async function enqueueBackgroundLocationEntry(
   });
 
   if (outcome.deduped) {
-    reportLocationDebugEvent('background_queue_deduped', {
-      payload: {
-        queue_size: outcome.queueSize,
-        debug_request_id: entry.debugRequestId,
-        batch_id: entry.batchId,
-      },
-      recordInHistory: false,
-    });
     return;
   }
-
-  reportLocationDebugEvent('background_queue_enqueued', {
-    payload: {
-      queue_size: outcome.queueSize,
-      debug_request_id: entry.debugRequestId,
-      batch_id: entry.batchId,
-      captured_at: entry.capturedAt,
-      is_buffered_flush: entry.isBufferedFlush,
-    },
-    recordInHistory: false,
-  });
 }
 
 async function drainQueuedBackgroundLocationsInner(
@@ -234,38 +186,14 @@ async function drainQueuedBackgroundLocationsInner(
 }> {
   let queue = await readQueue();
   const initialQueueSize = queue.length;
-  const runtimeState = getLocationRuntimeState();
-
-  reportLocationDebugEvent('background_queue_drain_started', {
-    payload: {
-      trigger,
-      queue_size: initialQueueSize,
-      app_state: runtimeState.appState,
-      will_attempt_request: initialQueueSize > 0,
-      max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
-    },
-    recordInHistory: false,
-  });
 
   if (!queue.length) {
     return { initialQueueSize, drainedCount: 0, remainingQueueSize: 0 };
   }
 
   let token = await getStoredGoogleIdToken();
-  let tokenDiagnostics = await getStoredGoogleIdTokenDiagnostics();
 
   if (!token) {
-    reportLocationDebugEvent('background_queue_drain_blocked', {
-      message: 'Missing auth token while draining queued background locations',
-      payload: {
-        reason: 'missing_auth_token',
-        request_attempted: false,
-        trigger,
-        queue_size: queue.length,
-        app_state: runtimeState.appState,
-        ...tokenDiagnostics,
-      },
-    });
     return { initialQueueSize, drainedCount: 0, remainingQueueSize: queue.length };
   }
 
@@ -278,36 +206,7 @@ async function drainQueuedBackgroundLocationsInner(
     // through an unbounded backlog and resumes on the next service opportunity.
     if (Date.now() + BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS > deadline) break;
     const currentRuntimeState = getLocationRuntimeState();
-    reportLocationDebugEvent('background_sync_attempt', {
-      payload: {
-        request_attempted: true,
-        debug_request_id: entry.debugRequestId,
-        batch_id: entry.batchId,
-        sample_index: entry.sampleIndex,
-        sample_count: entry.sampleCount,
-        batch_first_captured_at: entry.batchFirstCapturedAt,
-        batch_last_captured_at: entry.batchLastCapturedAt,
-        execution_context: entry.executionContext,
-        sample_age_seconds: entry.sampleAgeSeconds,
-        is_buffered_flush: entry.isBufferedFlush,
-        lat: entry.lat,
-        lon: entry.lon,
-        captured_at: entry.capturedAt,
-        queue_trigger: trigger,
-        queue_size: queue.length,
-        max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
-        attempt_count: entry.attemptCount,
-        api_base_url: API_BASE_URL,
-        request_url: `${API_BASE_URL}/mobile/location`,
-        request_method: 'POST',
-        app_state: currentRuntimeState.appState,
-        last_app_state_change_at: currentRuntimeState.lastAppStateChangeAt,
-        ...tokenDiagnostics,
-      },
-      recordInHistory: false,
-    });
 
-    const requestStartedAt = Date.now();
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const uploadTimeout = abortController
       ? setTimeout(() => abortController.abort(), BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS)
@@ -320,7 +219,6 @@ async function drainQueuedBackgroundLocationsInner(
         onAuthExpired: async () => {
           const refreshedToken = await refreshStoredGoogleIdToken();
           token = refreshedToken;
-          tokenDiagnostics = await getStoredGoogleIdTokenDiagnostics();
           return refreshedToken;
         },
         headers: {
@@ -352,37 +250,11 @@ async function drainQueuedBackgroundLocationsInner(
         };
       });
       drainedCount += 1;
-      reportLocationDebugEvent('background_sync_success', {
-        payload: {
-          request_attempted: true,
-          request_completed: true,
-          request_duration_ms: Date.now() - requestStartedAt,
-          debug_request_id: entry.debugRequestId,
-          batch_id: entry.batchId,
-          sample_index: entry.sampleIndex,
-          sample_count: entry.sampleCount,
-          batch_first_captured_at: entry.batchFirstCapturedAt,
-          batch_last_captured_at: entry.batchLastCapturedAt,
-          execution_context: entry.executionContext,
-          sample_age_seconds: entry.sampleAgeSeconds,
-          is_buffered_flush: entry.isBufferedFlush,
-          lat: entry.lat,
-          lon: entry.lon,
-          captured_at: entry.capturedAt,
-          queue_trigger: trigger,
-          queue_size: queue.length,
-          api_base_url: API_BASE_URL,
-          request_url: `${API_BASE_URL}/mobile/location`,
-          request_method: 'POST',
-          app_state: getLocationRuntimeState().appState,
-          ...tokenDiagnostics,
-        },
-      });
-    } catch (error) {
+    } catch {
       if (uploadTimeout) {
         clearTimeout(uploadTimeout);
       }
-      const fetchError = error as ApiFetchError;
+
       queue = await mutateQueue((currentQueue) => {
         const lastAttemptAt = new Date().toISOString();
         const nextQueue = currentQueue.map((item) =>
@@ -399,54 +271,10 @@ async function drainQueuedBackgroundLocationsInner(
           result: nextQueue,
         };
       });
-      reportLocationDebugEvent('background_sync_error', {
-        message: fetchError.message,
-        error,
-        payload: {
-          reason: describeSyncFailure(fetchError),
-          request_attempted: true,
-          request_completed: !fetchError.fetchFailed,
-          request_duration_ms: Date.now() - requestStartedAt,
-          debug_request_id: entry.debugRequestId,
-          batch_id: entry.batchId,
-          sample_index: entry.sampleIndex,
-          sample_count: entry.sampleCount,
-          batch_first_captured_at: entry.batchFirstCapturedAt,
-          batch_last_captured_at: entry.batchLastCapturedAt,
-          execution_context: entry.executionContext,
-          sample_age_seconds: entry.sampleAgeSeconds,
-          is_buffered_flush: entry.isBufferedFlush,
-          queue_trigger: trigger,
-          queue_size: queue.length,
-          attempt_count: entry.attemptCount + 1,
-          status: fetchError.status,
-          auth_expired: fetchError.authExpired,
-          fetch_failed: fetchError.fetchFailed,
-          content_type: fetchError.contentType,
-          response_preview: fetchError.bodyPreview,
-          request_url: fetchError.requestUrl,
-          request_method: fetchError.requestMethod,
-          token_present: fetchError.tokenPresent,
-          api_base_url: API_BASE_URL,
-          app_state: getLocationRuntimeState().appState,
-          ...(fetchError.authDiagnostics ?? tokenDiagnostics),
-        },
-      });
+
       break;
     }
   }
-
-  reportLocationDebugEvent('background_queue_drain_finished', {
-    payload: {
-      trigger,
-      initial_queue_size: initialQueueSize,
-      drained_count: drainedCount,
-      remaining_queue_size: queue.length,
-      max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
-      app_state: getLocationRuntimeState().appState,
-    },
-    recordInHistory: false,
-  });
 
   return {
     initialQueueSize,
@@ -463,12 +291,7 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
   if (drainInFlight) {
     drainRerunRequested = true;
     pendingDrainTrigger = trigger;
-    reportLocationDebugEvent('background_queue_drain_coalesced', {
-      payload: {
-        trigger,
-      },
-      recordInHistory: false,
-    });
+
     return drainInFlight;
   }
 

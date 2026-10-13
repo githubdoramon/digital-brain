@@ -22,10 +22,7 @@ object RuntimeLocationUploadConfigStore {
       .putString(API_BASE_URL, normalizedUrl)
       .putString(GOOGLE_WEB_CLIENT_ID, googleWebClientId.trim())
       .commit()) { "Could not persist native location upload configuration" }
-    RuntimeLocationDiagnostics.record(context, "upload_configuration_saved", mapOf(
-      "config_available" to true,
-      "api_endpoint" to diagnosticSnapshot(context)["endpoint"],
-    ))
+
   }
 
   fun load(context: Context): RuntimeLocationUploadConfig? {

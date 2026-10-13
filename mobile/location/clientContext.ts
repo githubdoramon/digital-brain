@@ -1,8 +1,6 @@
 import * as Location from 'expo-location';
 
-import { apiFetch, API_BASE_URL, getAuthRequestContext } from '@/api/client';
-import { reportLocationDebugEvent } from '@/location/debugState';
-import { getLocationRuntimeState } from '@/location/runtimeState';
+import { apiFetch, getAuthRequestContext } from '@/api/client';
 
 export type ClientLocationContext = {
   lat: number;
@@ -39,7 +37,10 @@ function calculateDistanceMeters(
 
   const haversine =
     Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
-    Math.cos(firstLatRadians) * Math.cos(secondLatRadians) * Math.sin(lonDelta / 2) * Math.sin(lonDelta / 2);
+    Math.cos(firstLatRadians) *
+      Math.cos(secondLatRadians) *
+      Math.sin(lonDelta / 2) *
+      Math.sin(lonDelta / 2);
   const arc = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
   return earthRadiusMeters * arc;
 }
@@ -54,21 +55,15 @@ function getBaseClientContext(): ClientContext {
 
 function requestLocationInBackground(): void {
   if (locationRequestInFlight) {
-    reportLocationDebugEvent('foreground_location_skipped', {
-      message: 'Location request already in flight',
-    });
     return;
   }
 
   locationRequestInFlight = true;
-  reportLocationDebugEvent('foreground_location_requested');
+
   void (async () => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
-        reportLocationDebugEvent('foreground_permission_denied', {
-          message: 'Foreground location permission not granted',
-        });
         return;
       }
 
@@ -79,17 +74,11 @@ function requestLocationInBackground(): void {
       const lat = Number(position.coords.latitude);
       const lon = Number(position.coords.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        reportLocationDebugEvent('foreground_location_invalid', {
-          message: 'Invalid foreground coordinates',
-          payload: { lat, lon },
-        });
         return;
       }
 
       const rawAccuracy = Number(position.coords.accuracy);
-      const accuracy = Number.isFinite(rawAccuracy)
-        ? Math.round(rawAccuracy * 10) / 10
-        : undefined;
+      const accuracy = Number.isFinite(rawAccuracy) ? Math.round(rawAccuracy * 10) / 10 : undefined;
 
       const capturedAt = new Date(position.timestamp || Date.now()).toISOString();
       cachedClientContext = {
@@ -102,20 +91,10 @@ function requestLocationInBackground(): void {
           source: 'expo_location',
         },
       };
-      reportLocationDebugEvent('foreground_context_location_captured', {
-        payload: {
-          lat,
-          lon,
-          accuracy_m: accuracy,
-          captured_at: capturedAt,
-        },
-      });
+
       syncLocationToBackend();
-    } catch (error) {
-      reportLocationDebugEvent('foreground_location_error', {
-        error,
-      });
-      // Best-effort only; keep timezone/locale context when location fails.
+    } catch {
+      /* Best effort; keep the existing recovery path. */
     } finally {
       locationRequestInFlight = false;
     }
@@ -125,66 +104,28 @@ function requestLocationInBackground(): void {
 function syncLocationToBackend(): void {
   const location = cachedClientContext?.location;
   if (!location || locationSyncInFlight) {
-    if (!location) {
-      reportLocationDebugEvent('location_sync_skipped', {
-        message: 'No location in client context',
-      });
-    }
     return;
   }
 
   if (lastSyncedLocation) {
     const movedMeters = calculateDistanceMeters(location, lastSyncedLocation);
     if (movedMeters < LOCATION_SYNC_MIN_DISTANCE_METERS) {
-      reportLocationDebugEvent('location_sync_skipped', {
-        message: `Movement below threshold (${Math.round(movedMeters)}m)`,
-        payload: {
-          moved_meters: Math.round(movedMeters),
-          threshold_meters: LOCATION_SYNC_MIN_DISTANCE_METERS,
-        },
-      });
       return;
     }
   }
 
   const signature = `${location.lat}:${location.lon}`;
   if (lastSyncedLocation && signature === `${lastSyncedLocation.lat}:${lastSyncedLocation.lon}`) {
-    reportLocationDebugEvent('location_sync_skipped', {
-      message: 'Same coordinates already synced',
-      payload: { lat: location.lat, lon: location.lon },
-    });
     return;
   }
 
   locationSyncInFlight = true;
   void (async () => {
-    const runtimeState = getLocationRuntimeState();
     try {
-      const { token, authDiagnostics } = await getAuthRequestContext();
+      const { token } = await getAuthRequestContext();
       if (!token) {
-        reportLocationDebugEvent('location_sync_skipped', {
-          message: 'Auth token not ready for foreground sync',
-          payload: {
-            api_base_url: API_BASE_URL,
-            app_state: runtimeState.appState,
-            captured_at: location.captured_at,
-            ...authDiagnostics,
-          },
-        });
         return;
       }
-
-      reportLocationDebugEvent('location_sync_attempt', {
-        payload: {
-          lat: location.lat,
-          lon: location.lon,
-          captured_at: location.captured_at,
-          api_base_url: API_BASE_URL,
-          app_state: runtimeState.appState,
-          last_app_state_change_at: runtimeState.lastAppStateChangeAt,
-          ...authDiagnostics,
-        },
-      });
 
       await apiFetch('/mobile/location', {
         method: 'POST',
@@ -196,40 +137,8 @@ function syncLocationToBackend(): void {
       });
 
       lastSyncedLocation = { ...location };
-      reportLocationDebugEvent('location_sync_success', {
-        payload: {
-          lat: location.lat,
-          lon: location.lon,
-          captured_at: location.captured_at,
-          ...authDiagnostics,
-        },
-      });
-    } catch (error) {
-      const errorWithMeta = error as Error & {
-        status?: number;
-        authExpired?: boolean;
-        contentType?: string;
-        bodyPreview?: string;
-        requestUrl?: string;
-        tokenPresent?: boolean;
-        authDiagnostics?: Record<string, unknown>;
-      };
-      reportLocationDebugEvent('location_sync_error', {
-        message: errorWithMeta.message,
-        error,
-        payload: {
-          api_base_url: API_BASE_URL,
-          app_state: runtimeState.appState,
-          captured_at: location.captured_at,
-          status: errorWithMeta.status,
-          auth_expired: errorWithMeta.authExpired,
-          content_type: errorWithMeta.contentType,
-          response_preview: errorWithMeta.bodyPreview,
-          request_url: errorWithMeta.requestUrl,
-          token_present: errorWithMeta.tokenPresent,
-          ...(errorWithMeta.authDiagnostics ?? {}),
-        },
-      });
+    } catch {
+      /* Best effort; keep the existing recovery path. */
     } finally {
       locationSyncInFlight = false;
     }
@@ -249,8 +158,6 @@ export function getClientContext(): ClientContext {
   }
   return {
     ...(cachedClientContext ?? {}),
-    location: cachedClientContext?.location
-      ? { ...cachedClientContext.location }
-      : undefined,
+    location: cachedClientContext?.location ? { ...cachedClientContext.location } : undefined,
   };
 }

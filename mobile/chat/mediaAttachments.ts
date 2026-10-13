@@ -1,7 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import type * as ImagePicker from 'expo-image-picker';
 
-import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
 import { resolvePickedImageAsset, type ResolvedPickedImageAsset } from '@/media/pickedImageAsset';
 
 export const MAX_CHAT_MEDIA_ATTACHMENTS = 5;
@@ -43,7 +42,11 @@ function exifDateToIso(value: unknown): string | null {
   );
   if (exifMatch) {
     const [, year, month, day, hour, minute, second, suffix] = exifMatch;
-    const timezone = suffix ? (suffix.includes(':') || suffix === 'Z' ? suffix : `${suffix.slice(0, 3)}:${suffix.slice(3)}`) : 'Z';
+    const timezone = suffix
+      ? suffix.includes(':') || suffix === 'Z'
+        ? suffix
+        : `${suffix.slice(0, 3)}:${suffix.slice(3)}`
+      : 'Z';
     return `${year}-${month}-${day}T${hour}:${minute}:${second}${timezone}`;
   }
 
@@ -92,13 +95,6 @@ export async function buildComposerMediaAttachment(
   if (!contentBase64.trim()) {
     throw new Error('Unable to read that photo right now.');
   }
-
-  void appendEventPhotoDebugLog('chat-media-attachment-built', {
-    attachmentFileName: resolvedAsset.fileName,
-    localAssetId: resolvedAsset.assetId ?? null,
-    sizeBytes: fileSize,
-    debug: resolvedAsset.debug,
-  });
 
   return {
     attachmentId: `chat-media-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`,

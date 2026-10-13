@@ -27,13 +27,8 @@ class RuntimeLocationUploadWorker(
 ) : CoroutineWorker(context, params) {
   override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
     val startedAt = SystemClock.elapsedRealtime()
-    val energyBefore = RuntimeEnergyDiagnostics.sample(applicationContext)
     val workerId = id.toString()
-    RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_started", mapOf(
-      "worker_id" to workerId,
-      "run_attempt" to runAttemptCount,
-      "owner_enabled" to (RuntimeFeature.LOCATION in DigitalBrainRuntime.owners(applicationContext)),
-    ))
+
     var uploaded = 0
     var lastStatus: Int? = null
     var outcome = "unknown"
@@ -50,61 +45,32 @@ class RuntimeLocationUploadWorker(
 
     try {
       if (RuntimeFeature.LOCATION !in DigitalBrainRuntime.owners(applicationContext)) {
-        RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_blocked", mapOf(
-          "worker_id" to workerId,
-          "reason" to "tracking_disabled",
-        ))
+
         finish("tracking_disabled", Result.success())
       } else {
       val config = RuntimeLocationUploadConfigStore.load(applicationContext)
       if (config == null) {
-          RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_blocked", mapOf(
-            "worker_id" to workerId,
-            "reason" to "configuration_unavailable",
-          ))
+
           finish("configuration_unavailable", Result.success())
       } else {
-          RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_config_loaded", mapOf(
-            "worker_id" to workerId,
-            "config_available" to true,
-            "api_endpoint" to RuntimeLocationUploadConfigStore.diagnosticSnapshot(applicationContext)["endpoint"],
-          ))
+
           val batch = RuntimeLocationStore.pendingSamples(applicationContext)
             .sortedBy(RuntimeLocationSample::timestamp)
             .take(MAX_SAMPLES_PER_RUN)
-          RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_queue_loaded", mapOf(
-            "worker_id" to workerId,
-            "sample_count" to batch.size,
-            "queue_size" to RuntimeLocationStore.pendingSamples(applicationContext).size,
-          ))
+
           if (batch.isEmpty()) {
             finish("queue_empty", Result.success())
           } else {
-            RuntimeLocationDiagnostics.record(applicationContext, "auth_token_requested", mapOf(
-              "worker_id" to workerId,
-              "phase" to "initial",
-            ))
+
             val initialToken = try {
               freshIdToken(config.googleWebClientId)
             } catch (error: Exception) {
-              RuntimeLocationDiagnostics.record(applicationContext, "auth_token_failed", mapOf(
-                "worker_id" to workerId,
-                "phase" to "initial",
-                "error_type" to error.javaClass.simpleName,
-              ))
+
               throw error
             }
-            RuntimeLocationDiagnostics.record(applicationContext, "auth_token_result", mapOf(
-              "worker_id" to workerId,
-              "phase" to "initial",
-              "auth_available" to (initialToken != null),
-            ))
+
             if (initialToken == null) {
-              RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_blocked", mapOf(
-                "worker_id" to workerId,
-                "reason" to "auth_unavailable",
-                "queue_size" to batch.size,
-              ))
+
               finish("auth_unavailable", Result.success())
             } else {
               var token: String = requireNotNull(initialToken)
@@ -112,96 +78,38 @@ class RuntimeLocationUploadWorker(
               for (sample in batch) {
                 if (SystemClock.elapsedRealtime() >= deadline) {
                   scheduleBacklog = true
-                  RuntimeLocationDiagnostics.record(applicationContext, "upload_run_budget_reached", mapOf(
-                    "worker_id" to workerId,
-                    "sample_index" to (uploaded + 1),
-                    "sample_total" to batch.size,
-                  ))
+
                   finish("run_budget_reached", Result.success())
                   break
                 }
                 if (RuntimeFeature.LOCATION !in DigitalBrainRuntime.owners(applicationContext)) {
-                  RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_blocked", mapOf(
-                    "worker_id" to workerId,
-                    "reason" to "tracking_disabled_mid_run",
-                    "sample_index" to (uploaded + 1),
-                  ))
+
                   finish("tracking_disabled", Result.success())
                   break
                 }
 
                 val requestId = RuntimeLocationDebugId.requestId(sample.id)
-                RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_started", mapOf(
-                  "worker_id" to workerId,
-                  "sample_key" to requestId,
-                  "request_id" to requestId,
-                  "sample_index" to (uploaded + 1),
-                  "sample_total" to batch.size,
-                  "captured_at" to capturedAt(sample.timestamp),
-                  "capture_age_ms" to (System.currentTimeMillis() - sample.timestamp).coerceAtLeast(0),
-                  "run_attempt" to runAttemptCount,
-                ))
+
                 val requestStartedAt = SystemClock.elapsedRealtime()
                 var response = postSample(config.apiBaseUrl, sample, token)
                 lastStatus = response.status
-                RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_response", mapOf(
-                  "worker_id" to workerId,
-                  "sample_key" to requestId,
-                  "request_id" to requestId,
-                  "http_status" to response.status,
-                  "http_success" to response.success,
-                  "content_type" to response.contentType,
-                  "response_bytes" to response.responseBytes,
-                  "validation_issues" to response.validationIssues,
-                  "request_duration_ms" to (SystemClock.elapsedRealtime() - requestStartedAt),
-                  "error_type" to response.errorType,
-                ))
+
                 if (response.status == 401) {
-                  RuntimeLocationDiagnostics.record(applicationContext, "auth_token_requested", mapOf(
-                    "worker_id" to workerId,
-                    "phase" to "after_401",
-                    "sample_key" to requestId,
-                  ))
+
                   val refreshedToken = try {
                     freshIdToken(config.googleWebClientId)
                   } catch (error: Exception) {
-                    RuntimeLocationDiagnostics.record(applicationContext, "auth_token_failed", mapOf(
-                      "worker_id" to workerId,
-                      "phase" to "after_401",
-                      "sample_key" to requestId,
-                      "error_type" to error.javaClass.simpleName,
-                    ))
+
                     throw error
                   }
-                  RuntimeLocationDiagnostics.record(applicationContext, "auth_token_result", mapOf(
-                    "worker_id" to workerId,
-                    "phase" to "after_401",
-                    "sample_key" to requestId,
-                    "auth_available" to (refreshedToken != null),
-                  ))
+
                   if (refreshedToken != null) {
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_retry", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "reason" to "http_401_token_refresh",
-                    ))
+
                     token = refreshedToken
                     val retryStartedAt = SystemClock.elapsedRealtime()
                     response = postSample(config.apiBaseUrl, sample, token)
                     lastStatus = response.status
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_response", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "request_id" to requestId,
-                      "phase" to "after_401_refresh",
-                      "http_status" to response.status,
-                      "http_success" to response.success,
-                      "content_type" to response.contentType,
-                      "response_bytes" to response.responseBytes,
-                      "validation_issues" to response.validationIssues,
-                      "request_duration_ms" to (SystemClock.elapsedRealtime() - retryStartedAt),
-                      "error_type" to response.errorType,
-                    ))
+
                   }
                 }
 
@@ -209,11 +117,7 @@ class RuntimeLocationUploadWorker(
                   try {
                     RuntimeLocationStore.acknowledge(applicationContext, setOf(sample.id))
                   } catch (error: Exception) {
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_acknowledgement_failed", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "error_type" to error.javaClass.simpleName,
-                    ))
+
                     throw error
                   }
                   uploaded++
@@ -223,50 +127,25 @@ class RuntimeLocationUploadWorker(
 
                 when {
                   response.status == 401 -> {
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_failed", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "reason" to "auth_rejected",
-                      "http_status" to 401,
-                    ))
+
                     finish("auth_rejected", Result.success())
                   }
                   response.status == 408 || response.status == 429 || (response.status != null && response.status >= 500) ->
                     {
-                      RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_failed", mapOf(
-                        "worker_id" to workerId,
-                        "sample_key" to requestId,
-                        "reason" to "server_or_rate_limit",
-                        "http_status" to response.status,
-                      ))
+
                       finish("server_or_rate_limit", Result.retry())
                     }
                   response.status != null && response.status in 200..299 ->
                     {
-                      RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_failed", mapOf(
-                        "worker_id" to workerId,
-                        "sample_key" to requestId,
-                        "reason" to "unexpected_success_response",
-                        "http_status" to response.status,
-                      ))
+
                       finish("unexpected_success_response", Result.retry())
                     }
                   response.status == null -> {
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_failed", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "reason" to "network_error",
-                      "error_type" to response.errorType,
-                    ))
+
                     finish("network_error", Result.retry())
                   }
                   else -> {
-                    RuntimeLocationDiagnostics.record(applicationContext, "sample_upload_failed", mapOf(
-                      "worker_id" to workerId,
-                      "sample_key" to requestId,
-                      "reason" to "http_error",
-                      "http_status" to response.status,
-                    ))
+
                     finish("http_error", Result.success())
                   }
                 }
@@ -283,18 +162,13 @@ class RuntimeLocationUploadWorker(
         RuntimeLocationUploadScheduler.enqueue(applicationContext, "native_upload_backlog")
       }
     } catch (error: Exception) {
-      RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_exception", mapOf(
-        "worker_id" to workerId,
-        "error_type" to error.javaClass.simpleName,
-        "run_attempt" to runAttemptCount,
-      ))
+
       Log.w("DigitalBrainRuntime", "native_upload_failed type=${error.javaClass.simpleName}")
       finish("worker_error", Result.retry())
     }
 
     val durationMs = SystemClock.elapsedRealtime() - startedAt
     val remaining = runCatching { RuntimeLocationStore.pendingSamples(applicationContext).size }.getOrDefault(-1)
-    val energyAfter = RuntimeEnergyDiagnostics.sample(applicationContext)
     RuntimeLocationUploadStats.record(
       applicationContext,
       durationMs,
@@ -302,34 +176,8 @@ class RuntimeLocationUploadWorker(
       uploaded,
       lastStatus,
       remaining,
-      counterDelta(energyBefore, energyAfter, "processCpuMs"),
-      counterDelta(energyBefore, energyAfter, "intervalDeviceAwakeMs"),
-      counterDelta(energyBefore, energyAfter, "intervalBatteryChargeDeltaMicroAh"),
     )
-    RuntimeLocationDiagnostics.record(applicationContext, "upload_worker_finished", mapOf(
-      "worker_id" to workerId,
-      "run_attempt" to runAttemptCount,
-      "uploaded_count" to uploaded,
-      "queue_size" to remaining,
-      "outcome" to outcome,
-      "result" to when (result) {
-        is Result.Retry -> "retry"
-        is Result.Success -> "success"
-        is Result.Failure -> "failure"
-        else -> "unknown"
-      },
-      "http_status" to lastStatus,
-      "duration_ms" to durationMs,
-      "retry_backoff_ms" to if (retryRequested) 300_000 else null,
-    ))
-    Log.i(
-      "DigitalBrainRuntime",
-      "native_upload_finished duration_ms=$durationMs uploaded=$uploaded queued=$remaining outcome=$outcome " +
-        "process_cpu_ms=${counterDelta(energyBefore, energyAfter, "processCpuMs")} " +
-        "device_awake_ms=${counterDelta(energyBefore, energyAfter, "intervalDeviceAwakeMs")} " +
-        "battery_charge_delta_uah=${counterDelta(energyBefore, energyAfter, "intervalBatteryChargeDeltaMicroAh")} " +
-        "http_status=${lastStatus ?: 0}",
-    )
+
     result
   }
 
@@ -379,26 +227,9 @@ class RuntimeLocationUploadWorker(
       }
       val validationBody = if (status == 422) readBounded(connection.errorStream, MAX_DIAGNOSTIC_RESPONSE_BYTES) else null
       val validationIssues = validationBody?.let(::safeValidationIssues).orEmpty()
-      UploadResponse(status, validSuccess, responseKind, null, validationBody?.size, validationIssues).also { response ->
-        RuntimeLocationDiagnostics.record(applicationContext, "http_request_completed", mapOf(
-          "sample_key" to requestId,
-          "request_id" to requestId,
-          "http_status" to status,
-          "http_success" to validSuccess,
-          "content_type" to responseKind,
-          "response_bytes" to response.responseBytes,
-          "validation_issues" to response.validationIssues,
-          "request_duration_ms" to (SystemClock.elapsedRealtime() - startedAt),
-        ))
-      }
+      UploadResponse(status, validSuccess, responseKind, null, validationBody?.size, validationIssues)
     } catch (error: IOException) {
-      RuntimeLocationDiagnostics.record(applicationContext, "http_request_failed", mapOf(
-        "sample_key" to requestId,
-        "request_id" to requestId,
-        "phase" to phase,
-        "error_type" to error.javaClass.simpleName,
-        "request_duration_ms" to (SystemClock.elapsedRealtime() - startedAt),
-      ))
+
       UploadResponse(null, false, "unknown", error.javaClass.simpleName, null, emptyList())
     } finally {
       connection.disconnect()
@@ -447,12 +278,6 @@ class RuntimeLocationUploadWorker(
       if (safePath.isBlank()) type else "$type:$safePath"
     }
   }.getOrDefault(emptyList())
-
-  private fun counterDelta(before: Map<String, Any?>, after: Map<String, Any?>, key: String): Long {
-    val start = before[key] as? Number ?: return 0L
-    val end = after[key] as? Number ?: return 0L
-    return end.toLong() - start.toLong()
-  }
 
   private data class UploadResponse(
     val status: Int?,

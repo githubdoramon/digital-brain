@@ -12,6 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { clearRetiredDebugArtifacts } from '@/debug/retiredDebugArtifacts';
 import { syncGlassesSignedIn } from '@/glasses/runtime';
 import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
@@ -53,6 +54,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     ensureAppStateTracking();
+    void clearRetiredDebugArtifacts().catch(() => undefined);
   }, []);
 
   if (!loaded) {
@@ -161,7 +163,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
                 await Linking.sendIntent('android.intent.action.VIEW_DOWNLOADS');
                 return;
               } catch {
-                // Fall through to home navigation.
+                /* Best effort; keep the existing recovery path. */
               }
               router.push('/home');
             });

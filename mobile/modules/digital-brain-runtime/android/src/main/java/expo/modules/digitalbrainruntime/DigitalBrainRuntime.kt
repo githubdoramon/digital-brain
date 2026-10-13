@@ -19,6 +19,7 @@ object DigitalBrainRuntime {
 
   @Synchronized fun owners(context: Context): Set<RuntimeFeature> {
     if (!loaded) {
+      RuntimeLocationDiagnostics.clearLegacyHistory(context)
       val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       features.restore(prefs.getStringSet("owners", emptySet()) ?: emptySet())
       loaded = true
@@ -33,10 +34,7 @@ object DigitalBrainRuntime {
     check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
       .putStringSet("owners", features.persistentKeys())
       .commit()) { "Could not persist runtime owners" }
-    RuntimeLocationDiagnostics.record(context, "runtime_owner_changed", mapOf(
-      "reason" to feature.key,
-      "owner_enabled" to enabled,
-    ))
+
     Log.i("DigitalBrainRuntime", "owner=${feature.key} enabled=$enabled")
     if (feature == RuntimeFeature.LOCATION) {
       if (!enabled) {
@@ -73,8 +71,6 @@ object DigitalBrainRuntime {
       "foregroundTypes" to (service?.foregroundTypes ?: 0),
       "nativeLocationQueueSize" to (nativeQueue["count"] as? Int ?: -1),
       "nativeLocationQueueSnapshot" to nativeQueue,
-      "nativeLocationRecentEvents" to RuntimeLocationDiagnostics.recentEvents(context),
-      "nativeLocationDiagnosticsInfo" to RuntimeLocationDiagnostics.historySnapshot(context),
       "nativeLocationWorkManager" to RuntimeLocationDiagnostics.workManagerSnapshot(context),
       "nativeLocationUploadConfig" to RuntimeLocationUploadConfigStore.diagnosticSnapshot(context),
     ) + RuntimeLocationUploadStats.snapshot(context)

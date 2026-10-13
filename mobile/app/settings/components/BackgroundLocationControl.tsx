@@ -32,7 +32,7 @@ export function BackgroundLocationControl() {
     }
   };
   return (
-    <Card style={{ marginBottom: 16, padding: 16 }}>
+    <Card style={{ marginTop: 16, padding: 20 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text style={{ color: theme.colors.ink, fontWeight: '600', fontSize: 16 }}>
           Location tracking
@@ -45,9 +45,7 @@ export function BackgroundLocationControl() {
         />
       </View>
       <Text style={{ color: theme.colors.mutedInk, marginTop: 8 }}>
-        Request location about every ten minutes after moving at least 50 metres. Updates may arrive
-        in batches with up to twenty minutes of delay. Active features share one Digital Brain
-        notification.
+        Save your location automatically to help your Brain remember places you visit.
       </Text>
     </Card>
   );
