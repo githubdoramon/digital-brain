@@ -285,7 +285,7 @@ class TestExtractionGating:
     @patch("llm_helpers.call_llm_json")
     @patch("fact_extraction._get_contacts_summary", return_value="")
     @patch("user_facts.get_user_facts", return_value=[])
-    def test_extraction_uses_smart_model_with_high_effort(
+    def test_extraction_uses_smart_model_with_medium_effort(
         self,
         _mock_get_facts,
         _mock_contacts_summary,
@@ -303,7 +303,7 @@ class TestExtractionGating:
         )
 
         assert mock_call_llm_json.call_args.kwargs["use_fast_model"] is False
-        assert mock_call_llm_json.call_args.kwargs["reasoning_effort"] == "xhigh"
+        assert mock_call_llm_json.call_args.kwargs["reasoning_effort"] == "medium"
 
 
 class TestExtractionPromptBuilding:
