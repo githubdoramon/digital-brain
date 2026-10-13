@@ -73,7 +73,8 @@ class DigitalBrainRuntimeService : Service() {
     val glassesTypes = if (wantsGlasses && RuntimeGlasses.permitted(this)) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
     val recordingTypes = if ((GlassesRecording.capturing || GlassesListening.foregroundOwned) && glassesTypes != 0 && granted(Manifest.permission.RECORD_AUDIO))
       ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
-    val types = locationTypes or glassesTypes or recordingTypes
+    val savingTypes = if (GlassesRecordingSaves.working) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
+    val types = locationTypes or glassesTypes or recordingTypes or savingTypes
     if (wantsLocation && !locationPermitted) {
       DigitalBrainRuntime.lastError = "Location permission or device location is unavailable"
       RuntimeLocationDiagnostics.record(this, "runtime_location_blocked", mapOf(
@@ -123,8 +124,9 @@ class DigitalBrainRuntimeService : Service() {
   private fun showNotification(types: Int) {
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel("digital_brain_runtime", "Digital Brain activity", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
-    val body = if (GlassesListening.foregroundOwned && !GlassesRecording.capturing) "Listening for speech through your glasses"
+    val body = if (GlassesListening.foregroundOwned && !GlassesRecording.capturing) "Listening for Hey Brain through your glasses"
       else if (GlassesRecording.capturing) "Glasses microphone is active. Tap Stop recording to save."
+      else if (GlassesRecordingSaves.working) "Preparing your recordings"
       else when (types) {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> "Maintaining your glasses connection"
         ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> "Background location capture is active"
@@ -155,9 +157,17 @@ class DigitalBrainRuntimeService : Service() {
     listOf(1001, 4017, 4308).forEach(manager::cancel)
   }
 
+  override fun onTimeout(startId: Int, fgsType: Int) {
+    if (fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC != 0) {
+      GlassesRecordingSaves.pauseForTimeout()
+      refresh(forceNotification = true)
+    } else stopSelf()
+  }
+
   override fun onDestroy() {
     // Recording teardown must not promote a service that is being destroyed.
     if (DigitalBrainRuntime.service === this) DigitalBrainRuntime.service = null
+    GlassesRecordingSaves.pauseForTimeout()
     RuntimeGlasses.stop()
     location.stop("service_destroyed")
     foregroundTypes = 0

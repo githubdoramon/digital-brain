@@ -315,6 +315,25 @@ def mark_succeeded(
         conn.commit()
 
 
+def clear_succeeded_payload(job_id: str, *, revision: int | None = None) -> None:
+    """Clear a completed job's payload when it contained temporary user context."""
+    params: list[Any] = [job_id, AsyncJobStatus.SUCCEEDED.value]
+    revision_clause = ""
+    if revision is not None:
+        revision_clause = "AND revision = %s"
+        params.append(revision)
+    query = """
+        UPDATE async_jobs
+        SET payload = '{}'::jsonb, updated_at = NOW()
+        WHERE job_id = %s AND status = %s
+    """
+    if revision_clause:
+        query = f"{query} {revision_clause}"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(query, params)
+        conn.commit()
+
+
 def mark_failed(
     job_id: str,
     *,

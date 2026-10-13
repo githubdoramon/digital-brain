@@ -547,24 +547,7 @@ def confirm_event_command(
                     placeholder_name = oid[4:]
                     entity = new_entity_lookup.get(placeholder_name, {})
                     display_name = entity.get("display_name") or placeholder_name
-                    inferred_profession = entity.get("inferred_profession")
                     comments = entity.get("comments")
-                    if inferred_profession:
-                        has_profession = bool(comments) and re.search(
-                            r"\bprofession\b", comments, re.IGNORECASE
-                        )
-                        has_match = bool(comments) and re.search(
-                            rf"\b{re.escape(inferred_profession)}\b",
-                            comments,
-                            re.IGNORECASE,
-                        )
-                        if not has_profession and not has_match:
-                            profession_line = f"Profession: {inferred_profession}"
-                            comments = (
-                                f"{comments}\n\n{profession_line}".strip()
-                                if comments
-                                else profession_line
-                            )
                     contact_slug = _safe_entity_slug(display_name) or "contact"
                     contact_id = f"contact:{contact_slug}-{uuid4().hex[:6]}"
                     contact_in = ContactIn(
@@ -598,20 +581,7 @@ def confirm_event_command(
 
         for new_contact in new_contacts_to_create:
             display_name = new_contact["display_name"]
-            inferred_profession = new_contact.get("inferred_profession")
             comments = new_contact.get("comments")
-            if inferred_profession:
-                has_profession = bool(comments) and re.search(
-                    r"\bprofession\b", comments, re.IGNORECASE
-                )
-                has_match = bool(comments) and re.search(
-                    rf"\b{re.escape(inferred_profession)}\b", comments, re.IGNORECASE
-                )
-                if not has_profession and not has_match:
-                    profession_line = f"Profession: {inferred_profession}"
-                    comments = (
-                        f"{comments}\n\n{profession_line}".strip() if comments else profession_line
-                    )
             contact_slug = _safe_entity_slug(display_name) or "contact"
             contact_id = f"contact:{contact_slug}-{uuid4().hex[:6]}"
 
@@ -634,7 +604,9 @@ def confirm_event_command(
         if confirmed_relationships_present:
             confirmed_relationships = normalized_modifications.get("confirmed_relationships") or []
         else:
-            confirmed_relationships = command_data.get("relationship_suggestions") or []
+            # Only relationships explicitly confirmed in the preview are saved
+            # here. Inferred suggestions go through the review inbox.
+            confirmed_relationships = []
 
         if confirmed_relationships:
             existing_contact_map = {
@@ -1042,6 +1014,22 @@ def confirm_event_command(
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_event_resolved(payload.preview_id, "updated" if is_update else "created")
+
+        try:
+            import contact_enrichment_jobs
+
+            contact_enrichment_jobs.enqueue_contact_enrichment(
+                user_email=user_email,
+                source_key=f"event:{event_id}",
+                source_text=str(command_data.get("original_message") or ""),
+                contact_ids=all_contact_ids,
+                source_event_id=event_id,
+            )
+        except Exception:
+            logger.warning(
+                "[event_confirm] Could not queue post-confirmation contact enrichment",
+                exc_info=True,
+            )
 
         return EventCommandResult(
             success=True,

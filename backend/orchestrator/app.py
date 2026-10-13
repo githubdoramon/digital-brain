@@ -8,6 +8,7 @@ import fastapi
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import contact_enrichment_jobs
 import contact_tag_jobs
 import conversations
 import daily_briefing_jobs
@@ -43,6 +44,7 @@ from routes.google_calendar import create_google_calendar_router
 from routes.microsoft_calendar import create_microsoft_calendar_router
 from routes.news import create_news_router
 from routes.places import create_places_router
+from routes.proposals import create_proposals_router
 from routes.proposed_events import create_proposed_events_router
 from routes.system import create_system_router
 from routes.todos import create_todos_router
@@ -153,6 +155,7 @@ async def lifespan(_app: FastAPI):
     document_tag_jobs.start_worker()
     document_enhancement_jobs.start_worker()
     contact_tag_jobs.start_worker()
+    contact_enrichment_jobs.start_worker()
     daily_briefing_jobs.start_worker()
     emergency_stock_jobs.start_worker()
     database_backup_jobs.start_worker()
@@ -169,6 +172,7 @@ async def lifespan(_app: FastAPI):
         emergency_stock_jobs.stop_worker()
         daily_briefing_jobs.stop_worker()
         contact_tag_jobs.stop_worker()
+        contact_enrichment_jobs.stop_worker()
         document_tag_jobs.stop_worker()
         document_enhancement_jobs.stop_worker()
         event_tag_jobs.stop_worker()
@@ -185,6 +189,7 @@ api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
 api.include_router(create_places_router())
 api.include_router(create_proposed_events_router())
+api.include_router(create_proposals_router())
 api.include_router(create_todos_router())
 api.include_router(create_events_router())
 api.include_router(create_google_calendar_router())

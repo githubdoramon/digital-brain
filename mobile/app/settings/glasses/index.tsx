@@ -217,9 +217,7 @@ export default function GlassesSettingsScreen() {
           </Card>
           <Card style={styles.card}>
             <Text style={styles.title}>Listening</Text>
-            <Text style={styles.body}>
-              Save speech from your glasses as timestamped transcripts.
-            </Text>
+            <Text style={styles.body}>Say Hey Brain to capture a command.</Text>
             <Button
               label="Glasses listening"
               variant="secondary"

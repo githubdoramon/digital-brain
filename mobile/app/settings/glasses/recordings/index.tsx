@@ -46,7 +46,7 @@ type AudioFile = {
 function recorder() {
   const native = glassesNative();
   if (!native.startGlassesRecording)
-    throw new Error('Install a new Android build to record from glasses.');
+    throw new Error('Recording is unavailable. Update the app and try again.');
   return native;
 }
 function stopPlaybackQuietly() {
@@ -82,8 +82,11 @@ export default function GlassesRecordingsScreen() {
   const [name, setName] = React.useState('');
   const [listRevision, setListRevision] = React.useState(0);
   const active = status?.state === 'RECORDING';
-  const saving = status?.state === 'SAVING';
-  const failedSave = status?.state === 'SAVE_FAILED';
+  const starting = status?.state === 'STARTING';
+  const processing = status?.processing ?? [];
+  const visibleFiles = files.filter(
+    (file) => !processing.some((job) => job.targetUri === file.uri),
+  );
   const playback = status?.playback;
 
   const refreshStatus = React.useCallback(async () => {
@@ -117,12 +120,11 @@ export default function GlassesRecordingsScreen() {
       showError(e instanceof Error ? e.message : 'Could not read Recordings.'),
     );
   }, [listRevision, refreshFiles, showError]);
-  const lastState = React.useRef<string | undefined>(undefined);
+  const lastRevision = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
-    if (lastState.current && lastState.current !== 'IDLE' && status?.state === 'IDLE')
-      setListRevision((n) => n + 1);
-    lastState.current = status?.state;
-  }, [status?.state]);
+    if (lastRevision.current !== status?.libraryRevision) setListRevision((n) => n + 1);
+    lastRevision.current = status?.libraryRevision;
+  }, [status?.libraryRevision]);
   useFocusEffect(
     React.useCallback(() => {
       let live = true;
@@ -193,7 +195,8 @@ export default function GlassesRecordingsScreen() {
           onPress: () =>
             void run(async () => {
               await recorder().stopGlassesRecordingPlayback();
-              if (!Storage) throw new Error('Install a new Android build to manage recordings.');
+              if (!Storage)
+                throw new Error('File management is unavailable. Update the app and try again.');
               await Storage.deleteFile(file.uri);
               showSuccess('Recording deleted.');
             }),
@@ -246,13 +249,11 @@ export default function GlassesRecordingsScreen() {
                 <Text style={[styles.badgeText, active && styles.liveText]}>
                   {active
                     ? 'RECORDING'
-                    : saving
-                      ? 'SAVING AUDIO'
-                      : failedSave
-                        ? 'SAVE PENDING'
-                        : status?.ready
-                          ? 'GLASSES READY'
-                          : 'GLASSES OFFLINE'}
+                    : starting
+                      ? 'STARTING'
+                      : status?.ready
+                        ? 'GLASSES READY'
+                        : 'GLASSES OFFLINE'}
                 </Text>
               </View>
             </View>
@@ -265,11 +266,7 @@ export default function GlassesRecordingsScreen() {
             </View>
             <Text style={styles.timer}>{clock(status?.durationMs ?? 0)}</Text>
             <Text style={styles.heroTitle}>
-              {active
-                ? 'Capture the moment'
-                : saving
-                  ? 'Saving your recording'
-                  : 'Audio from your glasses'}
+              {active ? 'Capture the moment' : 'Audio from your glasses'}
             </Text>
             <Text style={styles.heroBody}>
               {active
@@ -277,23 +274,13 @@ export default function GlassesRecordingsScreen() {
                 : 'Start here. Stop here. Your audio stays in your Recordings folder.'}
             </Text>
             <Button
-              label={
-                active
-                  ? 'Stop & save recording'
-                  : saving
-                    ? 'Saving…'
-                    : failedSave
-                      ? 'Retry saving recording'
-                      : 'Start recording'
-              }
+              label={active ? 'Stop & save recording' : 'Start recording'}
               variant={active ? 'danger' : 'primary'}
-              disabled={busy || saving || (!active && !failedSave && !status?.ready)}
+              disabled={busy || starting || (!active && (!status?.ready || !status.canStart))}
               loading={busy}
               onPress={() =>
                 void run(async () => {
                   if (active) await recorder().stopGlassesRecording();
-                  else if (failedSave)
-                    await recorder().retryGlassesRecordingSave(await baseFolder());
                   else await start();
                 })
               }
@@ -303,12 +290,17 @@ export default function GlassesRecordingsScreen() {
                 {status.message}
               </Text>
             )}
+            {!active && !starting && status?.ready && !status.canStart && (
+              <Text style={styles.note}>
+                Let a recording finish processing or retry a pending save to make room.
+              </Text>
+            )}
           </Card>
           <View style={styles.libraryHeader}>
             <View>
               <Text style={styles.sectionTitle}>Your recordings</Text>
               <Text style={styles.body}>
-                {files.length} audio {files.length === 1 ? 'file' : 'files'} · stored locally
+                {visibleFiles.length} saved · {processing.length} processing
               </Text>
             </View>
             <AppPressable
@@ -336,7 +328,7 @@ export default function GlassesRecordingsScreen() {
               />
             </Card>
           )}
-          {folder && files.length === 0 && (
+          {folder && visibleFiles.length === 0 && processing.length === 0 && (
             <Card style={styles.empty}>
               <Ionicons name="headset-outline" size={32} color={theme.colors.teal} />
               <Text style={styles.heroTitle}>A place for what you hear</Text>
@@ -346,7 +338,56 @@ export default function GlassesRecordingsScreen() {
               </Text>
             </Card>
           )}
-          {files.map((file) => {
+          {processing.map((job) => (
+            <Card key={job.id} style={styles.card}>
+              <View style={styles.fileTop}>
+                <View style={styles.playButton}>
+                  <Ionicons
+                    name={job.state === 'FAILED' ? 'alert-circle-outline' : 'hourglass-outline'}
+                    size={24}
+                    color={theme.colors.teal}
+                  />
+                </View>
+                <View style={styles.flex}>
+                  <Text style={styles.fileName} numberOfLines={2}>
+                    {job.name.replace(/\.[^.]+$/, '')}
+                  </Text>
+                  <Text accessibilityLiveRegion="polite" style={styles.fileMeta}>
+                    {job.state === 'FAILED'
+                      ? 'Could not save. Your audio is retained on this phone.'
+                      : job.state === 'COPYING'
+                        ? `Saving… ${job.progress ?? 0}%`
+                        : job.state === 'VERIFYING'
+                          ? 'Checking saved audio…'
+                          : job.state === 'QUEUED'
+                            ? 'Waiting to process…'
+                            : 'Processing…'}
+                  </Text>
+                  <Text style={styles.fileMeta}>
+                    {clock(job.durationMs)} · {new Date(job.startedAtMs).toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+              {job.state === 'COPYING' && (
+                <View style={styles.track}>
+                  <View style={[styles.progress, { width: `${job.progress ?? 0}%` }]} />
+                </View>
+              )}
+              {job.state === 'FAILED' && (
+                <Button
+                  label="Retry saving"
+                  variant="secondary"
+                  disabled={busy}
+                  onPress={() =>
+                    void run(async () => {
+                      await recorder().retryGlassesRecordingSave(await baseFolder(), job.id);
+                    })
+                  }
+                />
+              )}
+            </Card>
+          ))}
+          {visibleFiles.map((file) => {
             const selected = playback?.uri === file.uri;
             return (
               <Card key={file.uri} style={styles.card}>
@@ -355,7 +396,7 @@ export default function GlassesRecordingsScreen() {
                     accessibilityLabel={
                       selected && playback?.playing ? `Pause ${file.name}` : `Play ${file.name}`
                     }
-                    disabled={busy || active || saving || failedSave}
+                    disabled={busy || active || starting}
                     onPress={() =>
                       void run(async () => {
                         await recorder().playGlassesRecording(file.uri);
@@ -374,7 +415,7 @@ export default function GlassesRecordingsScreen() {
                       {file.name.replace(/\.[^.]+$/, '')}
                     </Text>
                     <Text style={styles.fileMeta}>
-                      {file.name.split('.').pop()?.toUpperCase()} · {size(file.bytes)}
+                      {size(file.bytes)}
                       {file.modifiedAtMs
                         ? ` · ${new Date(file.modifiedAtMs).toLocaleDateString()}`
                         : ''}
@@ -474,7 +515,7 @@ export default function GlassesRecordingsScreen() {
                     <Button
                       label="Rename"
                       variant="clear"
-                      disabled={busy || active || saving}
+                      disabled={busy || active || starting}
                       style={styles.flex}
                       onPress={() => {
                         setRenaming(file);
@@ -484,7 +525,7 @@ export default function GlassesRecordingsScreen() {
                     <Button
                       label="Delete"
                       variant="clear"
-                      disabled={busy || active || saving}
+                      disabled={busy || active || starting}
                       style={styles.flex}
                       onPress={() => remove(file)}
                     />
@@ -494,9 +535,7 @@ export default function GlassesRecordingsScreen() {
             );
           })}
           {playback?.error && <Text style={styles.error}>{playback.error}</Text>}
-          <Text style={styles.footer}>
-            Digital Brain / Recordings{'\n'}No upload. No transcription.
-          </Text>
+          <Text style={styles.footer}>Digital Brain / Recordings</Text>
         </Animated.ScrollView>
       </KeyboardAvoidingView>
     </View>

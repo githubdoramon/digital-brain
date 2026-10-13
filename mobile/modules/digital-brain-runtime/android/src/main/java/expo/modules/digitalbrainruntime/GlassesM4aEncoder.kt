@@ -8,7 +8,7 @@ import java.io.File
 
 /** Bounded AAC-LC encoding of the recoverable private PCM spool; no recording bytes enter JS. */
 object GlassesM4aEncoder {
-  fun encode(source: File, target: File) {
+  fun encode(source: File, target: File, keepGoing: () -> Boolean = { true }) {
     check(source.length() > 0 && source.length() % 2 == 0L) { "Recording contains no complete audio frames" }
     val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
     var muxer: MediaMuxer? = null
@@ -31,6 +31,7 @@ object GlassesM4aEncoder {
       val info = MediaCodec.BufferInfo()
       source.inputStream().buffered().use { input ->
         while (!outputEnded) {
+          check(keepGoing()) { "Recording save interrupted" }
           check(android.os.SystemClock.elapsedRealtime() - lastProgress < 30_000) { "Audio encoder stalled" }
           if (!inputEnded) {
             val index = codec.dequeueInputBuffer(10_000)

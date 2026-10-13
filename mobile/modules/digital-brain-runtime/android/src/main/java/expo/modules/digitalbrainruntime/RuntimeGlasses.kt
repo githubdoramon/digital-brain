@@ -45,6 +45,17 @@ object RuntimeGlasses {
   private val trail = ArrayDeque<Map<String, Any?>>()
 
   private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+  fun blinkWake(onQueued: () -> Unit, onFailure: () -> Unit) {
+    val owner = sdk
+    if (owner == null) { onFailure(); return }
+    val current = generation
+    scope.launch {
+      if (current != generation || owner !== sdk || !alertsReady()) { onFailure(); return@launch }
+      try {
+        if (owner.dispatchWakeLedFeedback()) onQueued() else onFailure()
+      } catch (_: Exception) { if (current == generation) onFailure() }
+    }
+  }
   fun signedIn(c: Context) = prefs(c).getBoolean("signed_in", false)
   fun enabled(c: Context) = RuntimeFeature.GLASSES in DigitalBrainRuntime.owners(c)
   fun permitted(c: Context): Boolean = if (Build.VERSION.SDK_INT >= 31) {

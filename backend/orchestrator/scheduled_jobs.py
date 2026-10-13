@@ -166,6 +166,21 @@ CONTACT_TAG_ENRICHMENT = ScheduledJobSpec(
     trigger_source="contact persistence",
 )
 
+CONTACT_ENRICHMENT = ScheduledJobSpec(
+    job_type="contact_enrichment",
+    label="Contact enrichment",
+    worker_module="contact_enrichment_jobs",
+    schedule_kind="debounced_async",
+    time_utc=None,
+    poll_seconds=30,
+    retry_seconds=300,
+    description=(
+        "Analyzes confirmed event/contact context for optional profession and relationship "
+        "suggestions and stores them for user review."
+    ),
+    trigger_source="confirmed event or contact command",
+)
+
 GOOGLE_CALENDAR_SYNC = ScheduledJobSpec(
     job_type="google_calendar_sync",
     label="Google Calendar sync",
@@ -214,6 +229,7 @@ SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     DOCUMENT_TAG_ENRICHMENT,
     DOCUMENT_ENHANCEMENT,
     CONTACT_TAG_ENRICHMENT,
+    CONTACT_ENRICHMENT,
     GOOGLE_CALENDAR_SYNC,
     MICROSOFT_CALENDAR_SYNC,
 )

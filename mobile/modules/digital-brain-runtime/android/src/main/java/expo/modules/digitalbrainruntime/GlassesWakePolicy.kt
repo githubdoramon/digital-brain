@@ -1,0 +1,138 @@
+package expo.modules.digitalbrainruntime
+
+import java.io.ByteArrayOutputStream
+
+internal interface GlassesWakeDetector {
+  fun accept(pcm: ByteArray): Boolean
+  fun reset()
+  fun release()
+}
+internal enum class WakeEnd { SILENCE, LIMIT }
+internal data class WakeCapture(val chunk: SpeechChunk, val wakeAtMs: Long, val endAtMs: Long, val reason: WakeEnd)
+
+/** Serial-worker state machine. No audio leaves memory before an accepted wake completes. */
+internal class GlassesWakePolicy(
+  private val detector: GlassesWakeDetector,
+  private val onWake: (Long) -> Unit,
+  private val onCapture: (WakeCapture) -> Unit,
+  private val onQuiet: () -> Unit,
+  initialWake: Long = -6000L,
+) {
+  companion object { const val SILENCE_MS = 1500L; const val COOLDOWN_MS = 6000L; const val MAX_BYTES = 30 * 32000 }
+  private var speech = false
+  private var silenceAt: Long? = null
+  private var lastPcm = 0L
+  private var lastAudioWall = 0L
+  private var lastWake = initialWake
+  private var wakeWall = 0L
+  private var startWall = 0L
+  private var capture: ByteArrayOutputStream? = null
+  private val history = PcmRing(4 * 32000)
+  private val gate = ByteArrayOutputStream()
+  private var gateOpen = false
+  private var quiet = false
+  private var flushedSilence = false
+  val capturing get() = capture != null
+  fun vad(value: Boolean, elapsed: Long) {
+    speech = value
+    if (value) silenceAt = null else if (silenceAt == null) silenceAt = elapsed
+  }
+  fun pcm(bytes: ByteArray, wall: Long, elapsed: Long, minimum: Int) {
+    val wasSpeech = speech
+    tick(wall, elapsed)
+    if (wasSpeech) speech = true
+    // A late PCM callback after firmware silence cannot create a new utterance.
+    if (!speech && capture == null) return
+    lastPcm = elapsed; lastAudioWall = wall
+    if (capture != null) {
+      appendCapture(bytes)
+      val voiced = speech && GlassesAudioLevel.db(bytes) >= (-60.0 + minimum * 0.4)
+      if (voiced) silenceAt = null else if (silenceAt == null) silenceAt = elapsed
+      if (capture!!.size() >= MAX_BYTES) finish(wall, WakeEnd.LIMIT)
+      return
+    }
+    if (elapsed - lastWake < COOLDOWN_MS) return
+    history.write(bytes)
+    if (!gateOpen) {
+      gate.write(bytes)
+      val pending = gate.toByteArray()
+      if (!GlassesAudioLevel.accepts(pending, minimum)) {
+        quiet = true
+        if (gate.size() > 3200) { gate.reset(); gate.write(pending.copyOfRange(pending.size - 3200, pending.size)) }
+        return
+      }
+      gateOpen = true; gate.reset()
+      // Replay bounded onset audio so the volume gate does not cut the wake phrase.
+      if (detector.accept(history.toByteArray())) begin(wall, elapsed)
+    } else if (detector.accept(bytes)) begin(wall, elapsed)
+  }
+  private fun begin(wall: Long, elapsed: Long) {
+    val seed = history.toByteArray()
+    capture = ByteArrayOutputStream().apply { write(seed) }
+    startWall = lastAudioWall - seed.size * 1000L / 32000
+    wakeWall = wall; lastWake = elapsed
+    onWake(elapsed)
+    history.reset(); gate.reset(); gateOpen = false; quiet = false
+  }
+  private fun appendCapture(bytes: ByteArray) { capture?.let { it.write(bytes, 0, minOf(bytes.size, MAX_BYTES - it.size())) } }
+  fun waitMs(elapsed: Long): Long {
+    val deadlines = mutableListOf<Long>()
+    silenceAt?.let {
+      deadlines.add(it + SILENCE_MS)
+      if (capture == null && gateOpen && !flushedSilence) deadlines.add(it + 100)
+    }
+    if (capture != null) deadlines.add(lastWake + 30_000)
+    if (lastPcm > 0) deadlines.add(lastPcm + 3000)
+    return ((deadlines.minOrNull() ?: (elapsed + 1000)) - elapsed).coerceIn(1, 1000)
+  }
+  fun tick(wall: Long, elapsed: Long) {
+    if (capture == null && gateOpen && !flushedSilence && silenceAt?.let { elapsed - it >= 100 } == true) {
+      flushedSilence = true
+      // Supply trailing decoder blanks when firmware suppresses quiet PCM; never save these as received audio.
+      if (detector.accept(ByteArray(9600))) begin(wall, elapsed)
+    }
+    if (capture != null && elapsed - lastWake >= 30_000) { finish(wall, WakeEnd.LIMIT); return }
+    if (silenceAt?.let { elapsed - it >= SILENCE_MS } == true) {
+      if (capture != null) finish(wall, WakeEnd.SILENCE) else resetUtterance()
+      speech = false; silenceAt = null
+    } else if (lastPcm > 0 && elapsed - lastPcm >= 3000) {
+      // Unknown transport loss is not proof of silence: discard rather than save partial audio.
+      discard(); speech = false; silenceAt = null
+    }
+  }
+  private fun finish(wall: Long, reason: WakeEnd) {
+    val bytes = capture?.toByteArray() ?: return
+    capture = null
+    onCapture(WakeCapture(SpeechChunk(startWall, bytes), wakeWall, wall, reason))
+    resetUtterance()
+  }
+  private fun resetUtterance() {
+    if (quiet && !gateOpen) onQuiet()
+    history.reset(); gate.reset(); gateOpen = false; quiet = false; flushedSilence = false; lastPcm = 0L; detector.reset()
+  }
+  fun discard() { capture = null; resetUtterance() }
+}
+
+/** Fixed PCM onset ring with no per-frame history copies or boxed samples. */
+internal class PcmRing(private val capacity: Int) {
+  private val data = ByteArray(capacity)
+  private var next = 0
+  private var size = 0
+  fun write(bytes: ByteArray) {
+    var offset = 0
+    while (offset < bytes.size) {
+      val n = minOf(capacity - next, bytes.size - offset)
+      bytes.copyInto(data, next, offset, offset + n)
+      next = (next + n) % capacity; size = minOf(capacity, size + n); offset += n
+    }
+  }
+  fun toByteArray(): ByteArray {
+    val output = ByteArray(size)
+    val start = (next - size + capacity) % capacity
+    val first = minOf(size, capacity - start)
+    data.copyInto(output, 0, start, start + first)
+    if (first < size) data.copyInto(output, first, 0, size - first)
+    return output
+  }
+  fun reset() { size = 0; next = 0 }
+}

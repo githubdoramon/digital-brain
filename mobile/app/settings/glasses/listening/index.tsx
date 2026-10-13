@@ -79,7 +79,10 @@ export default function GlassesListeningScreen() {
   }
   async function enable(value: boolean) {
     let model: string | null = null;
+    let base: string | null = null;
     if (value) {
+      base = (await getDigitalBrainStorageBaseUri()) ?? (await chooseDigitalBrainStorageBaseUri());
+      if (!base) return;
       const required = [
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
@@ -98,7 +101,7 @@ export default function GlassesListeningScreen() {
         ),
       );
     }
-    await glassesNative().setGlassesListening(value, model);
+    await glassesNative().setGlassesListening(value, model, base);
   }
   return (
     <View style={styles.screen}>
@@ -130,7 +133,7 @@ export default function GlassesListeningScreen() {
           <View style={styles.row}>
             <View style={styles.flex}>
               <Text style={styles.title}>Listen through glasses</Text>
-              <Text style={styles.body}>Save spoken English as timestamped transcripts.</Text>
+              <Text style={styles.body}>Say “Hey Brain,” then your command.</Text>
             </View>
             <Switch
               accessibilityLabel="Listen through glasses"
@@ -206,34 +209,45 @@ export default function GlassesListeningScreen() {
           <Text style={styles.body}>A higher minimum may also skip quiet speech.</Text>
         </Card>
         <Card style={styles.card}>
-          <Text style={styles.title}>Transcripts</Text>
+          <Text style={styles.title}>Wake captures</Text>
           <Text style={styles.count}>{status?.count ?? 0}</Text>
           <Text style={styles.body}>
             {status?.pending
-              ? `${status.pending} speech ${status.pending === 1 ? 'segment' : 'segments'} being processed`
-              : 'Saved transcripts'}
+              ? `${status.pending} ${status.pending === 1 ? 'capture' : 'captures'} being saved`
+              : 'Saved captures'}
           </Text>
           {!!status?.lastTranscriptAtMs && (
             <Text style={styles.body}>
               Last saved {new Date(status.lastTranscriptAtMs).toLocaleString()}
             </Text>
           )}
-          <Button
-            label="Export transcripts"
-            variant="secondary"
-            disabled={busy || !status?.count}
-            loading={busy && !setup}
-            onPress={() =>
-              void run(async () => {
-                const base =
-                  (await getDigitalBrainStorageBaseUri()) ??
-                  (await chooseDigitalBrainStorageBaseUri());
-                if (!base) return;
-                await glassesNative().exportGlassesTranscripts(base);
-                showSuccess('Transcripts saved to your Exports folder.');
-              })
-            }
-          />
+          <Text style={styles.body}>
+            Audio and transcripts are saved in Wake captures in your Digital Brain folder.
+          </Text>
+          {!!status?.savePending && (
+            <>
+              <Text style={styles.body}>
+                {status.savePending} {status.savePending === 1 ? 'capture needs' : 'captures need'}{' '}
+                saving.
+              </Text>
+              <Button
+                label="Retry saving"
+                variant="secondary"
+                disabled={busy}
+                loading={busy && !setup}
+                onPress={() =>
+                  void run(async () => {
+                    const base =
+                      (await getDigitalBrainStorageBaseUri()) ??
+                      (await chooseDigitalBrainStorageBaseUri());
+                    if (!base) return;
+                    await glassesNative().retryGlassesWakeSaves(base);
+                    showSuccess('Captures saved to your Wake captures folder.');
+                  })
+                }
+              />
+            </>
+          )}
         </Card>
       </Animated.ScrollView>
     </View>

@@ -34,7 +34,7 @@ Cellular ringing uses `TelephonyCallback` on Android 12+ and legacy native call-
 
 Silent/vibrate modes do not suppress media audio. **User decision: retain Android Do Not Disturb suppression when media is blocked.** System media mute/zero volume still applies; the UI reports this and offers Android sound settings. No global volume, ringer, or DND policy is modified. Preferred route is matched to the connected/saved glasses Bluetooth name, not a generic brand substring; actual output identity is verified before unmuting. No speaker fallback is intentional. Route loss still requires physical-device validation because Android/OEM audio policy owns the final routing. Completion, focus loss, settings changes, permission/listener disconnection, glasses disconnect/disable, sign-out and service teardown release playback. Automatic previews do not start.
 
-No legacy capture, command, Moments APIs or dropped database tables are restored. Wake words, PCM capture/streaming, media capture/upload, recording, notification content forwarding and scene analysis remain outside this stage.
+No legacy capture, command, Moments APIs or dropped database tables are restored. Wake capture, local recordings and media sync are documented in their separate runtime contracts. Notification content forwarding and scene analysis remain disabled.
 
 ## Validation
 
@@ -62,4 +62,6 @@ Settings → Glasses → Recordings supports explicit Start/Stop, M4A output in 
 
 ## Optional speech listening
 
-Glasses → Listening is a separate toggle, initially off, for hardware-VAD English transcription on the phone and timestamped transcript export. It shares the native microphone foreground service with manual recording, which takes priority and disables VAD for continuous M4A capture. See [GLASSES_LISTENING.md](GLASSES_LISTENING.md).
+Glasses → Listening is a separate toggle, initially off, for native wake detection followed by English command transcription and local WAV/JSON capture saving. It shares the native microphone foreground service with manual recording, which takes priority and disables VAD for continuous M4A capture. See [GLASSES_LISTENING.md](GLASSES_LISTENING.md).
+
+Wake feedback uses direct raw BES LED commands through the existing SDK BLE queue, avoiding the MTK application-message path. Ownership claim/release is also sent as raw K900 commands. Diagnostics distinguish queued feedback from dispatch failures; no visible LED acknowledgement is available. See GLASSES_LISTENING.md.

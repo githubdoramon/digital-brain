@@ -476,9 +476,9 @@ export default function SettingsScreen() {
             onPress={() => router.push('/settings/proposed-events' as never)}
           >
             <View style={styles.textBlock}>
-              <Text style={styles.rowTitle}>Proposed events</Text>
+              <Text style={styles.rowTitle}>Proposed items</Text>
               <Text style={styles.rowSubtitle}>
-                Review places where your Brain found gaps in the day.
+                Review possible events and contact suggestions.
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />

@@ -34,6 +34,74 @@ _tool_call_count: Any | None = None
 _tool_call_duration: Any | None = None
 _http_request_count: Any | None = None
 _http_request_duration: Any | None = None
+_workflow_stage_duration: Any | None = None
+
+
+def timed_workflow_stage(flow: str, stage: str) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
+    """Measure a bounded workflow stage without recording request content."""
+
+    def decorate(function: Callable[..., _T]) -> Callable[..., _T]:
+        def record(started: float, outcome: str) -> None:
+            if _workflow_stage_duration is None:
+                return
+            try:
+                _workflow_stage_duration.record(
+                    max(0.0, time.perf_counter() - started),
+                    {
+                        "workflow.flow": flow,
+                        "workflow.stage": stage,
+                        "workflow.outcome": outcome,
+                    },
+                )
+            except Exception:
+                logger.debug("Could not record workflow-stage metric", exc_info=True)
+
+        if inspect.isasyncgenfunction(function):
+            @wraps(function)
+            async def async_generator_wrapper(*args: Any, **kwargs: Any):
+                started = time.perf_counter()
+                outcome = "success"
+                try:
+                    async for item in function(*args, **kwargs):
+                        yield item
+                except BaseException:
+                    outcome = "error"
+                    raise
+                finally:
+                    record(started, outcome)
+
+            return async_generator_wrapper  # type: ignore[return-value]
+
+        if inspect.iscoroutinefunction(function):
+            @wraps(function)
+            async def async_wrapper(*args: Any, **kwargs: Any):
+                started = time.perf_counter()
+                outcome = "success"
+                try:
+                    return await function(*args, **kwargs)
+                except BaseException:
+                    outcome = "error"
+                    raise
+                finally:
+                    record(started, outcome)
+
+            return async_wrapper  # type: ignore[return-value]
+
+        @wraps(function)
+        def wrapper(*args: Any, **kwargs: Any):
+            started = time.perf_counter()
+            outcome = "success"
+            try:
+                return function(*args, **kwargs)
+            except BaseException:
+                outcome = "error"
+                raise
+            finally:
+                record(started, outcome)
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorate
 
 
 @dataclass
@@ -154,6 +222,7 @@ def configure_mirador() -> None:
     global _agent_run_tool_calls, _agent_run_repairs
     global _tool_call_count, _tool_call_duration
     global _http_request_count, _http_request_duration
+    global _workflow_stage_duration
     if _configured:
         return
 
@@ -268,6 +337,11 @@ def configure_mirador() -> None:
             "digital_brain.http.request.duration",
             unit="s",
             description="Orchestrator HTTP request duration by route, method, and status class",
+        )
+        _workflow_stage_duration = meter.create_histogram(
+            "digital_brain.workflow.stage.duration",
+            unit="s",
+            description="Duration of bounded chat, command, and contact-resolution workflow stages",
         )
         _meter_provider = meter_provider
         logger.info(

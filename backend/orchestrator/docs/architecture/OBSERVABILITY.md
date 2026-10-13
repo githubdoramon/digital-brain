@@ -77,14 +77,24 @@ providers flush queued telemetry during graceful shutdown.
 - `digital_brain.tool.calls` counter and `digital_brain.tool.duration`
   histogram, tagged by registered tool name, bounded outcome, and whether the
   call ran in a parallel batch.
+- `digital_brain.workflow.stage.duration` histogram in seconds, tagged by
+  bounded workflow, stage, and outcome labels. Its count and sum support average
+  duration calculations; histogram distributions support percentile and
+  latency comparisons. Stages include chat routing, contact pre-resolution,
+  agent calls and streaming, memory-summary synthesis, post-tool validation,
+  event extraction, existing-event lookup, matching/follow-up steps, contact-command extraction, and
+  contact-resolution extraction, disambiguation, profession, and relationship
+  inference, including the asynchronous enrichment worker. Some stages are nested or run concurrently, so compare individual
+  stages or top-level totals rather than summing every histogram.
 
 Prompts, completions, tool arguments/results, user identifiers, conversation
 identifiers, LLM URLs, and authorization values are not added to these spans
 or metrics. Tool names come from the registered tool set; tool arguments and
 results are excluded. Metric dimensions are limited to the configured model,
 operation, registered tool name, profile, route template, HTTP method, status
-class, outcome, execution mode, and token type. Per-run IDs are not metric
-dimensions. The integration does not export application logs, SQL statements,
+class, outcome, execution mode, token type, workflow, and stage. Workflow labels
+are static code-defined values; per-run IDs are not metric dimensions. The
+integration does not export application logs, SQL statements,
 or outbound HTTP auto-instrumentation. Existing application logs
 remain governed by the local logging configuration.
 

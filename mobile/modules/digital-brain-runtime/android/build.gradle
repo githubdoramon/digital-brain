@@ -15,7 +15,12 @@ android {
   }
 }
 
+repositories {
+  maven { url = uri(new File(project(':mentra-bluetooth-sdk').projectDir, 'libs/maven')) }
+}
+
 dependencies {
+  implementation 'com.k2fsa.sherpa.onnx:sherpa-onnx:1.13.2@aar'
   implementation project(':mentra-bluetooth-sdk')
   implementation project(':whisper.rn')
   implementation 'com.facebook.react:react-android'

@@ -36,12 +36,14 @@ class DigitalBrainRuntimeModule : Module() {
     }
     OnActivityEntersBackground { DigitalBrainRuntime.activityVisible = false }
     AsyncFunction("getGlassesListeningStatus") Coroutine { -> withContext(Dispatchers.Main) { GlassesListening.snapshot(context()) } }
-    AsyncFunction("setGlassesListening") Coroutine { enabled: Boolean, modelUri: String? -> withContext(Dispatchers.Main) {
+    AsyncFunction("setGlassesListening") Coroutine { enabled: Boolean, modelUri: String?, baseUri: String? ->
+      if (enabled) withContext(Dispatchers.IO) { GlassesWakeStore.validateBase(context(), checkNotNull(baseUri)) }
+      withContext(Dispatchers.Main) {
       check(!enabled || appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to start listening" }
-      GlassesListening.configure(context(), enabled, modelUri)
+      GlassesListening.configure(context(), enabled, modelUri, baseUri)
     } }
     AsyncFunction("setGlassesListeningMinimumVolume") Coroutine { value: Int -> withContext(Dispatchers.Main) { GlassesListening.setMinimumVolume(context(), value) } }
-    AsyncFunction("exportGlassesTranscripts") Coroutine { baseUri: String -> withContext(Dispatchers.IO) { GlassesListening.export(context(), baseUri) } }
+    AsyncFunction("retryGlassesWakeSaves") Coroutine { baseUri: String -> withContext(Dispatchers.IO) { GlassesListening.retrySaves(context(), baseUri) } }
     AsyncFunction("syncGlassesMedia") { GlassesMediaWorker.enqueue(context(), manual = true) }
     AsyncFunction("getGlassesRecordingStatus") Coroutine { -> withContext(Dispatchers.Main) {
       GlassesRecording.snapshot(context()) + mapOf("playback" to GlassesRecordingPlayback.snapshot())
@@ -51,7 +53,7 @@ class DigitalBrainRuntimeModule : Module() {
       GlassesRecording.start(context(), baseUri)
     } }
     AsyncFunction("stopGlassesRecording") Coroutine { -> withContext(Dispatchers.Main) { GlassesRecording.stop() } }
-    AsyncFunction("retryGlassesRecordingSave") Coroutine { baseUri: String -> withContext(Dispatchers.Main) { GlassesRecording.retry(context(), baseUri) } }
+    AsyncFunction("retryGlassesRecordingSave") Coroutine { baseUri: String, id: String? -> withContext(Dispatchers.Main) { GlassesRecording.retry(context(), baseUri, id) } }
     AsyncFunction("playGlassesRecording") Coroutine { uri: String -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.play(context(), uri) } }
     AsyncFunction("seekGlassesRecording") Coroutine { ms: Int -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.seek(ms) } }
     AsyncFunction("stopGlassesRecordingPlayback") Coroutine { -> withContext(Dispatchers.Main) { GlassesRecordingPlayback.stop() } }

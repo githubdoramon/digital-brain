@@ -15,6 +15,7 @@ from collections import Counter
 from typing import TYPE_CHECKING, Any, Optional
 
 from memory_graph_terms import contains_personal_document_term
+from observability.mirador import timed_workflow_stage
 from tools.limit_policy import wants_all_results
 
 if TYPE_CHECKING:
@@ -367,6 +368,7 @@ def _build_summary_fallback(
     return "\n".join(lines)
 
 
+@timed_workflow_stage("chat", "memory_summary_synthesis")
 def _synthesize_memory_summary(
     *,
     question: str,
@@ -453,6 +455,7 @@ def _synthesize_memory_summary(
             system_prompt=system_prompt,
             timeout=180,
             temperature=0.1,
+            reasoning_effort="medium",
         ).strip()
     except Exception as exc:
         if isinstance(exc, LLMUnavailableError):

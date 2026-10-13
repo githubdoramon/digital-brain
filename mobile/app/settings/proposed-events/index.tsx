@@ -71,6 +71,21 @@ type PlaceCandidate = {
   distance_m?: number | null;
 };
 
+type ProposedEnrichment = {
+  proposal_id: string;
+  kind: 'profession' | 'relationship';
+  contact_id: string;
+  contact_name: string;
+  related_contact_id?: string | null;
+  related_contact_name?: string | null;
+  suggested_value: string;
+  reciprocal_value?: string | null;
+  source_event_id?: string | null;
+  source_event_title?: string | null;
+  confidence: 'low' | 'medium' | 'high';
+  evidence?: string | null;
+};
+
 function formatTimeRange(startValue: string, endValue: string): string {
   const start = new Date(startValue);
   const end = new Date(endValue);
@@ -134,6 +149,7 @@ export default function ProposedEventsScreen() {
   const { token } = useAuth();
   const { showError, showSuccess } = useAppNotice();
   const [proposals, setProposals] = React.useState<ProposedEvent[]>([]);
+  const [enrichmentProposals, setEnrichmentProposals] = React.useState<ProposedEnrichment[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const [runningScan, setRunningScan] = React.useState(false);
@@ -167,10 +183,14 @@ export default function ProposedEventsScreen() {
   const loadProposals = React.useCallback(async () => {
     setLoading(true);
     try {
-      const response = (await apiFetch('/mobile/proposed-events', { token })) as {
-        proposals?: ProposedEvent[];
-      };
-      const next = Array.isArray(response?.proposals) ? response.proposals : [];
+      const [eventResponse, enrichmentResponse] = (await Promise.all([
+        apiFetch('/mobile/proposed-events', { token }),
+        apiFetch('/mobile/proposals', { token }),
+      ])) as [{ proposals?: ProposedEvent[] }, { proposals?: ProposedEnrichment[] }];
+      const next = Array.isArray(eventResponse?.proposals) ? eventResponse.proposals : [];
+      setEnrichmentProposals(
+        Array.isArray(enrichmentResponse?.proposals) ? enrichmentResponse.proposals : [],
+      );
       setProposals(next);
       setDraftTitleById((current) => {
         const merged = { ...current };
@@ -237,11 +257,9 @@ export default function ProposedEventsScreen() {
         next.forEach((proposal) => {
           if (merged[proposal.proposal_id] == null) {
             const selectedCandidate = proposal.place_candidates?.find(
-              (candidate) =>
-                candidate.provider_place_id === proposal.selected_place_candidate_id,
+              (candidate) => candidate.provider_place_id === proposal.selected_place_candidate_id,
             );
-            merged[proposal.proposal_id] =
-              selectedCandidate?.title || proposal.place_name || '';
+            merged[proposal.proposal_id] = selectedCandidate?.title || proposal.place_name || '';
           }
         });
         return merged;
@@ -274,7 +292,7 @@ export default function ProposedEventsScreen() {
         return merged;
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not load proposed events.';
+      const message = error instanceof Error ? error.message : 'Could not load proposed items.';
       showError(message);
     } finally {
       setLoading(false);
@@ -437,7 +455,30 @@ export default function ProposedEventsScreen() {
     [selectedMediaIdsById, showError, token],
   );
 
-  const pendingCount = proposals.filter((proposal) => proposal.status === 'pending').length;
+  const updateEnrichmentProposal = React.useCallback(
+    async (proposal: ProposedEnrichment, action: 'accept' | 'dismiss') => {
+      setSavingId(proposal.proposal_id);
+      try {
+        await apiFetch(`/mobile/proposals/${encodeURIComponent(proposal.proposal_id)}/${action}`, {
+          method: 'POST',
+          token,
+        });
+        setEnrichmentProposals((current) =>
+          current.filter((item) => item.proposal_id !== proposal.proposal_id),
+        );
+        showSuccess(action === 'accept' ? 'Suggestion added.' : 'Suggestion dismissed.');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Could not update suggestion.');
+      } finally {
+        setSavingId(null);
+      }
+    },
+    [showError, showSuccess, token],
+  );
+
+  const pendingCount =
+    proposals.filter((proposal) => proposal.status === 'pending').length +
+    enrichmentProposals.length;
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
@@ -473,10 +514,10 @@ export default function ProposedEventsScreen() {
             </View>
             <View style={styles.summaryText}>
               <Text style={styles.summaryTitle}>
-                {pendingCount === 1 ? '1 possible event' : `${pendingCount} possible events`}
+                {pendingCount === 1 ? '1 item to review' : `${pendingCount} items to review`}
               </Text>
               <Text style={styles.summarySubtitle}>
-                Daily scans review today and yesterday, and keep suggestions for 7 days.
+                Review possible events and contact details suggested from your memories.
               </Text>
             </View>
           </Card>
@@ -491,12 +532,11 @@ export default function ProposedEventsScreen() {
             style={styles.scanButton}
           />
 
-          {!loading && proposals.length === 0 ? (
+          {!loading && proposals.length === 0 && enrichmentProposals.length === 0 ? (
             <Card style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>Nothing to review</Text>
               <Text style={styles.emptyText}>
-                When your location history shows a meaningful stay without a matching event, it will
-                appear here.
+                Possible events and contact suggestions will appear here when they are ready.
               </Text>
             </Card>
           ) : null}
@@ -854,6 +894,64 @@ export default function ProposedEventsScreen() {
               </Card>
             );
           })}
+
+          {enrichmentProposals.length ? (
+            <>
+              <Text style={styles.sectionTitle}>Contact suggestions</Text>
+              {enrichmentProposals.map((proposal) => {
+                const isSaving = savingId === proposal.proposal_id;
+                const isRelationship = proposal.kind === 'relationship';
+                return (
+                  <Card key={proposal.proposal_id} style={styles.enrichmentCard}>
+                    <View style={styles.proposalHeader}>
+                      <View style={styles.proposalIcon}>
+                        <Ionicons
+                          name={isRelationship ? 'people-outline' : 'briefcase-outline'}
+                          size={18}
+                          color={theme.colors.accentDeep}
+                        />
+                      </View>
+                      <View style={styles.proposalTitleBlock}>
+                        <Text style={styles.proposalTitle}>
+                          {isRelationship
+                            ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
+                            : proposal.contact_name}
+                        </Text>
+                        <Text style={styles.proposalMeta}>
+                          {isRelationship
+                            ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
+                            : `Profession: ${proposal.suggested_value}`}
+                        </Text>
+                        <Text style={styles.proposalMeta}>
+                          {proposal.source_event_title
+                            ? `From ${proposal.source_event_title}`
+                            : `${proposal.confidence} confidence`}
+                        </Text>
+                      </View>
+                    </View>
+                    {proposal.evidence ? (
+                      <Text style={styles.reasonText}>{proposal.evidence}</Text>
+                    ) : null}
+                    <View style={styles.actions}>
+                      <Button
+                        label={isRelationship ? 'Add relationship' : 'Add profession'}
+                        onPress={() => void updateEnrichmentProposal(proposal, 'accept')}
+                        loading={isSaving}
+                        style={styles.primaryAction}
+                      />
+                      <Button
+                        label="Dismiss"
+                        onPress={() => void updateEnrichmentProposal(proposal, 'dismiss')}
+                        disabled={isSaving}
+                        variant="secondary"
+                        style={styles.secondaryAction}
+                      />
+                    </View>
+                  </Card>
+                );
+              })}
+            </>
+          ) : null}
         </Animated.ScrollView>
 
         {activePicker ? (
@@ -886,8 +984,8 @@ export default function ProposedEventsScreen() {
         ) : null}
 
         <CollapsingTopBar
-          title="Proposed events"
-          secondaryTitle="Fill in your day"
+          title="Proposed"
+          secondaryTitle="Events and contact suggestions"
           scrollY={scrollY}
           onPressBack={() => router.back()}
         />
@@ -912,6 +1010,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
+  },
+  sectionTitle: {
+    marginTop: 20,
+    marginBottom: 10,
+    fontSize: 17,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  enrichmentCard: {
+    borderRadius: theme.radius.xl,
+    padding: 16,
+    gap: 10,
   },
   summaryIcon: {
     width: 42,

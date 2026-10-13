@@ -808,6 +808,27 @@ def confirm_contact_command(
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_contact_resolved(payload.preview_id, "created")
 
+        try:
+            import contact_enrichment_jobs
+
+            contact_enrichment_jobs.enqueue_contact_enrichment(
+                user_email=user_email,
+                source_key=f"contact-command:{payload.preview_id}",
+                source_text=str(command_data.get("original_message") or ""),
+                contact_ids=list(
+                    dict.fromkeys(
+                        created_contact_ids
+                        + updated_contact_ids
+                        + list(contact_reference_map.values())
+                    )
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "[contact_confirm] Could not queue post-confirmation contact enrichment",
+                exc_info=True,
+            )
+
         return ContactCommandResult(
             success=True,
             updated_contact_ids=updated_contact_ids,

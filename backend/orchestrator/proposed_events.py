@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import contact_enrichment_jobs
 import contacts as contacts_service
 import event_media_suggestions
 import event_photos as event_photos_service
@@ -489,6 +490,29 @@ def accept_proposal(
         conn.commit()
     if not row:
         raise LookupError("Pending proposal not found")
+    enrichment_context = "\n".join(
+        part
+        for part in (
+            str(event.title or "").strip(),
+            str(event.summary or "").strip(),
+            str(proposal.get("reason") or "").strip(),
+        )
+        if part
+    )
+    try:
+        contact_enrichment_jobs.enqueue_contact_enrichment(
+            user_email=user_email,
+            source_key=f"proposed-event:{proposal_id}",
+            source_text=enrichment_context,
+            contact_ids=resolved_contacts,
+            source_event_id=event_id,
+        )
+    except Exception:
+        logger.warning(
+            "[proposed_events] Could not queue contact enrichment proposal_id=%s",
+            proposal_id,
+            exc_info=True,
+        )
     serialized = _serialize_proposal(dict(row))
     serialized["event_id"] = event_id
     serialized["media_errors"] = media_errors

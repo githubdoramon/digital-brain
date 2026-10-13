@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -13,18 +12,14 @@ import android.os.SystemClock
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
-import android.util.AtomicFile
 import androidx.core.content.ContextCompat
-import androidx.documentfile.provider.DocumentFile
 import com.mentra.bluetoothsdk.MicPcmEvent
 import kotlinx.coroutines.*
-import org.json.JSONObject
 import java.io.File
 
 /** Main-looper lifecycle; only the bounded writer/encoder touches recording bytes. No JS or network work. */
 object GlassesRecording {
   private val main = Handler(Looper.getMainLooper())
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   @Volatile private var state = GlassesRecordingState.IDLE
   @Volatile private var writer: GlassesPcmWriter? = null
   private var context: Context? = null
@@ -34,6 +29,8 @@ object GlassesRecording {
   @Volatile private var message: String? = null
   private var savedUri: String? = null
   private var initialized = false
+  private var captureJob: RecordingSaveJob? = null
+  private var captureGeneration = 0L
   private var wake: PowerManager.WakeLock? = null
   private var phone: TelephonyManager? = null
   private var modern: TelephonyCallback? = null
@@ -42,34 +39,27 @@ object GlassesRecording {
     override fun onCallStateChanged(value: Int, ignored: String?) { if (value != TelephonyManager.CALL_STATE_IDLE) stop(GlassesRecordingStop.CALL) }
   }
   private fun directory(c: Context) = File(c.filesDir, "glasses-audio").apply { mkdirs() }
-  private fun journal(c: Context) = AtomicFile(File(directory(c), "current.json"))
-  private fun writeJournal(c: Context, value: JSONObject) {
-    val file = journal(c); val output = file.startWrite()
-    try { output.write(value.toString().toByteArray()); file.finishWrite(output) }
-    catch (e: Exception) { file.failWrite(output); throw e }
-  }
   fun initialize(c: Context) {
     context = c.applicationContext
     if (initialized) return
     initialized = true
-    if (journal(c).baseFile.exists()) {
-      reason = GlassesRecordingStop.RECOVERED; state = GlassesRecordingState.SAVING
-      save()
-    }
+    GlassesRecordingSaves.initialize(c)
   }
   val capturing get() = state == GlassesRecordingState.RECORDING
-  val busy get() = state == GlassesRecordingState.RECORDING || state == GlassesRecordingState.SAVING
+  val busy get() = capturing || state == GlassesRecordingState.STARTING
   fun snapshot(c: Context): Map<String, Any?> {
     initialize(c)
     return mapOf("state" to state.name, "startedAtMs" to startedAt,
       "durationMs" to GlassesRecordingPolicy.presentationUs(writer?.bytes ?: 0) / 1000,
-      "message" to message, "savedUri" to savedUri, "ready" to RuntimeGlasses.alertsReady())
+      "message" to message, "savedUri" to savedUri, "ready" to RuntimeGlasses.alertsReady(),
+      "canStart" to (!busy && GlassesRecordingSaves.hasRoom), "processing" to GlassesRecordingSaves.snapshot(),
+      "libraryRevision" to GlassesRecordingSaves.revision)
   }
   fun diagnostics(): Map<String, Any?> = mapOf("state" to state.name, "stopReason" to reason.name,
-    "capturedBytes" to (writer?.bytes ?: 0), "savePending" to (state == GlassesRecordingState.SAVE_FAILED))
-  fun start(c: Context, baseUri: String) {
+    "capturedBytes" to (writer?.bytes ?: 0), "saves" to GlassesRecordingSaves.diagnostics())
+  suspend fun start(c: Context, baseUri: String) {
     initialize(c)
-    check(state == GlassesRecordingState.IDLE) { "Save the pending recording before starting another" }
+    check(state == GlassesRecordingState.IDLE) { "Stop the current recording before starting another" }
     check(RuntimeGlasses.signedIn(c) && RuntimeGlasses.enabled(c) && RuntimeGlasses.alertsReady()) { "Connect your glasses before recording" }
     check(DigitalBrainRuntime.service != null) { "Glasses runtime is unavailable" }
     for (permission in listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_PHONE_STATE)) {
@@ -79,17 +69,30 @@ object GlassesRecording {
     check(audio.mode == AudioManager.MODE_NORMAL) { "End the call before recording" }
     @Suppress("DEPRECATION")
     check(c.getSystemService(TelephonyManager::class.java).callState == TelephonyManager.CALL_STATE_IDLE) { "End the call before recording" }
-    val base = DocumentFile.fromTreeUri(c, Uri.parse(baseUri))
-    check(base?.canWrite() == true) { "Choose a writable Digital Brain folder" }
-    val dir = directory(c); check(dir.usableSpace > 16 * 1024 * 1024) { "Not enough space for a recording" }
+    state = GlassesRecordingState.STARTING
+    val generation = ++captureGeneration
+    GlassesListening.pause()
+    val job = try { GlassesRecordingSaves.prepare(c, baseUri) }
+      catch (e: Exception) {
+        if (generation == captureGeneration) { state = GlassesRecordingState.IDLE; GlassesListening.reconcile(c) }
+        throw e
+      }
+    if (generation != captureGeneration || !RuntimeGlasses.signedIn(c) || !RuntimeGlasses.alertsReady() || !DigitalBrainRuntime.activityVisible) {
+      GlassesRecordingSaves.finishing(job, GlassesRecordingStop.START_FAILED)
+      GlassesRecordingSaves.drained(job, 0)
+      if (generation == captureGeneration) state = GlassesRecordingState.IDLE
+      throw IllegalStateException("Open Recordings and connect your glasses to start")
+    }
     GlassesRecordingPlayback.stop()
-    startedAt = System.currentTimeMillis(); savedUri = null; message = null; reason = GlassesRecordingStop.USER
-    val name = "Glasses-${java.text.SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", java.util.Locale.US).format(java.util.Date(startedAt))}-${java.util.UUID.randomUUID().toString().take(6)}.m4a"
-    writeJournal(c, JSONObject().put("baseUri", baseUri).put("name", name))
-    File(dir, "capture.pcm").delete(); File(dir, "output.m4a").delete()
-    writer = GlassesPcmWriter(File(dir, "capture.pcm"),
-      { main.post { stop(GlassesRecordingStop.STORAGE) } },
-      { main.post { if (state == GlassesRecordingState.RECORDING) stop(GlassesRecordingStop.STORAGE); save() } })
+    captureJob = job; startedAt = job.startedAt; savedUri = null; message = null; reason = GlassesRecordingStop.USER
+    lateinit var localWriter: GlassesPcmWriter
+    localWriter = GlassesPcmWriter(File(job.dir, "capture.pcm"),
+      { main.post { if (captureJob === job) stop(GlassesRecordingStop.STORAGE) } },
+      { main.post {
+        if (captureJob === job) stop(GlassesRecordingStop.STORAGE)
+        GlassesRecordingSaves.drained(job, localWriter.bytes)
+      } })
+    writer = localWriter
     state = GlassesRecordingState.RECORDING
     GlassesListening.pause()
     lastPcm = SystemClock.elapsedRealtime()
@@ -107,17 +110,18 @@ object GlassesRecording {
     } catch (e: Exception) {
       stop(GlassesRecordingStop.START_FAILED)
       // A failure before the writer starts still requires native save/recovery.
-      if (!writerStarted) save()
+      if (!writerStarted) GlassesRecordingSaves.drained(job, 0)
       throw IllegalStateException("Could not start glasses recording", e)
     }
   }
   fun pcm(event: MicPcmEvent) {
     if (!capturing) return
+    val job = captureJob ?: return
     if (!GlassesRecordingPolicy.validPcm(event.sampleRate, event.bitsPerSample, event.channels, event.encoding, event.pcm.size)) {
-      main.post { stop(GlassesRecordingStop.FORMAT) }; return
+      main.post { if (captureJob === job) stop(GlassesRecordingStop.FORMAT) }; return
     }
     lastPcm = SystemClock.elapsedRealtime()
-    if (writer?.offer(event.pcm) != true) main.post { stop(GlassesRecordingStop.BACKPRESSURE) }
+    if (writer?.offer(event.pcm) != true) main.post { if (captureJob === job) stop(GlassesRecordingStop.BACKPRESSURE) }
   }
   private val watchdog = object : Runnable {
     override fun run() {
@@ -131,98 +135,38 @@ object GlassesRecording {
     }
   }
   fun stop(value: GlassesRecordingStop = GlassesRecordingStop.USER) {
-    if (!capturing) return
-    state = GlassesRecordingState.SAVING; reason = value; message = "Finishing your recording…"
-    runCatching { RuntimeGlasses.setRecordingMic(false) }
-    main.removeCallbacks(watchdog); unwatchCalls()
-    writer?.finish()
-    DigitalBrainRuntime.service?.refresh(forceNotification = true)
-  }
-  private var saving = false
-  private fun save() {
-    if (saving || state != GlassesRecordingState.SAVING) return
-    val c = context ?: return
-    saving = true
-    message = "Preparing your recording…"
-    // Keep the CPU awake until local encoding and the verified SAF copy finish.
-    if (wake?.isHeld != true) wake = c.getSystemService(PowerManager::class.java)
-      .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:GlassesSave").apply { acquire(30 * 60_000L) }
-    scope.launch {
-      var result: String? = null
-      var failed = false
-      try {
-        val metadata = JSONObject(journal(c).openRead().use { String(it.readBytes()) })
-        val dir = directory(c); val pcm = File(dir, "capture.pcm"); val output = File(dir, "output.m4a")
-        if (pcm.length() % 2 != 0L) java.io.RandomAccessFile(pcm, "rw").use { it.setLength(pcm.length() - 1) }
-        if (pcm.length() > 0) {
-          if (!output.exists() || output.length() == 0L) {
-            message = "Preparing your recording…"
-            val temp = File(dir, "encoding.m4a"); temp.delete()
-            GlassesM4aEncoder.encode(pcm, temp)
-            check(temp.renameTo(output))
-          }
-          message = "Preparing the Recordings folder…"
-          val base = checkNotNull(DocumentFile.fromTreeUri(c, Uri.parse(metadata.getString("baseUri"))))
-          check(base.canWrite()) { "Folder permission unavailable" }
-          val folder = base.findFile("Recordings") ?: base.createDirectory("Recordings")
-          check(folder?.isDirectory == true && folder.canWrite())
-          val prior = metadata.optString("targetUri").takeIf { it.isNotBlank() }?.let { DocumentFile.fromSingleUri(c, Uri.parse(it)) }
-          val target = prior?.takeIf { it.exists() } ?: checkNotNull(folder.createFile("audio/mp4", metadata.getString("name")))
-          metadata.put("targetUri", target.uri.toString()); writeJournal(c, metadata)
-          message = "Saving to Recordings…"
-          val copied = output.inputStream().buffered().use { input ->
-            checkNotNull(c.contentResolver.openOutputStream(target.uri, "wt")).buffered().use { out ->
-              val buffer = ByteArray(64 * 1024)
-              var total = 0L
-              var lastReported = 0L
-              while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                out.write(buffer, 0, count)
-                total += count
-                if (total - lastReported >= 4L * 1024 * 1024 || total == output.length()) {
-                  val percent = (total * 100 / output.length()).toInt().coerceIn(0, 100)
-                  message = "Saving to Recordings… $percent%"
-                  lastReported = total
-                }
-              }
-              out.flush()
-              total
-            }
-          }
-          message = "Checking your saved recording…"
-          check(copied == output.length() && target.length() == copied && copied > 0)
-          result = target.uri.toString()
-        }
-        journal(c).delete(); pcm.delete(); output.delete(); File(dir, "encoding.m4a").delete()
-      } catch (_: Exception) { failed = true }
-      finally {
-        main.post {
-          saving = false; writer = null
-          state = if (failed) GlassesRecordingState.SAVE_FAILED else GlassesRecordingState.IDLE
-          savedUri = result
-          message = if (failed) "Could not save to Recordings. Audio is retained on this phone; retry saving." else if (result == null) "No audio received; no recording saved" else reason.description
-          wake?.let { if (it.isHeld) it.release() }; wake = null
-          DigitalBrainRuntime.service?.refresh(forceNotification = true)
-        }
-      }
+    if (state == GlassesRecordingState.STARTING) {
+      captureGeneration++; state = GlassesRecordingState.IDLE
+      return
     }
+    if (!capturing) return
+    val job = captureJob ?: return
+    val completedWriter = writer
+    // Detach capture first. A prior writer's callbacks cannot touch a subsequent recording.
+    state = GlassesRecordingState.STARTING; captureGeneration++; captureJob = null; writer = null
+    reason = value; startedAt = 0; message = value.description
+    GlassesRecordingSaves.finishing(job, value, completedWriter?.bytes ?: 0)
+    runCatching { RuntimeGlasses.setRecordingMic(false) }
+    state = GlassesRecordingState.IDLE
+    main.removeCallbacks(watchdog); unwatchCalls()
+    completedWriter?.finish()
+    wake?.let { if (it.isHeld) it.release() }; wake = null
+    DigitalBrainRuntime.service?.refresh(forceNotification = true)
+    context?.let { GlassesListening.reconcile(it) }
   }
-  fun retry(c: Context, baseUri: String) {
-    initialize(c); check(state == GlassesRecordingState.SAVE_FAILED)
-    val metadata = JSONObject(journal(c).openRead().use { String(it.readBytes()) })
-    if (metadata.getString("baseUri") != baseUri) metadata.remove("targetUri")
-    metadata.put("baseUri", baseUri); writeJournal(c, metadata)
-    state = GlassesRecordingState.SAVING; save()
+  suspend fun retry(c: Context, baseUri: String, id: String?) {
+    initialize(c)
+    GlassesRecordingSaves.retry(c, baseUri, id)
   }
   private fun watchCalls(c: Context) {
     val manager = c.getSystemService(TelephonyManager::class.java); phone = manager
+    val generation = captureGeneration
     if (Build.VERSION.SDK_INT >= 31) {
       val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-        override fun onCallStateChanged(value: Int) { if (value != TelephonyManager.CALL_STATE_IDLE) stop(GlassesRecordingStop.CALL) }
+        override fun onCallStateChanged(value: Int) { if (generation == captureGeneration && value != TelephonyManager.CALL_STATE_IDLE) stop(GlassesRecordingStop.CALL) }
       }
       modern = callback; manager.registerTelephonyCallback(ContextCompat.getMainExecutor(c), callback)
-      val listener = AudioManager.OnModeChangedListener { mode -> if (mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION) stop(GlassesRecordingStop.CALL) }
+      val listener = AudioManager.OnModeChangedListener { mode -> if (generation == captureGeneration && (mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION)) stop(GlassesRecordingStop.CALL) }
       modeListener = listener; c.getSystemService(AudioManager::class.java).addOnModeChangedListener(ContextCompat.getMainExecutor(c), listener)
     } else {
       @Suppress("DEPRECATION") manager.listen(legacy, PhoneStateListener.LISTEN_CALL_STATE)

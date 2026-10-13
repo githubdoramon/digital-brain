@@ -37,6 +37,7 @@ from commands.registry import CommandRegistry
 from llm_helpers import build_json_schema_response_format
 from llm_json_schemas import CONTACT_UPDATE_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
+from observability.mirador import timed_workflow_stage
 from search_normalization import normalize_search_text
 from ui_dsl import (
     build_need_user_input,
@@ -216,6 +217,7 @@ def _format_existing_contact_extraction(existing: dict[str, Any] | None) -> str:
     )
 
 
+@timed_workflow_stage("contact_command", "contact_update_extraction")
 def _llm_extract_contact_changes(
     message: str,
     *,
@@ -280,7 +282,7 @@ Relationship type rules:
             schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
         ),
         "use_fast_model": False,
-        "reasoning_effort": "xhigh",
+        "reasoning_effort": "medium",
     }
     request_options.update(dict(llm_request_options or {}))
     extracted = call_llm_json(
@@ -1297,6 +1299,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
     return fields
 
 
+@timed_workflow_stage("contact_command", "total")
 def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, Any]:
     logger.info("[handle_contact] NEW CONTACT COMMAND")
     _emit_progress(context, "Parsing contact update...")

@@ -34,6 +34,7 @@ from agents.registry import build_conversational_profile_registry, choose_profil
 from llm_config import get_smart_model
 from location_inference import infer_current_place
 from observability import trace
+from observability.mirador import timed_workflow_stage
 from observability.logger import get_runtime_logger
 from observability.mirador import record_agent_run_metrics, traced_agent_run
 from search_normalization import normalize_search_text
@@ -1383,6 +1384,7 @@ class AgentController:
             client_context,
         )
 
+    @timed_workflow_stage("chat", "agent_llm")
     def _call_llm(
         self,
         messages: list[dict[str, Any]],
@@ -1401,6 +1403,7 @@ class AgentController:
             reasoning_effort=reasoning_effort,
         )
 
+    @timed_workflow_stage("chat", "agent_llm_stream")
     async def _stream_llm(
         self,
         messages: list[dict[str, Any]],
@@ -2000,6 +2003,7 @@ class AgentController:
         intersection = left_tokens & right_tokens
         return len(intersection) / float(min(len(left_tokens), len(right_tokens)))
 
+    @timed_workflow_stage("chat", "contact_pre_resolution")
     def _prime_contact_scope_for_question(
         self,
         state: AgentState,

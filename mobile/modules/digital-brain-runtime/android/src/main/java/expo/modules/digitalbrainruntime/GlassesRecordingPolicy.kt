@@ -9,9 +9,9 @@ object GlassesRecordingPolicy {
   fun validPcm(rate: Int, bits: Int, channels: Int, encoding: String, bytes: Int) =
     rate == SAMPLE_RATE && bits == 16 && channels == 1 && encoding == "pcm_s16le" && bytes in 2..65536 && bytes % 2 == 0
 }
-enum class GlassesRecordingState { IDLE, RECORDING, SAVING, SAVE_FAILED }
+enum class GlassesRecordingState { IDLE, STARTING, RECORDING }
 enum class GlassesRecordingStop(val description: String) {
-  USER("Recording saved"), DISCONNECTED("Glasses disconnected; recording stopped"),
+  USER("Recording stopped"), DISCONNECTED("Glasses disconnected; recording stopped"),
   CALL("Call interrupted recording"), RUNTIME_STOPPED("Glasses disabled; recording stopped"),
   AUDIO_LOST("Microphone stream stopped"), FORMAT("Unsupported microphone format"),
   STORAGE("Recording storage failed"), BACKPRESSURE("Audio writer could not keep up"),

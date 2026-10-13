@@ -51,7 +51,7 @@ object DigitalBrainRuntime {
   @JvmStatic fun refresh(context: Context, allowStart: Boolean = true) {
     if (service != null && service?.foregroundTypes != 0) {
       handler.post { service?.refresh() }
-    } else if (allowStart && owners(context).isNotEmpty()) {
+    } else if (allowStart && (owners(context).isNotEmpty() || GlassesRecordingSaves.working)) {
       try {
         ContextCompat.startForegroundService(context, Intent(context, DigitalBrainRuntimeService::class.java))
       } catch (error: RuntimeException) {

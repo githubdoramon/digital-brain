@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from agent.enums import ToolStatus
 from agent.router import TOOL_GROUPS
 from observability import trace
+from observability.mirador import timed_workflow_stage
 from search_normalization import normalize_search_text
 from tools.action_enums import LookupContactAction
 from ui_dsl.clarification import extract_need_user_input
@@ -413,6 +414,7 @@ class PostExecutionValidator:
         # For other tools, return None to trigger LLM check
         return None
 
+    @timed_workflow_stage("chat", "post_tool_validation")
     def _llm_check(
         self,
         tool_name: str,

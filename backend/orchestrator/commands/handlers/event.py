@@ -44,10 +44,10 @@ from llm_json_schemas import (
     EVENT_FIELD_INFERENCE_RESPONSE_SCHEMA,
     EVENT_FOLLOWUP_STRATEGY_RESPONSE_SCHEMA,
     EVENT_MATCH_INTENT_RESPONSE_SCHEMA,
-    EVENT_RELATIONSHIP_SUGGESTION_RESPONSE_SCHEMA,
 )
 from location_inference import geocode_place_name, infer_current_place
 from observability.logger import get_runtime_logger
+from observability.mirador import timed_workflow_stage
 from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,
@@ -309,6 +309,7 @@ def _need_user_input_is_only_temporal(need_user_input: dict[str, Any] | None) ->
     return any(token in prompt_text for token in (" when", "when ", "time", "date", "happen"))
 
 
+@timed_workflow_stage("event_command", "match_reference_classifier")
 def _classify_event_match_reference(raw_message: str | None) -> str:
     normalized = _normalized_event_match_text(raw_message)
     if not normalized:
@@ -352,7 +353,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=15,
             use_fast_model=False,
-            reasoning_effort="xhigh",
+            reasoning_effort="medium",
             response_format=build_json_schema_response_format(
                 name="event_match_intent",
                 schema=EVENT_MATCH_INTENT_RESPONSE_SCHEMA,
@@ -371,6 +372,7 @@ Return ONLY a JSON object matching the supplied response schema."""
     return intent
 
 
+@timed_workflow_stage("event_command", "follow_up_strategy")
 def _classify_follow_up_event_strategy(
     follow_up_message: str,
     clarification_context: dict[str, Any],
@@ -440,7 +442,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=20,
             use_fast_model=False,
-            reasoning_effort="xhigh",
+            reasoning_effort="medium",
             response_format=build_json_schema_response_format(
                 name="event_followup_strategy",
                 schema=EVENT_FOLLOWUP_STRATEGY_RESPONSE_SCHEMA,
@@ -493,14 +495,6 @@ def _has_mutually_exclusive_token_conflict(left: set[str], right: set[str]) -> b
         if left_hits and right_hits and left_hits != right_hits:
             return True
     return False
-
-
-def _user_explicitly_rejected_same_event(raw_message: str | None) -> bool:
-    return _classify_event_match_reference(raw_message) == "create_new"
-
-
-def _user_explicitly_requested_existing_event(raw_message: str | None) -> bool:
-    return _classify_event_match_reference(raw_message) == "update_existing"
 
 
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -766,6 +760,7 @@ def _format_field_inference_extraction_context(existing_extraction: dict[str, An
     )
 
 
+@timed_workflow_stage("event_command", "field_inference")
 def _infer_follow_up_target_fields(
     follow_up_message: str,
     existing_extraction: dict[str, Any],
@@ -819,7 +814,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=20,
             use_fast_model=False,
-            reasoning_effort="xhigh",
+            reasoning_effort="low",
             response_format=build_json_schema_response_format(
                 name="event_field_inference",
                 schema=EVENT_FIELD_INFERENCE_RESPONSE_SCHEMA,
@@ -1246,6 +1241,7 @@ def _clarification_fields_from_proposed_groups(
     return fields
 
 
+@timed_workflow_stage("event_command", "event_extraction")
 def _extract_event_entities_with_llm(
     message: str,
     context: dict,
@@ -2128,6 +2124,7 @@ def _merge_event_candidate_lists(*candidate_lists: list[dict[str, Any]]) -> list
     return merged
 
 
+@timed_workflow_stage("event_command", "existing_event_lookup")
 def _find_event_matches(
     raw_message: str | None,
     extracted: dict[str, Any],
@@ -2149,10 +2146,11 @@ def _find_event_matches(
     if not queries:
         return {"operation": "create", "candidates": []}
 
-    if _user_explicitly_rejected_same_event(raw_message):
+    match_reference_intent = _classify_event_match_reference(raw_message)
+    if match_reference_intent == "create_new":
         logger.info("[handle_event] Event match skipped: user explicitly said this is a new event")
         return {"operation": "create", "candidates": []}
-    explicit_existing_event = _user_explicitly_requested_existing_event(raw_message)
+    explicit_existing_event = match_reference_intent == "update_existing"
 
     time_start, time_end = _compute_event_match_window(extracted.get("when"))
     end_when = normalize_event_datetime(
@@ -2536,6 +2534,7 @@ def _restore_previous_resolution_contacts_if_missing(
     return restored_resolution, restored_contact_result
 
 
+@timed_workflow_stage("event_command", "contact_resolution")
 def _resolve_contacts_with_agent(
     message: str,
     user_email: str,
@@ -2648,203 +2647,6 @@ def _resolve_contacts_with_agent(
                 resolution["name_replacements"][original_text] = display_name
 
     return resolution, contact_result
-
-
-def _format_relationship_suggestions(
-    suggestions: list[dict[str, Any]],
-    resolution: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """
-    Map contact agent relationship suggestions into /event UI shape.
-    """
-    if not suggestions:
-        return []
-
-    id_by_text: dict[str, str] = {}
-    name_by_text: dict[str, str] = {}
-
-    for contact in resolution.get("contacts", []):
-        display_name = contact.get("display_name")
-        query = contact.get("query")
-        contact_id = contact.get("contact_id")
-        if query and display_name:
-            name_by_text[query] = display_name
-        if display_name:
-            name_by_text[display_name] = display_name
-        if contact_id:
-            if query:
-                id_by_text[query] = contact_id
-            if display_name:
-                id_by_text[display_name] = contact_id
-
-    for contact in resolution.get("new_entities", {}).get("contacts", []):
-        display_name = contact.get("display_name")
-        query = contact.get("query")
-        if query and display_name:
-            name_by_text[query] = display_name
-        if display_name:
-            name_by_text[display_name] = display_name
-
-    formatted: list[dict[str, Any]] = []
-    for suggestion in suggestions:
-        from_text = suggestion.get("from_text")
-        to_text = suggestion.get("to_text")
-        if not from_text or not to_text:
-            continue
-
-        from_display = name_by_text.get(from_text, from_text)
-        to_display = name_by_text.get(to_text, to_text)
-
-        formatted.append(
-            {
-                "from_contact_id": suggestion.get("from_contact_id") or id_by_text.get(from_text),
-                "from_display_name": from_display,
-                "to_contact_id": suggestion.get("to_contact_id") or id_by_text.get(to_text),
-                "to_display_name": to_display,
-                "relationship_type": suggestion.get("type") or "",
-                "reciprocal_type": suggestion.get("other_type") or "",
-                "confidence": "medium",
-                "reasoning": suggestion.get("relationship_hint") or "",
-            }
-        )
-
-    return formatted
-
-
-def _suggest_relationships_from_context(
-    message: str,
-    extracted: dict[str, Any],
-    resolution: dict[str, Any],
-    user_email: str = "",
-) -> list[dict[str, Any]]:
-    """
-    Analyze the event context to suggest relationships between contacts.
-
-    Examples:
-    - "took my daughter to the doctor" -> suggest doctor-patient relationship
-    - "had lunch with my colleague John" -> suggest colleague relationship
-
-    Args:
-        message: Original event message
-        extracted: Extracted event data
-        resolution: Resolved entities
-
-    Returns:
-        List of suggested relationships with from/to contacts and type
-    """
-    from llm_helpers import call_llm_json
-    from prompts.context import get_user_facts_context
-
-    logger.info("[relationship_suggestion] Analyzing event for relationship suggestions")
-
-    suggestions = []
-
-    # Get all resolved contacts
-    contacts = resolution.get("contacts", [])
-    logger.debug(
-        "[relationship_suggestion] Found %s resolved contacts",
-        len(contacts),
-    )
-
-    if len(contacts) < 2:
-        # Need at least 2 contacts to suggest relationships
-        logger.info("[relationship_suggestion] Not enough contacts (need at least 2), skipping")
-        return suggestions
-
-    # Use LLM to detect implied relationships
-    contact_list = ", ".join(c["display_name"] for c in contacts)
-    logger.debug(
-        "[relationship_suggestion] Analyzing relationships between: %s",
-        contact_list,
-    )
-
-    user_facts_ctx = (
-        get_user_facts_context(user_email, message, scope=RuleScope.EVENT_COMMAND)
-        if user_email
-        else None
-    )
-    user_facts_section = f"\n{user_facts_ctx}" if user_facts_ctx else ""
-
-    prompt = f"""Analyze this event description and identify any implied relationships between the people mentioned.
-
-Event: "{message}"
-People involved: {contact_list}{user_facts_section}
-
-Common relationship types:
-- Family: parent, child, sibling, spouse, partner, grandparent, grandchild, cousin, uncle, aunt, nephew, niece
-- Professional: colleague, manager, employee, client, vendor, doctor, patient, lawyer, therapist, teacher, student
-- Social: friend, neighbor, acquaintance
-
-Return ONLY a JSON object matching the supplied response schema. If no clear relationships exist, return an empty relationships array."""
-
-    try:
-        logger.info("[relationship_suggestion] Calling LLM for relationship analysis...")
-        result = call_llm_json(
-            prompt,
-            timeout=15,
-            use_fast_model=False,
-            reasoning_effort="xhigh",
-            response_format=build_json_schema_response_format(
-                name="event_relationship_suggestion",
-                schema=EVENT_RELATIONSHIP_SUGGESTION_RESPONSE_SCHEMA,
-            ),
-        )
-        llm_suggestions = result.get("relationships", [])
-
-        logger.debug(
-            "[relationship_suggestion] LLM returned %s suggestions",
-            len(llm_suggestions),
-        )
-
-        # Map names back to contact IDs
-        name_to_id = {c["display_name"]: c["contact_id"] for c in contacts}
-
-        for idx, sug in enumerate(llm_suggestions):
-            from_name = sug.get("from_person")
-            to_name = sug.get("to_person")
-            rel_type = sug.get("relationship_type")
-            reciprocal = sug.get("reciprocal_type")
-            confidence = sug.get("confidence")
-
-            logger.debug("[relationship_suggestion]   Suggestion %s:", idx + 1)
-            logger.debug("[relationship_suggestion]     %s -> %s", from_name, to_name)
-            logger.debug(
-                "[relationship_suggestion]     Type: %s (reciprocal: %s)",
-                rel_type,
-                reciprocal,
-            )
-            logger.debug("[relationship_suggestion]     Confidence: %s", confidence)
-            logger.debug(
-                "[relationship_suggestion]     Reasoning: %s",
-                sug.get("reasoning"),
-            )
-
-            if from_name in name_to_id and to_name in name_to_id:
-                suggestions.append(
-                    {
-                        "from_contact_id": name_to_id[from_name],
-                        "from_display_name": from_name,
-                        "to_contact_id": name_to_id[to_name],
-                        "to_display_name": to_name,
-                        "relationship_type": rel_type or "",
-                        "reciprocal_type": reciprocal or "",
-                        "confidence": confidence or "medium",
-                        "reasoning": sug.get("reasoning", ""),
-                    }
-                )
-                logger.debug("[relationship_suggestion]     Added to suggestions")
-            else:
-                logger.info("[relationship_suggestion] Names not found in contact list, skipping")
-
-        logger.info(
-            "[relationship_suggestion] Suggestion complete. Created %s suggestions",
-            len(suggestions),
-        )
-
-    except Exception as e:
-        logger.exception("[relationship_suggestion] Relationship suggestion failed: %s", e)
-
-    return suggestions
 
 
 def _resolve_existing_entities(
@@ -2977,6 +2779,7 @@ def _resolve_existing_entities(
     return resolution
 
 
+@timed_workflow_stage("event_command", "total")
 def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     """
     Handle the /event command.
@@ -3035,7 +2838,6 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     resolution = None
     previous_contact_result: dict[str, Any] = {}
     previous_resolution: dict[str, Any] = {}
-    previous_relationship_suggestions: list[dict[str, Any]] = []
     previous_media_attachments: list[dict[str, Any]] = []
     target_field_ids: list[str] = []
     skip_contact_resolution = False
@@ -3066,9 +2868,6 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         contact_message = original_message
         previous_contact_result = clarification_context.get("contact_result") or {}
         previous_resolution = clarification_context.get("resolution") or {}
-        previous_relationship_suggestions = list(
-            clarification_context.get("relationship_suggestions") or []
-        )
         previous_media_attachments = [
             attachment
             for attachment in (clarification_context.get("media_attachments") or [])
@@ -3352,7 +3151,6 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "user_email": user_email,
                 "client_context": context.get("client_context"),
                 "requested_field_ids": requested_field_ids,
-                "relationship_suggestions": previous_relationship_suggestions,
                 "media_attachments": media_attachments,
                 "thread_id": context.get("thread_id"),
                 "command_name": "event",
@@ -3634,15 +3432,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     else:
         logger.info("[handle_event] STEP 3: No generic terms to replace")
 
-    # Suggest relationships between contacts based on context
-    logger.info("[handle_event] STEP 4: Suggesting relationships...")
-    _emit_progress(context, "Inferring relationships...")
-    relationship_suggestions = _format_relationship_suggestions(
-        contact_result.get("suggested_relationships", []) if contact_result else [],
-        resolution,
-    )
-    if not relationship_suggestions and previous_relationship_suggestions:
-        relationship_suggestions = previous_relationship_suggestions
+    # Inferred relationship suggestions are generated after event confirmation
+    # by the contact-enrichment worker and shown in the review inbox.
+    relationship_suggestions: list[dict[str, Any]] = []
 
     # Update extracted "who" from contact agent results
     resolution["contacts"] = _dedupe_contacts(resolution.get("contacts", []))

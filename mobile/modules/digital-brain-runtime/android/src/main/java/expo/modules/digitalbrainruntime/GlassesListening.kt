@@ -29,7 +29,15 @@ object GlassesListening {
   private var transitioning = false
   private val callSources = linkedMapOf<String, Long>()
   private var blockedUntil = 0L
-  private var segmenter: GlassesSpeechSegmenter? = null
+  private var wakeSession: GlassesWakeSession? = null
+  private var sessionGeneration = 0L
+  private var lastWake = -6000L
+  private var baseUri: String? = null
+  private var capturing = false
+  private var wakes = 0L
+  private var ledFailures = 0L
+  private var ledQueued = 0L
+  private var legacyCleanupStarted = false
   private var status = "Listening is off"
   private var minimumVolume = 0
   private var audioLevel = 0
@@ -46,7 +54,7 @@ object GlassesListening {
   private var vadEnabled: Boolean? = null
   private var speechGeneration = 0
   private var captureWake: PowerManager.WakeLock? = null
-  private data class Job(val account: String, val model: String, val chunk: SpeechChunk)
+  private data class Job(val account: String, val model: String, val baseUri: String, val capture: WakeCapture)
   private val queue = ArrayBlockingQueue<Job>(4)
   private var worker: Thread? = null
   @Volatile private var keepWorker = false
@@ -57,11 +65,19 @@ object GlassesListening {
 
   private fun load(c: Context) {
     context = c.applicationContext
-    val next = GlassesTranscriptStore.account(c)
+    val next = GlassesWakeStore.account(c)
     if (next == account) return
     shutdown(discard = true); account = next
-    val prefs = next?.let { GlassesTranscriptStore.prefs(c, it) }
+    val prefs = next?.let { GlassesWakeStore.prefs(c, it) }
+    if (prefs != null && prefs.getInt("wakeModeVersion", 0) != 2) {
+      check(prefs.edit().putBoolean("enabled", false).putInt("wakeModeVersion", 2).remove("count").remove("lastTranscriptAtMs").commit())
+    }
     enabled = prefs?.getBoolean("enabled", false) == true
+    baseUri = prefs?.getString("wakeBaseUri", null)
+    if (!legacyCleanupStarted) {
+      legacyCleanupStarted = true
+      Thread({ runCatching { GlassesWakeStore.deleteLegacy(c) }.onFailure { main.post { failures++; legacyCleanupStarted = false } } }, "glasses-log-cleanup").start()
+    }
     model = prefs?.getString("model", null)
     minimumVolume = (prefs?.getInt("minimumVolume", 0) ?: 0).coerceIn(0, 100)
     audioLevel = 0; levelAt = 0L
@@ -69,19 +85,20 @@ object GlassesListening {
   }
   fun snapshot(c: Context): Map<String, Any?> {
     load(c)
-    val prefs = account?.let { GlassesTranscriptStore.prefs(c, it) }
+    val prefs = account?.let { GlassesWakeStore.prefs(c, it) }
     return mapOf("enabled" to enabled, "active" to active, "status" to status,
-      "count" to (prefs?.getLong("count", 0) ?: 0), "lastTranscriptAtMs" to prefs?.getLong("lastTranscriptAtMs", 0),
+      "count" to (prefs?.getLong("wakeSavedCount", 0) ?: 0), "lastTranscriptAtMs" to prefs?.getLong("wakeLastSavedAtMs", 0),
       "pending" to (queue.size + if (busy) 1 else 0), "minimumVolume" to minimumVolume,
-      "audioLevel" to if (active && SystemClock.elapsedRealtime() - levelAt < 600) audioLevel else 0)
+      "audioLevel" to if (active && SystemClock.elapsedRealtime() - levelAt < 600) audioLevel else 0,
+      "capturing" to capturing, "savePending" to (account?.let { GlassesWakeStore.pendingCount(c, it) } ?: 0))
   }
   fun diagnostics(): Map<String, Any?> = mapOf("enabled" to enabled, "active" to active,
-    "minimumVolume" to minimumVolume, "quietSegments" to quietSegments,
+    "minimumVolume" to minimumVolume, "quietSegments" to quietSegments, "wakes" to wakes, "ledFailures" to ledFailures, "ledQueued" to ledQueued, "capturing" to capturing,
     "speechEvents" to speechEvents, "vadEnabled" to vadEnabled, "dropped" to dropped,
     "failures" to failures, "completed" to completed, "speechDurationMs" to processedMs,
     "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0)
 
-  fun configure(c: Context, value: Boolean, modelUri: String?) {
+  fun configure(c: Context, value: Boolean, modelUri: String?, storageUri: String? = null) {
     load(c); val who = checkNotNull(account) { "Sign in first" }
     if (value) {
       check(RuntimeGlasses.enabled(c) && RuntimeGlasses.signedIn(c)) { "Enable your glasses first" }
@@ -93,8 +110,9 @@ object GlassesListening {
         "Prepare the speech model before listening"
       }
       model = file.path
+      baseUri = checkNotNull(storageUri) { "Choose your Digital Brain folder first" }
     }
-    check(GlassesTranscriptStore.prefs(c, who).edit().putBoolean("enabled", value).putString("model", model).commit())
+    check(GlassesWakeStore.prefs(c, who).edit().putBoolean("enabled", value).putString("model", model).putString("wakeBaseUri", baseUri).commit())
     enabled = value
     if (value) resumeForeground(c) else { shutdown(discard = false); status = "Listening is off" }
     DigitalBrainRuntime.service?.refresh(forceNotification = true)
@@ -103,14 +121,14 @@ object GlassesListening {
     require(value in 0..100) { "Choose a volume between 0 and 100" }
     load(c)
     val who = checkNotNull(account) { "Sign in first" }
-    check(GlassesTranscriptStore.prefs(c, who).edit().putInt("minimumVolume", value).commit())
+    check(GlassesWakeStore.prefs(c, who).edit().putInt("minimumVolume", value).commit())
     minimumVolume = value
   }
   private fun permitted(c: Context) = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_PHONE_STATE)
     .all { ContextCompat.checkSelfPermission(c, it) == PackageManager.PERMISSION_GRANTED }
   fun resumeForeground(c: Context) {
     load(c)
-    if (!enabled || !RuntimeGlasses.enabled(c) || !RuntimeGlasses.signedIn(c) || !permitted(c) || model == null) return
+    if (!enabled || !RuntimeGlasses.enabled(c) || !RuntimeGlasses.signedIn(c) || !permitted(c) || model == null || baseUri == null) return
     if (model?.let { File(it).length() > 100_000_000 } != true) {
       shutdown(discard = true); status = "Turn listening on again to prepare speech recognition"; return
     }
@@ -128,6 +146,10 @@ object GlassesListening {
     if (File(c.filesDir.path).usableSpace < 16 * 1024 * 1024) {
       shutdown(discard = true); status = "Free some phone storage to resume listening"
       DigitalBrainRuntime.service?.refresh(forceNotification = true); return
+    }
+    val who = account
+    if (who != null && GlassesWakeStore.pendingCount(c, who) >= 4 && !busy) {
+      pause(); status = "Retry saving captures to resume listening"; return
     }
     val service = DigitalBrainRuntime.service
     if (service == null || service.foregroundTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) {
@@ -150,12 +172,35 @@ object GlassesListening {
     }
     if (active) return
     check(!GlassesRecording.capturing)
-    segmenter = GlassesSpeechSegmenter { submit(it) }
+    val generation = ++sessionGeneration
+    wakeSession = GlassesWakeSession(c, lastWake,
+      { at -> main.post {
+        if (active && generation == sessionGeneration) {
+          lastWake = at; wakes++; capturing = true; status = "Capturing command"
+          if (captureWake?.isHeld == true) captureWake?.release()
+          captureWake = c.getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:WakeCapture").apply { acquire(35_000L) }
+          RuntimeGlasses.blinkWake(
+            { if (generation == sessionGeneration) ledQueued++ },
+            { if (generation == sessionGeneration) ledFailures++ })
+        }
+      } },
+      { capture -> main.post {
+        if (active && generation == sessionGeneration) {
+          capturing = false; submit(capture); status = "Listening for Hey Brain"
+          if (captureWake?.isHeld == true) captureWake?.release(); captureWake = null
+        }
+      } },
+      { main.post { if (generation == sessionGeneration) quietSegments++ } },
+      { main.post { if (active && generation == sessionGeneration) {
+        shutdown(discard = true); failures++; status = "Turn listening off and on to try again"
+        DigitalBrainRuntime.service?.refresh(forceNotification = true)
+      } } })
     active = true; lastPcm = SystemClock.elapsedRealtime(); vadEnabled = null
     transitioning = true
     try {
       RuntimeGlasses.setListeningMic(true)
-      status = "Listening for speech"
+      status = "Listening for Hey Brain"
     } catch (_: Exception) { pause(); failures++; status = "Could not start listening" }
     finally { transitioning = false }
   }
@@ -164,9 +209,8 @@ object GlassesListening {
       val c = context ?: return
       if (!foregroundOwned) return
       reconcile(c)
-      segmenter?.tick(SystemClock.elapsedRealtime())
       // Missing PCM is expected during VAD silence; never restart the mic for silence.
-      if (active && speechEvents == 0L && SystemClock.elapsedRealtime() - lastPcm > 60_000) status = "Listening for speech"
+      if (active && speechEvents == 0L && SystemClock.elapsedRealtime() - lastPcm > 60_000) status = "Listening for Hey Brain"
       main.postDelayed(this, 1000)
     }
   }
@@ -174,14 +218,14 @@ object GlassesListening {
     if (!active) return
     speechEvents++
     val generation = ++speechGeneration
-    segmenter?.vad(value, SystemClock.elapsedRealtime())
+    wakeSession?.vad(value)
     if (value) {
-      status = "Speech detected"
+      if (!capturing) status = "Listening for Hey Brain"
       if (captureWake?.isHeld != true) captureWake = context?.getSystemService(PowerManager::class.java)
         ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:SpeechCapture")?.apply { acquire(25_000L) }
     } else {
-      status = "Listening for speech"
-      main.postDelayed({ if (generation == speechGeneration) { if (captureWake?.isHeld == true) captureWake?.release(); captureWake = null } }, 1500)
+      if (!capturing) status = "Listening for Hey Brain"
+      main.postDelayed({ if (!capturing && generation == speechGeneration) { if (captureWake?.isHeld == true) captureWake?.release(); captureWake = null } }, 1500)
     }
   }
   fun vadStatus(value: Boolean) { if (active) vadEnabled = value }
@@ -195,9 +239,9 @@ object GlassesListening {
     if (lastPcm - levelWindowAt >= 300) { audioLevel = level; levelWindowAt = lastPcm }
     else audioLevel = maxOf(audioLevel, level)
     levelAt = lastPcm
-    if (segmenter?.collecting == true && captureWake?.isHeld != true) captureWake = context?.getSystemService(PowerManager::class.java)
+    if (captureWake?.isHeld != true) captureWake = context?.getSystemService(PowerManager::class.java)
       ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:SpeechCapture")?.apply { acquire(25_000L) }
-    segmenter?.pcm(event.pcm, System.currentTimeMillis(), lastPcm)
+    wakeSession?.pcm(event.pcm, minimumVolume)
   }
   fun callNotification(key: String, interrupted: Boolean) {
     if (interrupted && armed && callSources.size < 32) {
@@ -211,7 +255,7 @@ object GlassesListening {
   }
   fun pause() {
     if (!active) return
-    active = false; segmenter?.finish(); segmenter = null
+    active = false; sessionGeneration++; capturing = false; wakeSession?.close(); wakeSession = null
     val wasTransitioning = transitioning; transitioning = true
     runCatching { RuntimeGlasses.setListeningMic(false) }
     transitioning = wasTransitioning
@@ -222,10 +266,10 @@ object GlassesListening {
     armed = false; pause(); keepWorker = false; callSources.clear(); main.removeCallbacks(watchdog)
     if (discard) { queue.clear(); engine?.abort() }
   }
-  private fun submit(chunk: SpeechChunk) {
-    if (!GlassesAudioLevel.accepts(chunk.pcm, minimumVolume)) { quietSegments++; return }
+  private fun submit(capture: WakeCapture) {
     val who = account ?: return; val path = model ?: return
-    if (!queue.offer(Job(who, path, chunk))) { dropped++; status = "Speech is arriving faster than it can be saved"; return }
+    val folder = baseUri ?: return
+    if (!queue.offer(Job(who, path, folder, capture))) { dropped++; status = "Captures are arriving faster than they can be saved"; return }
     keepWorker = true
     // The main-looper completion owns restart, even if the old thread has just exited.
     if (worker != null) return
@@ -247,21 +291,38 @@ object GlassesListening {
         val wake = c.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:Transcription")
         wake.acquire(90_000L)
         val timeout = Runnable { whisper.abort() }
+        var staged: File? = null
         try {
+          if (!RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != job.account) continue
+          staged = GlassesWakeStore.stage(c, job.account, job.capture, job.baseUri)
           if (loadedModel != job.model) { whisper.release(); whisper.load(job.model); loadedModel = job.model }
-          val samples = FloatArray(job.chunk.pcm.size / 2) { i ->
-            val v = (job.chunk.pcm[i * 2].toInt() and 255) or (job.chunk.pcm[i * 2 + 1].toInt() shl 8)
+          val samples = FloatArray(job.capture.chunk.pcm.size / 2) { i ->
+            val v = (job.capture.chunk.pcm[i * 2].toInt() and 255) or (job.capture.chunk.pcm[i * 2 + 1].toInt() shl 8)
             v.toShort().toFloat() / 32768f
           }
           main.postDelayed(timeout, 60_000)
           val started = SystemClock.elapsedRealtime()
           val text = whisper.transcribe(samples)
           val duration = SystemClock.elapsedRealtime() - started
-          if (text.isNotBlank() && RuntimeGlasses.signedIn(c) && GlassesTranscriptStore.account(c) == job.account) GlassesTranscriptStore.append(c, job.account, job.chunk, text, duration)
+          if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account) {
+            GlassesWakeStore.transcript(staged, text, duration, true)
+            GlassesWakeStore.publish(c, job.account, staged)
+          } else staged.deleteRecursively()
           main.post { completed++; processedMs += samples.size * 1000L / 16000; inferenceMs += duration }
-        } catch (_: Exception) { main.post { failures++; status = "Could not transcribe some speech" } }
-        catch (_: LinkageError) { main.post { failures++; status = "Speech engine is unavailable" } }
+        } catch (_: Exception) {
+          staged?.let { if (!RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != job.account) it.deleteRecursively()
+            else runCatching {
+              val metadata = org.json.JSONObject(File(it, "capture.json").readText())
+              if (metadata.getString("transcriptionStatus") == "pending") GlassesWakeStore.transcript(it, "", 0, false)
+            }
+          }
+          main.post { failures++; status = "Could not finish a capture. Retry saving below." }
+        } catch (_: LinkageError) {
+          staged?.let { runCatching { GlassesWakeStore.transcript(it, "", 0, false) } }
+          main.post { failures++; status = "Could not transcribe a capture. Retry saving below." }
+        }
         finally {
+          staged?.let { GlassesWakeStore.endProcessing(it) }
           lastUsed = SystemClock.elapsedRealtime(); busy = false; main.removeCallbacks(timeout)
           if (wake.isHeld) wake.release()
         }
@@ -271,8 +332,8 @@ object GlassesListening {
       main.post { worker = null; if (queue.isNotEmpty()) { keepWorker = true; worker = Thread({ consume() }, "glasses-transcription").apply { start() } } }
     }
   }
-  fun export(c: Context, baseUri: String): String {
+  fun retrySaves(c: Context, baseUri: String) {
     check(RuntimeGlasses.signedIn(c)) { "Sign in first" }
-    return GlassesTranscriptStore.export(c, checkNotNull(GlassesTranscriptStore.account(c)), baseUri)
+    GlassesWakeStore.retry(c, checkNotNull(GlassesWakeStore.account(c)), baseUri)
   }
 }

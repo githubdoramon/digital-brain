@@ -1,0 +1,10 @@
+HH EY1 B R EY1 N @hey_brain
+HH EY1 B R IH1 N @hey_brain
+OW2 K EY1 B R EY1 N @okay_brain
+OW2 K EY1 B R IH1 N @okay_brain
+HH EY1 R EY1 N @reject_0
+HH EY1 B R AY1 AH0 N @reject_1
+HH EY1 T R EY1 N @reject_3
+HH EY1 B R EY1 V @reject_4
+HH EY1 B EY1 B @reject_5
+B R EY1 N @reject_6

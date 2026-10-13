@@ -6,7 +6,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /** Bounded mailbox. Never blocks the BLE/main callback; overflow stops capture instead of dropping audio. */
-class GlassesPcmWriter(file: File, private val failure: () -> Unit, private val finished: () -> Unit) {
+class GlassesPcmWriter(file: File, private val failure: () -> Unit, private val finished: () -> Unit, private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() }) {
   private val queue = ArrayBlockingQueue<ByteArray>(128)
   @Volatile private var accepting = true
   @Volatile var bytes = 0L
@@ -14,12 +14,12 @@ class GlassesPcmWriter(file: File, private val failure: () -> Unit, private val 
   private val thread = Thread({
     try {
       FileOutputStream(file).use { output ->
-        var lastSync = android.os.SystemClock.elapsedRealtime()
+        var lastSync = clock()
         while (accepting || queue.isNotEmpty()) {
           val data = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
           output.write(data); bytes += data.size
-          if (android.os.SystemClock.elapsedRealtime() - lastSync >= 1000) {
-            output.fd.sync(); lastSync = android.os.SystemClock.elapsedRealtime()
+          if (clock() - lastSync >= 1000) {
+            output.fd.sync(); lastSync = clock()
           }
         }
         output.fd.sync()

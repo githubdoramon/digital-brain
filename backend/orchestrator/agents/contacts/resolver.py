@@ -58,6 +58,7 @@ from llm_json_schemas import (
 )
 from observability import trace
 from observability.logger import get_runtime_logger
+from observability.mirador import timed_workflow_stage
 from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,
@@ -1428,6 +1429,7 @@ def _selector_has_explicit_collective_intent(
     return any(token and token in normalized_text for token in selector_tokens)
 
 
+@timed_workflow_stage("contact_resolution", "collective_selector_extraction")
 def _extract_collective_selectors_via_llm(
     *,
     text: str,
@@ -1483,6 +1485,7 @@ def _extract_collective_selectors_via_llm(
     return llm_collective_selectors
 
 
+@timed_workflow_stage("contact_resolution", "people_extraction_pipeline")
 def extract_people_from_text(
     text: str,
     conversation_messages: list[dict[str, str]] | None = None,
@@ -2046,6 +2049,7 @@ def resolve_contact(
         return result
 
 
+@timed_workflow_stage("contact_resolution", "total")
 def resolve_contacts_from_text(
     text: str,
     user_email: str,
@@ -2054,6 +2058,7 @@ def resolve_contacts_from_text(
     mode: str = FULL_RESOLUTION_MODE,
     request_context: dict[str, Any] | None = None,
     participant_focus: bool = False,
+    include_enrichment: bool = False,
 ) -> dict[str, Any]:
     """
     Complete pipeline: extract people from text and resolve them to contacts.
@@ -2061,9 +2066,9 @@ def resolve_contacts_from_text(
     This is the main entry point. It:
     1. Extracts person mentions from text (LLM)
     2. Resolves each mention to a contact (or marks as new/ambiguous)
-    3. Infers professions for new contacts
-    4. Infers relationships between contacts and proposes missing ones
-    5. Returns structured results
+    3. Optionally infers professions and missing relationships when
+       ``include_enrichment`` is enabled by the background worker
+    4. Returns structured results
 
     Args:
         text: The text to analyze
@@ -2266,33 +2271,39 @@ def resolve_contacts_from_text(
             )
         return result
 
-    # Step 3: Infer professions for new contacts
-    logger.info("[contact_resolver] Step 3: Inferring professions for new contacts...")
-    logger.info("[contact_resolver] Step 4: Inferring relationship pairs...")
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        profession_future = executor.submit(
-            _infer_professions_for_new_contacts,
-            new_contacts,
-            effective_text,
-        )
-        relationship_pairs_future = executor.submit(
-            _infer_relationship_pairs,
-            people,
-            effective_text,
-        )
-        profession_by_text = profession_future.result()
-        relationship_pairs = relationship_pairs_future.result()
+    suggested_relationships: list[dict[str, Any]] = []
+    if include_enrichment:
+        # Opportunistic relationship/profession analysis is only enabled by the
+        # background enrichment worker. The request path still resolves people,
+        # but does not wait for speculative graph inference.
+        logger.info("[contact_resolver] Background enrichment: inferring professions and relationships")
+        profession_candidates = new_contacts + resolved_contacts
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            profession_future = executor.submit(
+                _infer_professions_for_contact_mentions,
+                profession_candidates,
+                effective_text,
+            )
+            relationship_pairs_future = executor.submit(
+                _infer_relationship_pairs,
+                people,
+                effective_text,
+            )
+            profession_by_text = profession_future.result()
+            relationship_pairs = relationship_pairs_future.result()
 
-    # Step 5: Suggest missing relationships (only when none exist yet)
-    logger.info("[contact_resolver] Step 5: Suggesting missing relationships...")
-    suggested_relationships = _suggest_missing_relationships(
-        pairs=relationship_pairs,
-        full_text=effective_text,
-        user_email=user_email,
-        resolution_cache=resolution_cache,
-        profession_by_text=profession_by_text,
-        request_context=request_context,
-    )
+        for person in profession_candidates:
+            person_text = str(person.get("original_text") or "")
+            if person_text in profession_by_text:
+                person["inferred_profession"] = profession_by_text[person_text]
+        suggested_relationships = _suggest_missing_relationships(
+            pairs=relationship_pairs,
+            full_text=effective_text,
+            user_email=user_email,
+            resolution_cache=resolution_cache,
+            profession_by_text=profession_by_text,
+            request_context=request_context,
+        )
 
     logger.info("[contact_resolver] Resolution complete:")
     logger.info("[contact_resolver]   - Resolved: %s", len(resolved_contacts))
@@ -2945,19 +2956,26 @@ def _select_unique_multi_token_name_match(
     return None
 
 
-def _infer_professions_for_new_contacts(
-    new_contacts: list[dict[str, Any]],
+@timed_workflow_stage("contact_resolution", "profession_inference_batch")
+def _infer_professions_for_contact_mentions(
+    contacts: list[dict[str, Any]],
     full_text: str,
 ) -> dict[str, Optional[str]]:
     profession_by_text: dict[str, Optional[str]] = {}
-    for new_contact in new_contacts:
-        person_text = new_contact["original_text"]
+    for contact in contacts:
+        person_text = str(contact.get("original_text") or "")
+        if not person_text:
+            continue
         profession = None
         if _should_attempt_profession_inference(person_text, full_text):
             profession = _infer_profession_from_text(person_text, full_text)
-        new_contact["inferred_profession"] = profession
         profession_by_text[person_text] = profession
     return profession_by_text
+
+
+# Retain the former helper name for internal callers and focused compatibility
+# tests; enrichment now runs over both newly mentioned and resolved contacts.
+_infer_professions_for_new_contacts = _infer_professions_for_contact_mentions
 
 
 def _normalize_person_key(text: str) -> str:
@@ -3367,6 +3385,7 @@ def _build_related_contact_candidates(relationship_context: dict[str, Any]) -> l
     return candidates
 
 
+@timed_workflow_stage("contact_resolution", "nested_relationship_selection")
 def _llm_match_nested_relationship_candidates(
     *,
     anchor_display_name: str,
@@ -3643,6 +3662,7 @@ def _resolve_via_relationship(
     return result
 
 
+@timed_workflow_stage("contact_resolution", "contact_disambiguation")
 def _llm_disambiguate_contact(
     person_text: str,
     candidates: list[dict[str, Any]],
@@ -3820,6 +3840,7 @@ def _llm_disambiguate_contact(
         }
 
 
+@timed_workflow_stage("contact_resolution", "profession_inference")
 def _infer_profession_from_text(person_text: str, full_text: str) -> Optional[str]:
     """
     Infer profession from context if explicitly stated.
@@ -3928,6 +3949,7 @@ def _is_meaningful_relationship_type(value: Optional[str]) -> bool:
     return not all(token in _BLOCKED_RELATIONSHIP_TERMS for token in tokens)
 
 
+@timed_workflow_stage("contact_resolution", "relationship_pair_extraction")
 def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[str, str]]:
     """
     Infer explicit relationship pairs between people mentioned in text.
@@ -3992,6 +4014,7 @@ def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[st
     return pairs
 
 
+@timed_workflow_stage("contact_resolution", "relationship_type_inference")
 def _infer_relationship_types(
     person_text: str,
     anchor_text: str,

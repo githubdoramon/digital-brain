@@ -135,8 +135,12 @@ type DigitalBrainRuntimeModule = NativeModule & {
   setGlassesEnabled(enabled: boolean): Promise<void>;
   getGlassesListeningStatus(): Promise<GlassesListeningStatus>;
   setGlassesListeningMinimumVolume(value: number): Promise<void>;
-  setGlassesListening(enabled: boolean, modelUri: string | null): Promise<void>;
-  exportGlassesTranscripts(baseUri: string): Promise<string>;
+  setGlassesListening(
+    enabled: boolean,
+    modelUri: string | null,
+    baseUri: string | null,
+  ): Promise<void>;
+  retryGlassesWakeSaves(baseUri: string): Promise<void>;
   syncGlassesMedia(): Promise<void>;
   getGlassesStatus(): Promise<GlassesStatus>;
   scanGlasses(): Promise<void>;
@@ -152,7 +156,7 @@ type DigitalBrainRuntimeModule = NativeModule & {
   getGlassesRecordingStatus(): Promise<GlassesRecordingStatus>;
   startGlassesRecording(baseUri: string): Promise<void>;
   stopGlassesRecording(): Promise<void>;
-  retryGlassesRecordingSave(baseUri: string): Promise<void>;
+  retryGlassesRecordingSave(baseUri: string, id: string | null): Promise<void>;
   playGlassesRecording(uri: string): Promise<void>;
   seekGlassesRecording(ms: number): Promise<void>;
   stopGlassesRecordingPlayback(): Promise<void>;
@@ -177,8 +181,21 @@ type DigitalBrainRuntimeModule = NativeModule & {
 
 export default requireOptionalNativeModule<DigitalBrainRuntimeModule>('DigitalBrainRuntime');
 
+export type GlassesRecordingSave = {
+  id: string;
+  name: string;
+  startedAtMs: number;
+  durationMs: number;
+  state: 'FINISHING' | 'QUEUED' | 'ENCODING' | 'COPYING' | 'VERIFYING' | 'FAILED';
+  progress: number | null;
+  targetUri: string | null;
+};
+
 export type GlassesRecordingStatus = {
-  state: 'IDLE' | 'RECORDING' | 'SAVING' | 'SAVE_FAILED';
+  state: 'IDLE' | 'STARTING' | 'RECORDING';
+  canStart: boolean;
+  libraryRevision: number;
+  processing: GlassesRecordingSave[];
   startedAtMs: number;
   durationMs: number;
   message: string | null;
@@ -194,6 +211,8 @@ export type GlassesRecordingStatus = {
 };
 
 export type GlassesListeningStatus = {
+  capturing: boolean;
+  savePending: number;
   minimumVolume: number;
   audioLevel: number;
   enabled: boolean;
