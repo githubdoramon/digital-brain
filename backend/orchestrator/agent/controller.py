@@ -34,9 +34,8 @@ from agents.registry import build_conversational_profile_registry, choose_profil
 from llm_config import get_smart_model
 from location_inference import infer_current_place
 from observability import trace
-from observability.mirador import timed_workflow_stage
 from observability.logger import get_runtime_logger
-from observability.mirador import record_agent_run_metrics, traced_agent_run
+from observability.mirador import record_agent_run_metrics, timed_workflow_stage, traced_agent_run
 from search_normalization import normalize_search_text
 from tools.action_enums import GetEventsAction
 
