@@ -42,20 +42,54 @@ object RuntimeGlasses {
   private var updateStatus = "not_checked"
   private var error: String? = null
   private var firmwareError: String? = null
+  private var manualLightUntil = 0L
   private val trail = ArrayDeque<Map<String, Any?>>()
 
   private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-  fun blinkWake(onQueued: () -> Unit, onFailure: () -> Unit) {
+  private suspend fun sendLedLight(c: Context, source: LedSource, pattern: GlassesLightPattern, color: RgbLedColor = RgbLedColor.BLUE): Map<String, Any> {
+    val attempt = GlassesLedDiagnostics.start(c, source, color.value, pattern)
     val owner = sdk
-    if (owner == null) { onFailure(); return }
+    val current = generation
+    if (owner == null || !alertsReady()) {
+      GlassesLedDiagnostics.record(c, attempt, source, LedResult.UNAVAILABLE)
+      return mapOf("attempt" to attempt, "sent" to false)
+    }
+    val started = android.os.SystemClock.elapsedRealtime()
+    val result = try {
+      val response = withTimeout(5000) {
+        owner.rgbLedControl(RgbLedRequest("light-${java.util.UUID.randomUUID()}", null,
+          RgbLedAction.ON, color,
+          pattern.onMs, pattern.offMs, pattern.count))
+      }
+      if (response.state == "success") LedResult.RESPONSE_SUCCESS else LedResult.RESPONSE_ERROR
+    } catch (_: TimeoutCancellationException) { LedResult.RESPONSE_TIMEOUT }
+    catch (_: Exception) { LedResult.DISPATCH_FAILED }
+    GlassesLedDiagnostics.record(c, attempt, source, result, android.os.SystemClock.elapsedRealtime() - started)
+    return mapOf("attempt" to attempt, "sent" to (current == generation && result in setOf(LedResult.RESPONSE_SUCCESS, LedResult.RESPONSE_TIMEOUT)))
+  }
+  fun blinkWake(onRequested: () -> Unit, onFailure: () -> Unit) {
+    val c = context
+    if (c == null) { onFailure(); return }
     val current = generation
     scope.launch {
-      if (current != generation || owner !== sdk || !alertsReady()) { onFailure(); return@launch }
-      try {
-        if (owner.dispatchWakeLedFeedback()) onQueued() else onFailure()
-      } catch (_: Exception) { if (current == generation) onFailure() }
+      if (android.os.SystemClock.elapsedRealtime() < manualLightUntil) {
+        val attempt = GlassesLedDiagnostics.start(c, LedSource.WAKE, "blue", GlassesLightPattern.QUICK)
+        GlassesLedDiagnostics.record(c, attempt, LedSource.WAKE, LedResult.SUPPRESSED_FOR_TEST)
+        return@launch
+      }
+      onRequested()
+      val result = sendLedLight(c, LedSource.WAKE, GlassesLightPattern.QUICK)
+      if (current == generation && result["sent"] != true) onFailure()
     }
   }
+  suspend fun testLight(c: Context, colorKey: String, patternKey: String): Map<String, Any> {
+    val pattern = GlassesLightPattern.parse(patternKey)
+    val color = GlassesLightPattern.color(colorKey)
+    // Keep automatic wake feedback from changing the observed test color; capture itself continues.
+    manualLightUntil = android.os.SystemClock.elapsedRealtime() + 30_000
+    return sendLedLight(c, LedSource.TEST_CUSTOM, pattern, color)
+  }
+  fun endLightTest() { manualLightUntil = 0L }
   fun signedIn(c: Context) = prefs(c).getBoolean("signed_in", false)
   fun enabled(c: Context) = RuntimeFeature.GLASSES in DigitalBrainRuntime.owners(c)
   fun permitted(c: Context): Boolean = if (Build.VERSION.SDK_INT >= 31) {
@@ -425,7 +459,7 @@ object RuntimeGlasses {
     )
   }
   fun diagnostics(c: Context): Map<String, Any?> = snapshot(c).filterKeys { it !in setOf("savedName", "devices", "wifi") } +
-    mapOf("listening" to GlassesListening.diagnostics(), "recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
+    mapOf("ledFeedback" to GlassesLedDiagnostics.events(c), "listening" to GlassesListening.diagnostics(), "recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
       // UI status may contain SDK-provided error text. Export structured media events instead.
       "media" to GlassesMediaStore.status(c).filterKeys { it in setOf("pending", "transport") })
 }

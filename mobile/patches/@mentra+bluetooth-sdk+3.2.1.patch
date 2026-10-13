@@ -108,21 +108,10 @@ index 0000000..843e2c9
 +        .metaData?.getBoolean("com.mentra.bluetoothsdk.external_connection_owner", false) == true
 +}
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-index b56ab97..b6e493d 100644
+index b56ab97..d2c46c4 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-@@ -1186,6 +1186,10 @@ class MentraBluetoothSdk private constructor(
-         }
-     }
- 
-+    /** App feedback only: true means queued, not a hardware acknowledgement. */
-+    fun dispatchWakeLedFeedback(): Boolean =
-+        (deviceManager.sgc as? com.mentra.bluetoothsdk.sgcs.MentraLive)?.dispatchWakeLedFeedback() ?: false
-+
-     suspend fun rgbLedControl(request: RgbLedRequest): RgbLedControlResponseEvent {
-         val pending = PendingResponse<RgbLedControlResponseEvent>("RGB LED command ${request.requestId}")
-         pendingRgbLedRequests[request.requestId] = pending
-@@ -1459,7 +1463,7 @@ class MentraBluetoothSdk private constructor(
+@@ -1459,7 +1459,7 @@ class MentraBluetoothSdk private constructor(
      internal suspend fun startOtaUpdate(otaVersionUrl: String): OtaStartAckEvent =
          startOtaCommand(otaVersionUrl)
  
@@ -132,7 +121,7 @@ index b56ab97..b6e493d 100644
      fun startAr99OtaFromFile(path: String): Boolean {
          requireGlassesConnected("start AR99 OTA")
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
-index 474dc1c..7a15569 100644
+index 474dc1c..f705845 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
 @@ -1082,6 +1082,7 @@ class MentraLive : SGCManager() {
@@ -159,44 +148,3 @@ index 474dc1c..7a15569 100644
          if (postGattLifecycle { handleReconnection() }) return
          // Don't attempt reconnection if we've been killed/forgotten
          if (isKilled) {
-@@ -10061,6 +10064,28 @@ class MentraLive : SGCManager() {
-         sendJsonWithoutAck(json, false)
-     }
- 
-+    /** Low-latency internal blue feedback sent straight to BES, without waking MTK. */
-+    fun dispatchWakeLedFeedback(): Boolean {
-+        if (!isConnected || !glassesReady) return false
-+        val commands = listOf(
-+            JSONObject().put("C", "android_control_led").put("V", 1)
-+                .put("B", JSONObject().put("on", true).toString()),
-+            JSONObject().put("C", "cs_ledsetlevel").put("V", 1)
-+                .put("B", JSONObject().put("current", 0).put("brightness", 100).toString()),
-+            JSONObject().put("C", "cs_ledon").put("V", 1)
-+                .put("B", JSONObject().put("led", 2).put("ontime", 500)
-+                    .put("offtime", 100).put("count", 1).toString())
-+        )
-+        // Encode every frame before queuing so failure cannot leave an incomplete pattern.
-+        val frames = commands.map { command ->
-+            K900ProtocolUtils.packDataToK900(command.toString().toByteArray(StandardCharsets.UTF_8),
-+                K900ProtocolUtils.CMD_TYPE_STRING, k900LengthEndian()) ?: return false
-+        }
-+        frames.forEach { queueData(it) }
-+        rgbLedAuthorityClaimed = true
-+        return true // Queued only: BES does not provide the SDK's MTK requestId response.
-+    }
-+
-     /**
-      * Claim or release RGB LED control authority from BES chipset
-      * @param claimControl true to claim control, false to release
-@@ -10080,7 +10105,10 @@ class MentraLive : SGCManager() {
-                             (if (claimControl) "📍 Claiming" else "📍 Releasing") +
-                             " RGB LED control authority"
-             )
--            sendJson(command, false)
-+            val frame = K900ProtocolUtils.packDataToK900(
-+                    command.toString().toByteArray(StandardCharsets.UTF_8),
-+                    K900ProtocolUtils.CMD_TYPE_STRING, k900LengthEndian()) ?: return
-+            queueData(frame)
-             rgbLedAuthorityClaimed = claimControl
-         } catch (e: JSONException) {
-             Log.e(TAG, "Error building RGB LED authority command", e)

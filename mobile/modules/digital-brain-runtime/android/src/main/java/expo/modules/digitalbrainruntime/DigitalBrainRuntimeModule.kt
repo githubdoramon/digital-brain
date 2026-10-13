@@ -44,6 +44,15 @@ class DigitalBrainRuntimeModule : Module() {
     } }
     AsyncFunction("setGlassesListeningMinimumVolume") Coroutine { value: Int -> withContext(Dispatchers.Main) { GlassesListening.setMinimumVolume(context(), value) } }
     AsyncFunction("retryGlassesWakeSaves") Coroutine { baseUri: String -> withContext(Dispatchers.IO) { GlassesListening.retrySaves(context(), baseUri) } }
+    AsyncFunction("testGlassesLight") Coroutine { color: String, pattern: String -> withContext(Dispatchers.Main) {
+      check(appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to test the light" }
+      RuntimeGlasses.testLight(context(), color, pattern)
+    } }
+    AsyncFunction("endGlassesLightTest") Coroutine { -> withContext(Dispatchers.Main) { RuntimeGlasses.endLightTest() } }
+    AsyncFunction("reportGlassesLightTest") Coroutine { attempt: Int, visible: Boolean -> withContext(Dispatchers.Main) {
+      GlassesLedDiagnostics.observation(context(), attempt, visible)
+      RuntimeGlasses.endLightTest()
+    } }
     AsyncFunction("syncGlassesMedia") { GlassesMediaWorker.enqueue(context(), manual = true) }
     AsyncFunction("getGlassesRecordingStatus") Coroutine { -> withContext(Dispatchers.Main) {
       GlassesRecording.snapshot(context()) + mapOf("playback" to GlassesRecordingPlayback.snapshot())

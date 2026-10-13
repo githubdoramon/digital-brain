@@ -141,6 +141,12 @@ type DigitalBrainRuntimeModule = NativeModule & {
     baseUri: string | null,
   ): Promise<void>;
   retryGlassesWakeSaves(baseUri: string): Promise<void>;
+  testGlassesLight(
+    color: 'red' | 'green' | 'blue' | 'orange' | 'white',
+    pattern: 'quick' | 'double' | 'triple' | 'slow' | 'hold',
+  ): Promise<{ attempt: number; sent: boolean }>;
+  endGlassesLightTest(): Promise<void>;
+  reportGlassesLightTest(attempt: number, visible: boolean): Promise<void>;
   syncGlassesMedia(): Promise<void>;
   getGlassesStatus(): Promise<GlassesStatus>;
   scanGlasses(): Promise<void>;

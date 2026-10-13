@@ -36,7 +36,7 @@ object GlassesListening {
   private var capturing = false
   private var wakes = 0L
   private var ledFailures = 0L
-  private var ledQueued = 0L
+  private var ledRequests = 0L
   private var legacyCleanupStarted = false
   private var status = "Listening is off"
   private var minimumVolume = 0
@@ -93,7 +93,7 @@ object GlassesListening {
       "capturing" to capturing, "savePending" to (account?.let { GlassesWakeStore.pendingCount(c, it) } ?: 0))
   }
   fun diagnostics(): Map<String, Any?> = mapOf("enabled" to enabled, "active" to active,
-    "minimumVolume" to minimumVolume, "quietSegments" to quietSegments, "wakes" to wakes, "ledFailures" to ledFailures, "ledQueued" to ledQueued, "capturing" to capturing,
+    "minimumVolume" to minimumVolume, "quietSegments" to quietSegments, "wakes" to wakes, "ledFailures" to ledFailures, "ledRequests" to ledRequests, "capturing" to capturing,
     "speechEvents" to speechEvents, "vadEnabled" to vadEnabled, "dropped" to dropped,
     "failures" to failures, "completed" to completed, "speechDurationMs" to processedMs,
     "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0)
@@ -181,7 +181,7 @@ object GlassesListening {
           captureWake = c.getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:WakeCapture").apply { acquire(35_000L) }
           RuntimeGlasses.blinkWake(
-            { if (generation == sessionGeneration) ledQueued++ },
+            { if (generation == sessionGeneration) ledRequests++ },
             { if (generation == sessionGeneration) ledFailures++ })
         }
       } },
