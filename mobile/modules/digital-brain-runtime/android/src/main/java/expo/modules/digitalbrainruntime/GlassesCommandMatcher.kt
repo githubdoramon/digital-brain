@@ -16,12 +16,14 @@ internal object GlassesCommandMatcher {
   private data class Phrase(val command: GlassesCommand, val words: List<String>, val protected: Set<Int>)
   private val phrases = listOf(
     Phrase(GlassesCommand.OPEN_FRONT_GATE, listOf("open", "front", "gate"), setOf(0, 1)),
-    Phrase(GlassesCommand.OPEN_FRONT_GATE, listOf("front", "gate"), setOf(0, 1)),
+    Phrase(GlassesCommand.OPEN_FRONT_GATE, listOf("front", "gate"), setOf(0)),
     Phrase(GlassesCommand.OPEN_FRONT_GATE, listOf("open", "front", "door"), setOf(0, 1)),
-    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("toggle", "car", "gate"), setOf(0, 1)),
-    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("toggle", "car", "door"), setOf(0, 1)),
-    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("car", "gate"), setOf(0, 1)),
+    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("toggle", "car", "gate"), setOf(1)),
+    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("toggle", "car", "door"), setOf(1)),
+    Phrase(GlassesCommand.TOGGLE_CAR_GATE, listOf("car", "gate"), setOf(0)),
     Phrase(GlassesCommand.TAKE_PICTURE, listOf("take", "picture"), setOf(0)),
+    Phrase(GlassesCommand.TAKE_PICTURE, listOf("take", "pic"), setOf(0)),
+    Phrase(GlassesCommand.TAKE_PICTURE, listOf("take", "peek"), setOf(0)),
     Phrase(GlassesCommand.TAKE_PICTURE, listOf("take", "photo"), setOf(0)),
   )
   fun match(text: String): GlassesCommandDecision {

@@ -61,6 +61,7 @@ object GlassesListening {
   @Volatile private var engine: GlassesWhisperBridge? = null
   @Volatile private var busy = false
   // Retain the foreground microphone type while waiting for reconnect/call end within this session.
+  internal val commandFeedbackGeneration get() = if (active && armed && enabled) sessionGeneration else null
   val foregroundOwned get() = armed && enabled
 
   private fun load(c: Context) {

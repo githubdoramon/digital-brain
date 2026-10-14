@@ -93,16 +93,33 @@ object RuntimeGlasses {
   internal suspend fun takeWakePhoto(requestId: String): GlassesCommandOutcome {
     if (!alertsReady()) return GlassesCommandOutcome.CANCELLED
     val owner = sdk ?: return GlassesCommandOutcome.CANCELLED
+    val listeningGeneration = GlassesListening.commandFeedbackGeneration ?: return GlassesCommandOutcome.CANCELLED
+    val warmRequestId = "warm-$requestId"
+    fun eligible() = sdk === owner && alertsReady() &&
+      GlassesListening.commandFeedbackGeneration == listeningGeneration &&
+      context?.let { signedIn(it) && enabled(it) } == true
     return try {
-      // Save-only capture follows the glasses gallery path; no webhook or BLE image delivery.
+      // A prepared camera uses the glasses' own exposure-time snap, without cold-start prep clicks.
+      val prepared = try {
+        withTimeout(8000) {
+          owner.warmUpCamera(requestId = warmRequestId, size = PhotoSize.MAX, mode = PhotoMode.PHOTO,
+            exposureTimeNs = null, durationMs = 15_000, zsl = true, mfnr = true).state == "ready"
+        }
+      } catch (_: Exception) { false }
+      if (!eligible()) return GlassesCommandOutcome.CANCELLED
+      record("photo_camera_warmup", if (prepared) "ready" else "unavailable")
+      // Older firmware without warm-up still captures silently instead of introducing prep sounds.
       val response = withTimeout(10_000) {
         owner.requestPhoto(PhotoRequest(requestId = requestId, size = PhotoSize.MAX,
-          webhookUrl = "", save = true, sound = false, compress = PhotoCompression.NONE,
-          transferMethod = "direct"))
+          webhookUrl = "", save = true, sound = prepared, compress = PhotoCompression.NONE,
+          zsl = true, mfnr = true, transferMethod = "direct"))
       }
       if (response.response.state == "success") GlassesCommandOutcome.ACCEPTED else GlassesCommandOutcome.FAILED
     } catch (_: Exception) { GlassesCommandOutcome.UNKNOWN }
-    finally { scheduleMediaSync() }
+    finally {
+      runCatching { owner.stopCameraWarmUp(warmRequestId) }
+      scheduleMediaSync()
+    }
   }
 
   fun signedIn(c: Context) = prefs(c).getBoolean("signed_in", false)

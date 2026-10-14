@@ -1,6 +1,6 @@
 # Fixed glasses commands
 
-Android validates the wake phrase and matches complete known commands locally after English Whisper transcription. Gate execution uses `POST /mobile/glasses/commands` through the frontend proxy with the existing Google bearer-token authentication. The backend receives no audio/transcript and invokes no model or agent tool loop. Photo capture stays native and uses the existing glasses gallery/Immich sync.
+Android validates the wake phrase and matches complete known commands locally after English Whisper transcription. Gate execution uses `POST /mobile/glasses/commands` through the frontend proxy with the existing Google bearer-token authentication. The backend receives no audio/transcript and invokes no model or agent tool loop. Photo capture stays native and uses the existing glasses gallery/Immich sync. The phone briefly prepares the camera through the public SDK and enables glasses-native photo sound after readiness; warm-camera firmware plays its shutter snap without preparation clicks. Unsupported warm-up retains silent capture. There is no bundled shutter PCM or phone media route for this feedback.
 
 The request schema forbids extra fields and accepts only:
 
