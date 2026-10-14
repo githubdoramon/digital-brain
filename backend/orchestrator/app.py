@@ -39,6 +39,7 @@ from routes.documents import create_documents_router
 from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
+from routes.glasses_commands import create_glasses_commands_router
 from routes.glasses_media import create_glasses_media_router
 from routes.google_calendar import create_google_calendar_router
 from routes.microsoft_calendar import create_microsoft_calendar_router
@@ -196,6 +197,7 @@ api.include_router(create_google_calendar_router())
 api.include_router(create_microsoft_calendar_router())
 api.include_router(create_documents_router())
 api.include_router(create_glasses_media_router())
+api.include_router(create_glasses_commands_router())
 api.include_router(create_generated_pdfs_router())
 api.include_router(create_evals_router())
 api.include_router(create_system_router())

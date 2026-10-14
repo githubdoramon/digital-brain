@@ -54,7 +54,7 @@ Automated checks cover TypeScript, lint, native compilation/manifest merging, re
 
 ## Original photos and videos
 
-Native automatic downloads and Immich uploads are implemented in the separate [media sync contract](GLASSES_MEDIA.md). This does not enable app-initiated captures or change firmware. Settings → Glasses includes a compact pending/status card and Sync now.
+Native automatic downloads and Immich uploads are implemented in the separate [media sync contract](GLASSES_MEDIA.md). Verified local take-picture commands can request a gallery capture; media sync itself does not initiate captures or change firmware. Settings → Glasses includes a compact pending/status card and Sync now.
 
 ## Local audio recording
 
@@ -64,4 +64,4 @@ Settings → Glasses → Recordings supports explicit Start/Stop, M4A output in 
 
 Glasses → Listening is a separate toggle, initially off, for native wake detection followed by English command transcription and local WAV/JSON capture saving. It shares the native microphone foreground service with manual recording, which takes priority and disables VAD for continuous M4A capture. See [GLASSES_LISTENING.md](GLASSES_LISTENING.md).
 
-Wake feedback calls the public SDK RGB API asynchronously, with the same request arguments as the historical app. The temporary light-test UI was removed after device confirmation of colors and blue wake feedback. No LED-specific SDK patch, framing override or raw UART command remains. Content-free request/reply/observed-result diagnostics are exported; neither reply nor timeout proves physical visibility. See GLASSES_LISTENING.md.
+Wake feedback calls the public SDK RGB API asynchronously, with the same request arguments as the historical app. The manual light-test panel is removed; automatic wake feedback uses green while blue remains under investigation. No LED-specific SDK patch, framing override or raw UART command remains. Content-free request/reply/observed-result diagnostics are exported; neither reply nor timeout proves physical visibility. See GLASSES_LISTENING.md.

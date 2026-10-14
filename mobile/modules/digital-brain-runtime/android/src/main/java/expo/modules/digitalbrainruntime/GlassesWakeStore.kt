@@ -51,7 +51,7 @@ internal object GlassesWakeStore {
     val dir = File(root, name).apply { check(mkdir()) }
     try {
       atomic(File(dir, "audio.wav"), wav(capture.chunk.pcm))
-      val meta = JSONObject().put("schemaVersion", 1).put("startedAt", Instant.ofEpochMilli(capture.chunk.startedAtMs))
+      val meta = JSONObject().put("schemaVersion", 2).put("startedAt", Instant.ofEpochMilli(capture.chunk.startedAtMs))
         .put("wakeDetectedAt", Instant.ofEpochMilli(capture.wakeAtMs)).put("endedAt", Instant.ofEpochMilli(capture.endAtMs))
         .put("timezone", ZoneId.systemDefault().id).put("language", "en").put("text", "")
         .put("receivedAudioDurationMs", capture.chunk.pcm.size * 1000L / 32000)
@@ -65,6 +65,15 @@ internal object GlassesWakeStore {
   @Synchronized fun transcript(dir: File, text: String, duration: Long, success: Boolean) {
     val meta = JSONObject(File(dir, "capture.json").readText()).put("text", text)
       .put("transcriptionDurationMs", duration).put("transcriptionStatus", if (success) "complete" else "failed")
+    atomic(File(dir, "capture.json"), meta.toString().toByteArray())
+  }
+  @Synchronized fun command(dir: File, decision: GlassesCommandDecision, requestId: String,
+                            outcome: GlassesCommandOutcome?) {
+    val meta = JSONObject(File(dir, "capture.json").readText())
+      .put("wakeVerified", decision.wakeVerified).put("commandMatch", decision.match.name.lowercase())
+      .put("command", decision.command?.key ?: JSONObject.NULL)
+      .put("commandRequestId", requestId)
+      .put("commandStatus", outcome?.key ?: "dispatching")
     atomic(File(dir, "capture.json"), meta.toString().toByteArray())
   }
   @Synchronized fun publish(c: Context, account: String, dir: File, overrideBase: String? = null) {

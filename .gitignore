@@ -53,3 +53,6 @@ android/.idea/
 
 # Private original media and resumable upload sessions
 backend/orchestrator/storage/glasses-media/
+
+# Private at-most-once glasses command receipts
+backend/orchestrator/storage/glasses-commands/

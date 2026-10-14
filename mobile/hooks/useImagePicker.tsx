@@ -1,6 +1,5 @@
 import React from 'react';
 import * as ImagePicker from 'expo-image-picker';
-import * as MediaLibrary from 'expo-media-library';
 
 import { ImageSourceSheet, type ImagePickSource } from '@/components/media/ImageSourceSheet';
 
@@ -87,11 +86,6 @@ export function useSingleImagePicker(): {
           exif: true,
         });
         return result.canceled || !result.assets?.length ? [] : [result.assets[0]];
-      }
-
-      const libraryPermission = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
-      if (!libraryPermission.granted) {
-        throw new Error('Allow photo library access to choose a photo.');
       }
 
       const allowMultiple = maxSelection > 1;

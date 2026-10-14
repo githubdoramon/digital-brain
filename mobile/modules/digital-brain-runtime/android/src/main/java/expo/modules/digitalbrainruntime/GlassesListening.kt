@@ -54,7 +54,7 @@ object GlassesListening {
   private var vadEnabled: Boolean? = null
   private var speechGeneration = 0
   private var captureWake: PowerManager.WakeLock? = null
-  private data class Job(val account: String, val model: String, val baseUri: String, val capture: WakeCapture)
+  private data class Job(val account: String, val model: String, val baseUri: String, val capture: WakeCapture, val generation: Long)
   private val queue = ArrayBlockingQueue<Job>(4)
   private var worker: Thread? = null
   @Volatile private var keepWorker = false
@@ -269,7 +269,7 @@ object GlassesListening {
   private fun submit(capture: WakeCapture) {
     val who = account ?: return; val path = model ?: return
     val folder = baseUri ?: return
-    if (!queue.offer(Job(who, path, folder, capture))) { dropped++; status = "Captures are arriving faster than they can be saved"; return }
+    if (!queue.offer(Job(who, path, folder, capture, sessionGeneration))) { dropped++; status = "Captures are arriving faster than they can be saved"; return }
     keepWorker = true
     // The main-looper completion owns restart, even if the old thread has just exited.
     if (worker != null) return
@@ -304,9 +304,20 @@ object GlassesListening {
           val started = SystemClock.elapsedRealtime()
           val text = whisper.transcribe(samples)
           val duration = SystemClock.elapsedRealtime() - started
+          main.removeCallbacks(timeout)
           if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account) {
             GlassesWakeStore.transcript(staged, text, duration, true)
-            GlassesWakeStore.publish(c, job.account, staged)
+            val decision = GlassesCommandMatcher.match(text)
+            val requestId = java.util.UUID.randomUUID().toString()
+            GlassesWakeStore.command(staged, decision, requestId, null)
+            val outcome = GlassesCommandExecutor.execute(c, decision, requestId, job.capture.endAtMs) {
+              active && armed && enabled && sessionGeneration == job.generation &&
+                RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
+            }
+            GlassesWakeStore.command(staged, decision, requestId, outcome)
+            if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account)
+              GlassesWakeStore.publish(c, job.account, staged)
+            else staged.deleteRecursively()
           } else staged.deleteRecursively()
           main.post { completed++; processedMs += samples.size * 1000L / 16000; inferenceMs += duration }
         } catch (_: Exception) {

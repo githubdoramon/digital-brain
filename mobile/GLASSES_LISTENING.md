@@ -14,7 +14,7 @@ Upstream model-weight redistribution terms remain unverified, as recorded in the
 
 ## Command capture
 
-An accepted wake calls the public `MentraBluetoothSdk.rgbLedControl` API from a coroutine using the historical request arguments: blue, 250ms on, zero off, one blink, null package name. No LED-specific SDK patches, custom dispatcher, raw UART commands or framing override remain. The coroutine bounds the optional response wait at five seconds without blocking capture. Native diagnostics count requests and dispatch errors; response timeout is not proof that a command was not sent. The LED command builder in installed SDK 3.2.1 was compared against downloaded 0.1.21-beta.5 and is identical ignoring whitespace. The six-second cooldown uses monotonic time from the accepted wake. Detection is bypassed during capture, so additional wake phrases do not split a command. It resumes after completion, subject to the remaining cooldown.
+An accepted wake calls the public `MentraBluetoothSdk.rgbLedControl` API from a coroutine using green, 250ms on, zero off, one blink and null package name; green replaces blue while the reported blue failure is investigated. No LED-specific SDK patches, custom dispatcher, raw UART commands or framing override remain. The coroutine bounds the optional response wait at five seconds without blocking capture. Native diagnostics count requests and dispatch errors; response timeout is not proof that a command was not sent. The LED command builder in installed SDK 3.2.1 was compared against downloaded 0.1.21-beta.5 and is identical ignoring whitespace. The six-second cooldown uses monotonic time from the accepted wake. Detection is bypassed during capture, so additional wake phrases do not split a command. It resumes after completion, subject to the remaining cooldown.
 
 Capture includes up to four seconds of received pre-roll, preserving the wake phrase and an immediately spoken command; it may include preceding speech. The maximum saved PCM is thirty seconds. A capture completes after 1.5 seconds of firmware-reported or below-threshold silence, or at the thirty-second time/byte limit. Native timers are deadline-based and best-effort under Android sleep. Calls, disconnect, OTA, manual recording and disable discard unfinished capture without saving a partial file. Audio never received from the glasses cannot be reconstructed. Timestamped JSON distinguishes received audio duration from wall-clock start/end; suppressed silence is not filled into the WAV.
 
@@ -36,8 +36,26 @@ Device validation remains required: Sherpa JNI inference on delivered glasses au
 
 ## LED validation and diagnostics
 
-Device testing confirmed the tested colors and timing patterns work, including blue feedback when saying Hey Brain. The temporary light-test card and its comparison controls have been removed from Listening. Automatic wake feedback continues to use the unchanged public SDK RGB API with the existing blue quick-blink arguments.
+Device testing reported that red, green, orange and white work but blue fails even with a three-second hold. The manual light-test panel is removed at user request. Automatic wake feedback uses the public SDK RGB API with green quick-blink arguments; blue behavior remains unresolved. Historical manual-test presets and observations remain available in native diagnostics.
 
 A persistent bounded 150-event `ledFeedback` trail retains safe request/outcome diagnostics: attempt sequence, timestamps, source/result enums, color, pattern, exact on/off milliseconds, count and response time. Historical manual-test observations remain readable. No request UUID, package, raw response/error, audio or transcript is exported. No LED-specific SDK patch, framing override or raw UART command remains.
 
 A successful SDK reply or timeout alone does not prove physical visibility. Device confirmation establishes the observed light behavior; host compilation and tests do not establish hardware performance or battery consumption.
+
+## Known commands
+
+Completed English transcripts are validated and matched locally before action dispatch. The transcript must start with Hey Brain, Okay Brain or OK Brain; wake verification is exact after case/punctuation normalization and is not speaker authentication. Unknown commands and rejected wakes retain the same WAV/JSON capture but execute nothing. No LLM is called.
+
+| Command | Aliases | Execution |
+| --- | --- | --- |
+| Open front gate | Open front door | Fixed backend action invokes the configured Home Assistant script. |
+| Toggle car gate | Toggle car door | Fixed backend action invokes the configured Home Assistant script. |
+| Take a picture | Take a photo | Native SDK save-only capture, followed by existing original-media sync. |
+
+The pure `GlassesCommandMatcher` matches the whole command. Case, punctuation, articles and leading/trailing please are normalized. Verbs and front/car targets remain exact. Non-critical words of at least four letters may have one spelling edit; gait is explicitly accepted as a gate homophone. Extra words, negations and multiple commands are rejected. Only a unique intent is accepted.
+
+`GlassesCommandExecutor` runs on the bounded native speech worker. It checks the original listening generation, active/armed enablement and account before dispatch; call/OTA/recording/disconnect/disable/sign-out invalidate pending action eligibility. Commands older than ninety seconds expire rather than executing later. Private capture JSON schema v2 stores `wakeVerified`, `commandMatch`, `command`, `commandRequestId` and `commandStatus` alongside the transcript. Command and match outcomes include rejected/unknown/cancelled/expired results. Retry saving and process recovery only save files; they never dispatch commands again. An interrupted dispatch can retain `dispatching` when its outcome is unknown.
+
+Gate requests use the existing fresh native Google ID token and configured frontend proxy at `/mobile/glasses/commands`. Only a fixed intent, random request UUID and capture timestamp leave the phone. The backend owns script selection via `GLASSES_FRONT_GATE_SCRIPT` / `GLASSES_CAR_GATE_SCRIPT`; Home Assistant owns the two-second relay pulse. Backend configuration and durable at-most-once receipts are described in [GLASSES_COMMANDS.md](../backend/orchestrator/docs/architecture/GLASSES_COMMANDS.md). No offline queue, automatic network retry or LLM fallback is used. Accepted means Home Assistant accepted the script request, not that a gate sensor confirmed movement.
+
+Photos use the public native SDK `requestPhoto` API with save=true, no webhook, PHOTO/MAX, no compression and sound=false. This invokes save-only gallery capture and bypasses button feedback sounds while preserving the firmware capture light. Existing photo-status events and an explicit sync scheduling fallback feed the same gallery/Immich flow as button captures. The optional SDK response wait is bounded to ten seconds; absent replies are recorded as unknown and never cause an automatic second photo. Actual timing, capture feedback and gallery sync need device validation on installed firmware. No scene analysis is enabled.

@@ -46,7 +46,7 @@ object RuntimeGlasses {
   private val trail = ArrayDeque<Map<String, Any?>>()
 
   private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-  private suspend fun sendLedLight(c: Context, source: LedSource, pattern: GlassesLightPattern, color: RgbLedColor = RgbLedColor.BLUE): Map<String, Any> {
+  private suspend fun sendLedLight(c: Context, source: LedSource, pattern: GlassesLightPattern, color: RgbLedColor): Map<String, Any> {
     val attempt = GlassesLedDiagnostics.start(c, source, color.value, pattern)
     val owner = sdk
     val current = generation
@@ -73,12 +73,12 @@ object RuntimeGlasses {
     val current = generation
     scope.launch {
       if (android.os.SystemClock.elapsedRealtime() < manualLightUntil) {
-        val attempt = GlassesLedDiagnostics.start(c, LedSource.WAKE, "blue", GlassesLightPattern.QUICK)
+        val attempt = GlassesLedDiagnostics.start(c, LedSource.WAKE, RgbLedColor.GREEN.value, GlassesLightPattern.QUICK)
         GlassesLedDiagnostics.record(c, attempt, LedSource.WAKE, LedResult.SUPPRESSED_FOR_TEST)
         return@launch
       }
       onRequested()
-      val result = sendLedLight(c, LedSource.WAKE, GlassesLightPattern.QUICK)
+      val result = sendLedLight(c, LedSource.WAKE, GlassesLightPattern.QUICK, RgbLedColor.GREEN)
       if (current == generation && result["sent"] != true) onFailure()
     }
   }
@@ -90,6 +90,21 @@ object RuntimeGlasses {
     return sendLedLight(c, LedSource.TEST_CUSTOM, pattern, color)
   }
   fun endLightTest() { manualLightUntil = 0L }
+  internal suspend fun takeWakePhoto(requestId: String): GlassesCommandOutcome {
+    if (!alertsReady()) return GlassesCommandOutcome.CANCELLED
+    val owner = sdk ?: return GlassesCommandOutcome.CANCELLED
+    return try {
+      // Save-only capture follows the glasses gallery path; no webhook or BLE image delivery.
+      val response = withTimeout(10_000) {
+        owner.requestPhoto(PhotoRequest(requestId = requestId, size = PhotoSize.MAX,
+          webhookUrl = "", save = true, sound = false, compress = PhotoCompression.NONE,
+          transferMethod = "direct"))
+      }
+      if (response.response.state == "success") GlassesCommandOutcome.ACCEPTED else GlassesCommandOutcome.FAILED
+    } catch (_: Exception) { GlassesCommandOutcome.UNKNOWN }
+    finally { scheduleMediaSync() }
+  }
+
   fun signedIn(c: Context) = prefs(c).getBoolean("signed_in", false)
   fun enabled(c: Context) = RuntimeFeature.GLASSES in DigitalBrainRuntime.owners(c)
   fun permitted(c: Context): Boolean = if (Build.VERSION.SDK_INT >= 31) {
