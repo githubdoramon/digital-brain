@@ -70,11 +70,26 @@ internal object GlassesWakeStore {
   @Synchronized fun command(dir: File, decision: GlassesCommandDecision, requestId: String,
                             outcome: GlassesCommandOutcome?) {
     val meta = JSONObject(File(dir, "capture.json").readText())
-      .put("wakeVerified", decision.wakeVerified).put("commandMatch", decision.match.name.lowercase())
+      .put("wakeVerified", decision.wakeVerified).put("wakeMatch", decision.wakeMatch.name.lowercase())
+      .put("commandMatch", decision.match.name.lowercase())
       .put("command", decision.command?.key ?: JSONObject.NULL)
       .put("commandRequestId", requestId)
       .put("commandStatus", outcome?.key ?: "dispatching")
     atomic(File(dir, "capture.json"), meta.toString().toByteArray())
+  }
+  @Synchronized fun commandDispatch(dir: File, event: CommandDispatchEvent) {
+    val file = File(dir, "capture.json")
+    val meta = JSONObject(file.readText())
+    val events = meta.optJSONArray("commandDispatch") ?: org.json.JSONArray()
+    val next = JSONObject().put("stage", event.stage.name.lowercase()).put("elapsedMs", event.elapsedMs)
+    event.httpStatus?.let { next.put("httpStatus", it) }
+    event.failure?.let { next.put("failure", it.name.lowercase()) }
+    if (event.configurationIssues.isNotEmpty())
+      meta.put("commandConfigurationIssues", org.json.JSONArray(event.configurationIssues.map { it.key }))
+    if (events.length() < 16) events.put(next)
+    meta.put("commandDispatch", events)
+    event.endpoint?.let { meta.put("commandEndpoint", it) }
+    atomic(file, meta.toString().toByteArray())
   }
   @Synchronized fun publish(c: Context, account: String, dir: File, overrideBase: String? = null) {
     val journal = File(dir, "capture.json")

@@ -17,39 +17,72 @@ internal enum class GlassesCommandOutcome(val key: String) {
 /** Runs on the existing bounded speech worker. No retries or delayed/offline action queue. */
 internal object GlassesCommandExecutor {
   fun execute(c: Context, decision: GlassesCommandDecision, requestId: String, capturedAtMs: Long,
-              eligible: () -> Boolean): GlassesCommandOutcome {
-    if (!decision.wakeVerified) return GlassesCommandOutcome.REJECTED_WAKE
-    val command = decision.command ?: return GlassesCommandOutcome.UNRECOGNIZED
+              eligible: () -> Boolean, onEvent: (CommandDispatchEvent) -> Unit = {}): GlassesCommandOutcome {
+    val started = android.os.SystemClock.elapsedRealtime()
+    val debugRef = java.security.MessageDigest.getInstance("SHA-256").digest(requestId.toByteArray())
+      .take(6).joinToString("") { "%02x".format(it) }
+    fun event(value: CommandDispatchEvent) {
+      val timed = value.copy(elapsedMs = android.os.SystemClock.elapsedRealtime() - started)
+      android.util.Log.i("GlassesCommand", "ref=$debugRef stage=${timed.stage.name} http=${timed.httpStatus ?: 0} failure=${timed.failure?.name ?: "none"} elapsedMs=${timed.elapsedMs}")
+      onEvent(timed)
+    }
+    fun finish(outcome: GlassesCommandOutcome, failure: CommandDispatchFailure? = null): GlassesCommandOutcome {
+      event(CommandDispatchEvent(CommandDispatchStage.FINISHED, failure = failure))
+      return outcome
+    }
+    event(CommandDispatchEvent(CommandDispatchStage.VALIDATION))
+    if (!decision.wakeVerified) return finish(GlassesCommandOutcome.REJECTED_WAKE)
+    val command = decision.command ?: return finish(GlassesCommandOutcome.UNRECOGNIZED)
     fun current() = runBlocking { withContext(Dispatchers.Main) { eligible() } }
-    if (!current()) return GlassesCommandOutcome.CANCELLED
-    if (System.currentTimeMillis() - capturedAtMs !in -10_000L..90_000L) return GlassesCommandOutcome.EXPIRED
-    if (command == GlassesCommand.TAKE_PICTURE) return runBlocking {
+    if (!current()) return finish(GlassesCommandOutcome.CANCELLED, CommandDispatchFailure.CANCELLED)
+    if (System.currentTimeMillis() - capturedAtMs !in -10_000L..90_000L)
+      return finish(GlassesCommandOutcome.EXPIRED, CommandDispatchFailure.EXPIRED)
+    if (command == GlassesCommand.TAKE_PICTURE) return finish(runBlocking {
       withContext(Dispatchers.Main) {
         if (!eligible()) GlassesCommandOutcome.CANCELLED else RuntimeGlasses.takeWakePhoto(requestId)
       }
-    }
-    val config = RuntimeLocationUploadConfigStore.load(c) ?: return GlassesCommandOutcome.NOT_CONFIGURED
+    })
+    event(CommandDispatchEvent(CommandDispatchStage.CONFIGURATION))
+    val config = RuntimeLocationUploadConfigStore.load(c)
+      ?: run {
+        event(CommandDispatchEvent(CommandDispatchStage.CONFIGURATION,
+          failure = CommandDispatchFailure.CONFIGURATION,
+          configurationIssues = listOf(CommandConfigurationIssue.PHONE_API_CONFIGURATION_MISSING)))
+        return finish(GlassesCommandOutcome.NOT_CONFIGURED, CommandDispatchFailure.CONFIGURATION)
+      }
+    val url = URL(config.apiBaseUrl.trimEnd('/') + "/mobile/glasses/commands")
+    // The actual destination belongs only in the private capture, never in Logcat/telemetry.
+    val endpoint = java.net.URI(url.protocol, null, url.host, url.port, url.path, null, null).toString()
+    event(CommandDispatchEvent(CommandDispatchStage.CONFIGURATION, endpoint = endpoint))
+    event(CommandDispatchEvent(CommandDispatchStage.AUTHENTICATION))
     val token = runCatching { RuntimeGoogleIdTokenProvider.getFreshIdToken(c, config.googleWebClientId) }
-      .getOrNull() ?: return GlassesCommandOutcome.FAILED
-    if (!current()) return GlassesCommandOutcome.CANCELLED
-    val connection = URL(config.apiBaseUrl.trimEnd('/') + "/mobile/glasses/commands").openConnection() as HttpURLConnection
+      .getOrNull() ?: return finish(GlassesCommandOutcome.FAILED, CommandDispatchFailure.AUTHENTICATION)
+    if (!current()) return finish(GlassesCommandOutcome.CANCELLED, CommandDispatchFailure.CANCELLED)
+    if (url.protocol == "http" && !android.security.NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(url.host))
+      return finish(GlassesCommandOutcome.UNKNOWN, CommandDispatchFailure.CLEARTEXT_BLOCKED)
     return try {
-      connection.requestMethod = "POST"; connection.connectTimeout = 5000; connection.readTimeout = 15000
-      connection.instanceFollowRedirects = false
-      connection.setRequestProperty("Authorization", "Bearer $token")
-      connection.setRequestProperty("Content-Type", "application/json")
+      val connection = url.openConnection() as HttpURLConnection
+      connection.setRequestProperty("x-glasses-command-debug-ref", debugRef)
       val body = JSONObject().put("command", command.key).put("request_id", requestId)
         .put("captured_at_ms", capturedAtMs).toString().toByteArray()
-      connection.doOutput = true; connection.setFixedLengthStreamingMode(body.size)
-      if (!current()) return GlassesCommandOutcome.CANCELLED
-      connection.outputStream.use { it.write(body) }
-      if (connection.responseCode !in 200..299) GlassesCommandOutcome.UNKNOWN else {
-        val status = connection.inputStream.use {
-          JSONObject(String(GlassesMediaStore.readBounded(it, 4096))).optString("status")
+      GlassesCommandDispatch.post(connection, body, token, ::current, ::event) { bytes ->
+        val result = JSONObject(String(bytes))
+        val status = result.getString("status")
+        val outcome = checkNotNull(GlassesCommandOutcome.entries.firstOrNull { it.key == status })
+        if (outcome == GlassesCommandOutcome.NOT_CONFIGURED) {
+          val raw = result.optJSONArray("configuration_issues")
+          val issues = (0 until minOf(raw?.length() ?: 0, 4)).mapNotNull { i ->
+            CommandConfigurationIssue.entries.firstOrNull {
+              it != CommandConfigurationIssue.PHONE_API_CONFIGURATION_MISSING && it.key == raw?.optString(i)
+            }
+          }.distinct()
+          event(CommandDispatchEvent(CommandDispatchStage.CONFIGURATION,
+            failure = CommandDispatchFailure.BACKEND_CONFIGURATION, configurationIssues = issues))
         }
-        GlassesCommandOutcome.entries.firstOrNull { it.key == status } ?: GlassesCommandOutcome.UNKNOWN
+        outcome
       }
-    } catch (_: Exception) { GlassesCommandOutcome.UNKNOWN }
-    finally { connection.disconnect() }
+    } catch (error: Exception) {
+      finish(GlassesCommandOutcome.UNKNOWN, GlassesCommandDispatch.failure(error))
+    }
   }
 }

@@ -311,9 +311,15 @@ object GlassesListening {
             val decision = GlassesCommandMatcher.match(text)
             val requestId = java.util.UUID.randomUUID().toString()
             GlassesWakeStore.command(staged, decision, requestId, null)
-            val outcome = GlassesCommandExecutor.execute(c, decision, requestId, job.capture.endAtMs) {
+            val outcome = GlassesCommandExecutor.execute(c, decision, requestId, job.capture.endAtMs, eligible = {
               active && armed && enabled && sessionGeneration == job.generation &&
                 RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
+            }, onEvent = { event -> GlassesWakeStore.commandDispatch(staged, event) })
+            if (outcome == GlassesCommandOutcome.ACCEPTED) main.post {
+              RuntimeGlasses.blinkCommandAccepted {
+                active && armed && enabled && sessionGeneration == job.generation &&
+                  RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
+              }
             }
             GlassesWakeStore.command(staged, decision, requestId, outcome)
             if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account)

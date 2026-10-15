@@ -28,6 +28,13 @@ class CommandStatus(StrEnum):
     NOT_CONFIGURED = "not_configured"
 
 
+class CommandConfigurationIssue(StrEnum):
+    HA_URL_MISSING = "ha_url_missing"
+    HA_TOKEN_MISSING = "ha_token_missing"
+    SCRIPT_ENTITY_MISSING = "script_entity_missing"
+    SCRIPT_ENTITY_INVALID = "script_entity_invalid"
+
+
 SCRIPT_ENV = {
     GlassesGateCommand.OPEN_FRONT_GATE: "GLASSES_FRONT_GATE_SCRIPT",
     GlassesGateCommand.TOGGLE_CAR_GATE: "GLASSES_CAR_GATE_SCRIPT",
@@ -42,8 +49,17 @@ def execute(user: str, command: GlassesGateCommand, request_id: UUID, captured_a
     base = os.getenv("HA_URL", "").rstrip("/")
     token = os.getenv("HA_TOKEN", "")
     script = os.getenv(SCRIPT_ENV[command], "").strip()
-    if not base or not token or not re.fullmatch(r"script\.[a-z0-9_]+", script):
-        return {"status": CommandStatus.NOT_CONFIGURED}
+    issues = []
+    if not base:
+        issues.append(CommandConfigurationIssue.HA_URL_MISSING)
+    if not token:
+        issues.append(CommandConfigurationIssue.HA_TOKEN_MISSING)
+    if not script:
+        issues.append(CommandConfigurationIssue.SCRIPT_ENTITY_MISSING)
+    elif not re.fullmatch(r"script\.[a-z0-9_]+", script):
+        issues.append(CommandConfigurationIssue.SCRIPT_ENTITY_INVALID)
+    if issues:
+        return {"status": CommandStatus.NOT_CONFIGURED, "configuration_issues": issues}
     owner = hashlib.sha256(user.lower().encode()).hexdigest()
     root = Path(os.getenv("GLASSES_COMMAND_RECEIPT_DIR", "storage/glasses-commands")) / owner
     root.mkdir(parents=True, exist_ok=True)

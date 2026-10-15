@@ -109,3 +109,21 @@ def test_route_enforces_auth_and_fixed_payload(configured):
         assert client.post("/mobile/glasses/commands", json=invalid).status_code == 422
     configured.assert_not_called()
     assert client.post("/mobile/glasses/commands", json=body).json() == {"status": "accepted"}
+
+
+def test_command_ids_are_not_home_assistant_script_entities(configured, monkeypatch):
+    for command, key in commands.SCRIPT_ENV.items():
+        monkeypatch.setenv(key, command.value)
+        assert dispatch(command) == {
+            "status": "not_configured",
+            "configuration_issues": ["script_entity_invalid"],
+        }
+    configured.assert_not_called()
+
+
+def test_configuration_diagnostics_distinguish_missing_credentials(configured, monkeypatch):
+    monkeypatch.setenv("HA_URL", "")
+    monkeypatch.setenv("HA_TOKEN", "")
+    monkeypatch.setenv("GLASSES_FRONT_GATE_SCRIPT", "")
+    assert dispatch()["configuration_issues"] == ["ha_url_missing", "ha_token_missing", "script_entity_missing"]
+    configured.assert_not_called()

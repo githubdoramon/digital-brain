@@ -4,7 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal enum class LedSource { WAKE, TEST_DIRECT, TEST_STANDARD, TEST_LEGACY, TEST_LONG, TEST_WHITE, TEST_CUSTOM }
+internal enum class LedSource { WAKE, COMMAND, TEST_DIRECT, TEST_STANDARD, TEST_LEGACY, TEST_LONG, TEST_WHITE, TEST_CUSTOM }
 internal enum class LedResult { REQUESTED, QUEUED, UNAVAILABLE, DISPATCH_FAILED, RESPONSE_SUCCESS, RESPONSE_ERROR, RESPONSE_TIMEOUT, VISIBLE, NOT_VISIBLE, SUPPRESSED_FOR_TEST }
 
 /** Persistent bounded content-free LED trail. Queued/response success never implies visible light. */
@@ -40,7 +40,7 @@ internal object GlassesLedDiagnostics {
   }
   fun observation(c: Context, attempt: Int, visible: Boolean) {
     val source = events(c).lastOrNull { it["attempt"] == attempt }?.get("source") as? String
-    val parsed = LedSource.entries.firstOrNull { it.name == source && it != LedSource.WAKE }
+    val parsed = LedSource.entries.firstOrNull { it.name == source && it !in setOf(LedSource.WAKE, LedSource.COMMAND) }
     check(parsed != null) { "Run a light test first" }
     record(c, attempt, parsed, if (visible) LedResult.VISIBLE else LedResult.NOT_VISIBLE)
   }

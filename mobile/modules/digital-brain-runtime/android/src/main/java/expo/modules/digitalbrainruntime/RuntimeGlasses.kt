@@ -82,6 +82,14 @@ object RuntimeGlasses {
       if (current == generation && result["sent"] != true) onFailure()
     }
   }
+  internal fun blinkCommandAccepted(eligible: () -> Boolean) {
+    val c = context ?: return
+    val current = generation
+    scope.launch {
+      if (generation == current && eligible())
+        sendLedLight(c, LedSource.COMMAND, GlassesLightPattern.QUICK, RgbLedColor.ORANGE)
+    }
+  }
   suspend fun testLight(c: Context, colorKey: String, patternKey: String): Map<String, Any> {
     val pattern = GlassesLightPattern.parse(patternKey)
     val color = GlassesLightPattern.color(colorKey)
