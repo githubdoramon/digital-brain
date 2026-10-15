@@ -706,7 +706,7 @@ def _get_event_ids_by_google_event_id(
             """
             SELECT id
             FROM events
-            WHERE external_id LIKE 'google:%'
+            WHERE external_id LIKE 'google:%%'
               AND right(external_id, length(%s) + 1) = ':' || %s
               AND lower(COALESCE(title, '')) = lower(%s)
               AND start_date::date = %s::date
@@ -723,7 +723,7 @@ def _get_event_ids_by_google_event_id(
             """
             SELECT id
             FROM events
-            WHERE external_id LIKE 'google:%'
+            WHERE external_id LIKE 'google:%%'
               AND right(external_id, length(%s) + 1) = ':' || %s
             ORDER BY start_date DESC
             """,

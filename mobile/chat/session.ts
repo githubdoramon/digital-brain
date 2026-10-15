@@ -8,6 +8,7 @@ export type StoredChatSession = {
 export type StoredPendingRun = {
   runId: string;
   pendingMessageId: string;
+  userMessageId?: string;
   threadId: string | null;
   question: string;
   startedAt: number;

@@ -115,6 +115,48 @@ type Message = {
   };
 };
 
+function mergePendingTurn(
+  history: Message[],
+  pendingMessageId: string,
+  question: string,
+  previousMessages: Message[] = [],
+  userMessageId?: string,
+): Message[] {
+  const pendingIndex = previousMessages.findIndex((message) => message.id === pendingMessageId);
+  const previousPending = pendingIndex >= 0 ? previousMessages[pendingIndex] : undefined;
+  const previousUser =
+    pendingIndex > 0 && previousMessages[pendingIndex - 1]?.role === 'user'
+      ? previousMessages[pendingIndex - 1]
+      : previousMessages.find((message) => message.id === userMessageId);
+  const resolvedUserId = userMessageId ?? previousUser?.id ?? `${pendingMessageId}-user`;
+  const hasUserInHistory = history.some((message) => message.id === resolvedUserId);
+  const lastHistoryMessage = history[history.length - 1];
+  const resolvedQuestion = question || previousUser?.content || '';
+  const historyAlreadyHasPendingUser =
+    lastHistoryMessage?.role === 'user' && lastHistoryMessage.content === resolvedQuestion;
+  const userMessage: Message = previousUser ?? {
+    id: resolvedUserId,
+    role: 'user',
+    content: resolvedQuestion,
+  };
+  const pendingMessage: Message = previousPending ?? {
+    id: pendingMessageId,
+    role: 'assistant',
+    content: 'Reconnecting...',
+    pending: true,
+  };
+  const merged = [...history];
+
+  if (!hasUserInHistory && !historyAlreadyHasPendingUser) {
+    merged.push(userMessage);
+  }
+  if (!merged.some((message) => message.id === pendingMessageId)) {
+    merged.push(pendingMessage);
+  }
+
+  return merged;
+}
+
 type RequestErrorMetadata = {
   summary: string;
   details: string;
@@ -1387,20 +1429,15 @@ export function ChatConversationScreen({
     }
 
     setForceScrollNext(true);
-    setMessages((prev) => {
-      if (prev.some((message) => message.id === pendingRun.pendingMessageId)) {
-        return prev;
-      }
-      return [
-        ...prev,
-        {
-          id: pendingRun.pendingMessageId,
-          role: 'assistant',
-          content: 'Reconnecting...',
-          pending: true,
-        },
-      ];
-    });
+    setMessages((prev) =>
+      mergePendingTurn(
+        prev,
+        pendingRun.pendingMessageId,
+        pendingRun.question,
+        prev,
+        pendingRun.userMessageId,
+      ),
+    );
 
     const updatePendingMessage = (nextContent: string) => {
       setMessages((prev) =>
@@ -1508,9 +1545,45 @@ export function ChatConversationScreen({
     setThreadId(restored.threadId);
     setPendingEventId(restored.pendingEventId);
     if (restored.messages.length > 0) {
-      setMessages(restored.messages);
+      const pendingRun = await loadPendingRun();
+      const relevantPendingRun =
+        pendingRun &&
+        (isMainChat || pendingRun.threadId === (initialThreadId ?? threadId))
+          ? pendingRun
+          : null;
+      setMessages((prev) => {
+        if (relevantPendingRun) {
+          return mergePendingTurn(
+            restored.messages,
+            relevantPendingRun.pendingMessageId,
+            relevantPendingRun.question,
+            prev,
+            relevantPendingRun.userMessageId,
+          );
+        }
+
+        const pendingIndex = prev.findIndex((message) => message.pending);
+        const previousUser = pendingIndex > 0 ? prev[pendingIndex - 1] : undefined;
+        return pendingIndex >= 0 && previousUser?.role === 'user'
+          ? mergePendingTurn(
+              restored.messages,
+              prev[pendingIndex].id,
+              previousUser.content,
+              prev,
+            )
+          : restored.messages;
+      });
     }
-  }, [allowed, isAuthLoading, isBootstrapping, isMainChat, pendingEventId, threadId, token]);
+  }, [
+    allowed,
+    initialThreadId,
+    isAuthLoading,
+    isBootstrapping,
+    isMainChat,
+    pendingEventId,
+    threadId,
+    token,
+  ]);
 
   useEffect(() => {
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
@@ -1661,12 +1734,13 @@ export function ChatConversationScreen({
       setInput('');
       setComposerMediaAttachments([]);
       setForceScrollNext(true);
+      const userMessageId = `${Date.now()}-user`;
       const pendingId = `${Date.now()}-pending`;
 
       setMessages((prev) => [
         ...prev,
         {
-          id: `${Date.now()}-user`,
+          id: userMessageId,
           role: 'user',
           content: outboundText,
           metadata:
@@ -1749,6 +1823,7 @@ export function ChatConversationScreen({
                 void savePendingRun({
                   runId: activeRunId,
                   pendingMessageId: pendingId,
+                  userMessageId,
                   threadId: threadIdFromStream ?? null,
                   question: outboundText,
                   startedAt: Date.now(),
@@ -1760,6 +1835,7 @@ export function ChatConversationScreen({
               void savePendingRun({
                 runId: runIdFromStream,
                 pendingMessageId: pendingId,
+                userMessageId,
                 threadId: isMainChat ? threadId : (threadId ?? initialThreadId),
                 question: outboundText,
                 startedAt: Date.now(),
