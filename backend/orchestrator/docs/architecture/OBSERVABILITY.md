@@ -1,8 +1,8 @@
 # AI observability with Mirador
 
-Digital Brain can export OpenTelemetry traces and metrics from the orchestrator to Mirador.
-The integration is optional: without `MIRADOR_API_KEY`, the app keeps its local
-logging and tracing behavior and sends no telemetry to Mirador.
+Digital Brain can export OpenTelemetry traces and metrics from the orchestrator
+to Mirador, and can optionally send the same traces to a second OTLP/HTTP
+destination. Both exports are optional.
 
 ## Enable export
 
@@ -16,6 +16,10 @@ MIRADOR_OTEL_ENDPOINT=https://otel.mirador.org/v1/traces
 MIRADOR_OTEL_METRICS_ENDPOINT=https://otel.mirador.org/v1/metrics
 MIRADOR_METRICS_EXPORT_INTERVAL_MS=30000
 OTEL_SERVICE_NAME=digital-brain-orchestrator
+# Optional second trace destination (OTLP/HTTP protobuf)
+ADDITIONAL_OTEL_TRACES_ENDPOINT=https://collector.example.com/v1/traces
+# Optional Authorization header value for that destination
+ADDITIONAL_OTEL_AUTHORIZATION=Bearer replace_me
 ```
 
 For Docker Compose, the key may instead live in the optional user-private
@@ -24,8 +28,12 @@ loads that file before `backend/.env`, so an explicit backend value takes
 precedence. Local runs load settings through `backend/orchestrator/run_local.sh`
 from the process environment and `backend/.env`. Restart the orchestrator
 after changing configuration. The application uses OTLP/HTTP protobuf for
-traces and metrics. Metrics export defaults to a 30-second interval. Both
-providers flush queued telemetry during graceful shutdown.
+traces and metrics. Metrics export defaults to a 30-second interval. The
+additional destination receives traces only; Mirador continues to receive
+traces and metrics when `MIRADOR_API_KEY` is configured. The additional
+destination is independent, so it can be configured without Mirador. Its
+authorization header is omitted when `ADDITIONAL_OTEL_AUTHORIZATION` is unset.
+Both providers flush queued telemetry during graceful shutdown.
 
 ## What is exported
 

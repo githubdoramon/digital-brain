@@ -215,7 +215,7 @@ def _record_daily_briefing_tool(outcome: str) -> None:
 
 
 def configure_mirador() -> None:
-    """Enable privacy-conscious OTLP traces and metrics when configured."""
+    """Enable privacy-conscious OTLP export to configured destinations."""
     global _configured, _provider, _meter_provider
     global _llm_request_count, _llm_duration, _llm_token_usage
     global _agent_run_count, _agent_run_duration, _agent_run_rounds
@@ -227,8 +227,10 @@ def configure_mirador() -> None:
         return
 
     api_key = os.getenv("MIRADOR_API_KEY", "").strip()
-    if not api_key:
-        logger.info("Mirador telemetry disabled: MIRADOR_API_KEY is not configured")
+    additional_trace_endpoint = os.getenv("ADDITIONAL_OTEL_TRACES_ENDPOINT", "").strip()
+    if not api_key and not additional_trace_endpoint:
+        logger.info("OTLP telemetry export disabled: no destinations are configured")
+        _configured = True
         return
 
     service_name = os.getenv("OTEL_SERVICE_NAME", "digital-brain-orchestrator")
@@ -240,19 +242,46 @@ def configure_mirador() -> None:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        endpoint = os.getenv("MIRADOR_OTEL_ENDPOINT", "https://otel.mirador.org/v1/traces")
         resource = Resource.create({"service.name": service_name})
         provider = TracerProvider(resource=resource)
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=endpoint, headers={"Authorization": api_key})
-            )
-        )
-        trace.set_tracer_provider(provider)
-        _provider = provider
-        logger.info("Mirador OTLP tracing enabled service=%s", service_name)
+        destinations = []
+        if api_key:
+            destinations.append((
+                "Mirador",
+                os.getenv("MIRADOR_OTEL_ENDPOINT", "https://otel.mirador.org/v1/traces"),
+                {"Authorization": api_key},
+            ))
+        if additional_trace_endpoint:
+            authorization = os.getenv("ADDITIONAL_OTEL_AUTHORIZATION", "").strip()
+            headers = {"Authorization": authorization} if authorization else {}
+            destinations.append(("additional", additional_trace_endpoint, headers))
+
+        for destination_name, endpoint, headers in destinations:
+            try:
+                provider.add_span_processor(
+                    BatchSpanProcessor(
+                        OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                    )
+                )
+                logger.info("OTLP tracing export enabled destination=%s", destination_name)
+            except Exception:
+                logger.exception(
+                    "OTLP tracing exporter setup failed destination=%s", destination_name
+                )
+
+        if destinations:
+            trace.set_tracer_provider(provider)
+            _provider = provider
+        else:
+            provider.shutdown()
     except Exception:
-        logger.exception("Mirador OTLP tracing setup failed; continuing without tracing export")
+        logger.exception("OTLP tracing setup failed; continuing without tracing export")
+
+    # The additional endpoint is a trace destination. Metrics remain on the
+    # existing Mirador exporter, which requires its own API key.
+    if not api_key:
+        _configured = True
+        return
 
     try:
         from opentelemetry import metrics

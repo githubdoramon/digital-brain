@@ -19,7 +19,7 @@ export function ComposerMediaTray({ attachments, onRemoveAttachment }: Props) {
   return (
     <View style={styles.container}>
       <Text style={styles.label}>
-        {attachments.length} {attachments.length === 1 ? 'photo' : 'photos'} ready for /event
+        {attachments.length} {attachments.length === 1 ? 'photo attached' : 'photos attached'}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
         {attachments.map((attachment) => (

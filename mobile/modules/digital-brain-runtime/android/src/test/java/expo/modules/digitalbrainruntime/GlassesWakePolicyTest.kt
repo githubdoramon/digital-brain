@@ -36,11 +36,11 @@ class GlassesWakePolicyTest {
     val policy = GlassesWakePolicy(detector, {}, out::add, {})
     policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
     assertTrue(policy.capturing)
-    policy.pcm(tone(3000), 10020, 120, 0)
-    policy.vad(false, 140); policy.tick(11519, 1639)
+    repeat(15) { policy.pcm(tone(3000), 10020 + it * 20L, 120 + it * 20L, 0) }
+    policy.vad(false, 420); policy.tick(11799, 1919)
     assertTrue(out.isEmpty())
-    policy.tick(11520, 1640)
-    assertEquals(1280, out.single().chunk.pcm.size)
+    policy.tick(11800, 1920)
+    assertEquals(16 * 640, out.single().chunk.pcm.size)
     assertEquals(9980L, out.single().chunk.startedAtMs)
     assertEquals(WakeEnd.SILENCE, out.single().reason)
   }
@@ -50,12 +50,55 @@ class GlassesWakePolicyTest {
     policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
     detector.fire = true; policy.pcm(tone(2000), 10020, 120, 0)
     assertEquals(1, detector.calls)
-    policy.vad(false, 140); policy.tick(11520, 1640)
-    policy.vad(true, 2000); policy.pcm(tone(2000), 11900, 2000, 0)
+    policy.vad(false, 140); policy.tick(14020, 4140)
+    policy.vad(true, 4500); policy.pcm(tone(2000), 14400, 4500, 0)
     assertEquals(1, wakes)
-    policy.vad(false, 2100); policy.tick(13600, 3600)
+    policy.vad(false, 4600); policy.tick(16000, 6100)
     policy.vad(true, 6100); policy.pcm(tone(2000), 16000, 6100, 0)
     assertEquals(2, wakes)
+  }
+  @Test fun initialWakeSilenceWaitsFourSecondsWithoutMistakingVadSilenceForTransportLoss() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    policy.vad(false, 120)
+    policy.tick(13000, 3100)
+    assertTrue(policy.capturing); assertTrue(out.isEmpty())
+    assertTrue(policy.waitMs(3100) > 1)
+    policy.tick(14019, 4119); assertTrue(out.isEmpty())
+    policy.tick(14020, 4120); assertEquals(WakeEnd.SILENCE, out.single().reason)
+  }
+  @Test fun delayedCommandSwitchesToShortSilenceAndKeepsAllReceivedAudio() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    policy.vad(false, 120); policy.tick(13000, 3100)
+    policy.vad(true, 3500)
+    repeat(15) { policy.pcm(tone(3000), 13400 + it * 20L, 3500 + it * 20L, 0) }
+    policy.vad(false, 3800)
+    policy.tick(15199, 5299); assertTrue(out.isEmpty())
+    policy.tick(15200, 5300)
+    assertEquals(16 * 640, out.single().chunk.pcm.size)
+    assertEquals(WakeEnd.SILENCE, out.single().reason)
+  }
+  @Test fun speechResumptionWithoutPcmStillExpiresAsUnknownTransportLoss() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    policy.vad(false, 120); policy.tick(13000, 3100)
+    policy.vad(true, 3500)
+    policy.tick(16399, 6499); assertTrue(policy.capturing)
+    policy.tick(16400, 6500); assertFalse(policy.capturing); assertTrue(out.isEmpty())
+  }
+  @Test fun shortWakeTailOrCueDoesNotConsumeTheLongPauseAllowance() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    repeat(6) { policy.pcm(tone(2000), 10020 + it * 20L, 120 + it * 20L, 0) }
+    policy.vad(false, 240)
+    policy.tick(13000, 3100); assertTrue(policy.capturing)
+    policy.tick(14139, 4239); assertTrue(out.isEmpty())
+    policy.tick(14140, 4240); assertEquals(7 * 640, out.single().chunk.pcm.size)
   }
   @Test fun interruptionsDiscardCaptureWithoutEmittingFiles() {
     val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
@@ -85,7 +128,7 @@ class GlassesWakePolicyTest {
     policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
     detector.fire = true; policy.vad(false, 120); policy.tick(10120, 220)
     assertTrue(policy.capturing)
-    policy.tick(11520, 1620)
+    policy.tick(14020, 4120)
     assertEquals(640, out.single().chunk.pcm.size)
   }
   @Test fun thirtySecondWallLimitCompletesDespiteLowAudioDelivery() {
@@ -100,9 +143,9 @@ class GlassesWakePolicyTest {
     val detector = Detector()
     val policy = GlassesWakePolicy(detector, {}, {}, {})
     policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
-    policy.vad(false, 120); policy.tick(11520, 1620)
+    policy.vad(false, 120); policy.tick(14020, 4120)
     val resets = detector.resets
-    repeat(100) { policy.tick(12000 + it * 1000L, 2100 + it * 1000L) }
+    repeat(100) { policy.tick(14500 + it * 1000L, 4600 + it * 1000L) }
     assertEquals(resets, detector.resets)
   }
   @Test fun pcmRingKeepsOnlyRecentBytesInOrder() {

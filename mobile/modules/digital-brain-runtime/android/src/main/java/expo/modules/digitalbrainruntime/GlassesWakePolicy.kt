@@ -18,7 +18,9 @@ internal class GlassesWakePolicy(
   private val onQuiet: () -> Unit,
   initialWake: Long = -6000L,
 ) {
-  companion object { const val SILENCE_MS = 1500L; const val COOLDOWN_MS = 6000L; const val MAX_BYTES = 30 * 32000 }
+  companion object { const val WAKE_SILENCE_MS = 4000L; const val COMMAND_START_BYTES = 300 * 32; const val SILENCE_MS = 1500L; const val COOLDOWN_MS = 6000L; const val MAX_BYTES = 30 * 32000 }
+  private var commandStarted = false
+  private var commandOnsetBytes = 0
   private var speech = false
   private var silenceAt: Long? = null
   private var lastPcm = 0L
@@ -34,8 +36,13 @@ internal class GlassesWakePolicy(
   private var flushedSilence = false
   val capturing get() = capture != null
   fun vad(value: Boolean, elapsed: Long) {
+    // New speech after expected suppressed silence gets a fresh transport deadline for its first PCM.
+    if (value && silenceAt != null && capture != null) lastPcm = elapsed
     speech = value
-    if (value) silenceAt = null else if (silenceAt == null) silenceAt = elapsed
+    if (value) silenceAt = null else {
+      commandOnsetBytes = 0
+      if (silenceAt == null) silenceAt = elapsed
+    }
   }
   fun pcm(bytes: ByteArray, wall: Long, elapsed: Long, minimum: Int) {
     val wasSpeech = speech
@@ -47,7 +54,14 @@ internal class GlassesWakePolicy(
     if (capture != null) {
       appendCapture(bytes)
       val voiced = speech && GlassesAudioLevel.db(bytes) >= (-60.0 + minimum * 0.4)
-      if (voiced) silenceAt = null else if (silenceAt == null) silenceAt = elapsed
+      if (voiced) {
+        silenceAt = null
+        commandOnsetBytes = minOf(COMMAND_START_BYTES, commandOnsetBytes + bytes.size)
+        if (commandOnsetBytes >= COMMAND_START_BYTES) commandStarted = true
+      } else {
+        commandOnsetBytes = 0
+        if (silenceAt == null) silenceAt = elapsed
+      }
       if (capture!!.size() >= MAX_BYTES) finish(wall, elapsed, WakeEnd.LIMIT)
       return
     }
@@ -71,18 +85,20 @@ internal class GlassesWakePolicy(
     capture = ByteArrayOutputStream().apply { write(seed) }
     startWall = lastAudioWall - seed.size * 1000L / 32000
     wakeWall = wall; lastWake = elapsed
+    commandStarted = false; commandOnsetBytes = 0
     onWake(elapsed)
     history.reset(); gate.reset(); gateOpen = false; quiet = false
   }
   private fun appendCapture(bytes: ByteArray) { capture?.let { it.write(bytes, 0, minOf(bytes.size, MAX_BYTES - it.size())) } }
+  private fun silenceLimit() = if (capture != null && !commandStarted) WAKE_SILENCE_MS else SILENCE_MS
   fun waitMs(elapsed: Long): Long {
     val deadlines = mutableListOf<Long>()
     silenceAt?.let {
-      deadlines.add(it + SILENCE_MS)
+      deadlines.add(it + silenceLimit())
       if (capture == null && gateOpen && !flushedSilence) deadlines.add(it + 100)
     }
     if (capture != null) deadlines.add(lastWake + 30_000)
-    if (lastPcm > 0) deadlines.add(lastPcm + 3000)
+    if (lastPcm > 0 && silenceAt == null) deadlines.add(lastPcm + 3000)
     return ((deadlines.minOrNull() ?: (elapsed + 1000)) - elapsed).coerceIn(1, 1000)
   }
   fun tick(wall: Long, elapsed: Long) {
@@ -92,10 +108,10 @@ internal class GlassesWakePolicy(
       if (detector.accept(ByteArray(9600))) begin(wall, elapsed)
     }
     if (capture != null && elapsed - lastWake >= 30_000) { finish(wall, elapsed, WakeEnd.LIMIT); return }
-    if (silenceAt?.let { elapsed - it >= SILENCE_MS } == true) {
+    if (silenceAt?.let { elapsed - it >= silenceLimit() } == true) {
       if (capture != null) finish(wall, elapsed, WakeEnd.SILENCE) else resetUtterance()
       speech = false; silenceAt = null
-    } else if (lastPcm > 0 && elapsed - lastPcm >= 3000) {
+    } else if (lastPcm > 0 && silenceAt == null && elapsed - lastPcm >= 3000) {
       // Unknown transport loss is not proof of silence: discard rather than save partial audio.
       discard(); speech = false; silenceAt = null
     }
@@ -108,6 +124,7 @@ internal class GlassesWakePolicy(
   }
   private fun resetUtterance() {
     if (quiet && !gateOpen) onQuiet()
+    commandStarted = false; commandOnsetBytes = 0
     history.reset(); gate.reset(); gateOpen = false; quiet = false; flushedSilence = false; lastPcm = 0L; detector.reset()
   }
   fun discard() { capture = null; resetUtterance() }

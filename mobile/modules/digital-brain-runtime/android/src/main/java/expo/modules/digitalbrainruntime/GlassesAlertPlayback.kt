@@ -92,7 +92,8 @@ internal object GlassesAlertPlayback {
       fun checkRoute() {
         if (track !== created) return
         val outputs = if (Build.VERSION.SDK_INT >= 36) created.routedDevices else listOfNotNull(created.routedDevice)
-        if (outputs.size == 1 && outputs.single().id == device.id) {
+        val action = GlassesAudioRoutePolicy.action(device.id, outputs.map { it.id }, verified)
+        if (action == GlassesAudioRouteAction.PLAY) {
           if (!verified) {
             verified = true
             routeDeadline?.let(handler::removeCallbacks); routeDeadline = null
@@ -106,7 +107,7 @@ internal object GlassesAlertPlayback {
               if (preview) GlassesAlertTone.CALL_CYCLE_MS * 3L else GlassesAlertPolicy.CALL_TIMEOUT_MS
             cleanup = Runnable { if (track === created) stop() }.also { handler.postDelayed(it, duration) }
           }
-        } else if (verified || outputs.isNotEmpty()) {
+        } else if (action == GlassesAudioRouteAction.STOP) {
           created.setVolume(0f)
           lastError = "Glasses audio route was lost"; stop()
         }
