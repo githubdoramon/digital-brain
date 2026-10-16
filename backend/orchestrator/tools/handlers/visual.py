@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 def handle_visual_inspect(
     args: dict[str, Any],
-    state: Optional["AgentState"] = None,
+    state: AgentState | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     """Inspect a visual source and optionally match people through Immich."""

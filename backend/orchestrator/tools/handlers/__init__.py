@@ -25,8 +25,8 @@ from .resolution import (
 from .skills import handle_run_skill_script
 from .system import handle_bash
 from .ui import handle_emit_ui_directive
-from .web import handle_fetch_web_page, handle_web_search
 from .visual import handle_visual_inspect
+from .web import handle_fetch_web_page, handle_web_search
 
 # Handler dispatch table
 HANDLERS = {
@@ -79,6 +79,6 @@ __all__ = [
     "handle_search_memories",
     "handle_select_contacts",
     "handle_summarize_memories",
-    "handle_web_search",
     "handle_visual_inspect",
+    "handle_web_search",
 ]

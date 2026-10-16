@@ -341,18 +341,7 @@ class ToolExecutionCoordinator:
             )
 
         step_start = perf_counter()
-        if allow_parallel_execution and self._is_parallel_safe_tool(tool_name):
-            result = await asyncio.to_thread(
-                self.controller._execute_handler,
-                tool_name,
-                args,
-                state,
-                question,
-                search_limit,
-                user_email,
-                conversation_history,
-            )
-        elif tool_name == "visual_inspect":
+        if (allow_parallel_execution and self._is_parallel_safe_tool(tool_name)) or tool_name == "visual_inspect":
             result = await asyncio.to_thread(
                 self.controller._execute_handler,
                 tool_name,
