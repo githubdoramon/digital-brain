@@ -79,6 +79,7 @@ type Props = {
   onChangeInput: (value: string) => void;
   onSend: () => void;
   onAttachPhoto: () => void;
+  onAttachPdf: () => void;
   onInputFocus: () => void;
   onInputBlur: () => void;
   onErrorMessage: (message: string) => void;
@@ -103,6 +104,7 @@ export function ChatComposer({
   onChangeInput,
   onSend,
   onAttachPhoto,
+  onAttachPdf,
   onInputFocus,
   onInputBlur,
   onErrorMessage,
@@ -460,6 +462,20 @@ export function ChatComposer({
       <View style={styles.inputWrap}>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Attach PDF"
+          onPress={onAttachPdf}
+          disabled={attachDisabled || voicePhase !== 'idle'}
+          style={({ pressed }) => [
+            styles.attachButton,
+            styles.attachPdfButton,
+            pressed && styles.attachButtonPressed,
+            (attachDisabled || voicePhase !== 'idle') && styles.attachButtonDisabled,
+          ]}
+        >
+          <Ionicons name="document-attach-outline" size={18} color={theme.colors.ink} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
           accessibilityLabel="Attach photo"
           onPress={onAttachPhoto}
           disabled={attachDisabled || voicePhase !== 'idle'}
@@ -481,7 +497,7 @@ export function ChatComposer({
               minHeight: minInputHeight,
               maxHeight: maxInputHeight,
               width: '100%',
-              paddingRight: 104,
+              paddingRight: 144,
             },
             !allowed && {
               backgroundColor: '#eee',
@@ -590,6 +606,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#f2ece5',
     transform: [{ translateY: -17 }],
+  },
+  attachPdfButton: {
+    right: 90,
   },
   attachButtonPressed: {
     opacity: 0.8,

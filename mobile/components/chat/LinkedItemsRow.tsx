@@ -17,6 +17,7 @@ function iconForItem(item: LinkedItem): keyof typeof Ionicons.glyphMap {
   if (item.entity_type === 'document') return 'document-text-outline';
   if (item.entity_type === 'contact') return 'person-outline';
   if (item.entity_type === 'place') return 'location-outline';
+  if (item.entity_type === 'conversation') return 'chatbubble-outline';
   throw new Error(`Unsupported linked item type: ${item.entity_type}`);
 }
 

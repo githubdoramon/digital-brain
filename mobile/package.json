@@ -32,6 +32,7 @@
     "expo-clipboard": "~55.0.8",
     "expo-constants": "~55.0.8",
     "expo-device": "~55.0.10",
+    "expo-document-picker": "~55.0.8",
     "expo-file-system": "~55.0.11",
     "expo-font": "~55.0.4",
     "expo-image-picker": "~55.0.20",

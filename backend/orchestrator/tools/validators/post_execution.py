@@ -251,6 +251,8 @@ class PostExecutionValidator:
                         suggested_next_tools.append("get_document")
                     elif candidate_kind == "event":
                         suggested_next_tools.append("get_events")
+                    elif candidate_kind == "conversation":
+                        suggested_next_tools.append("get_conversation")
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                     reason=(
@@ -263,6 +265,14 @@ class PostExecutionValidator:
                     ),
                     extracted_facts=facts,
                     suggested_next_tools=suggested_next_tools,
+                )
+
+        if tool_name == "get_conversation":
+            if result.get("conversation"):
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                    reason="Conversation context inspected; synthesize using dates, speaker attribution and original sources",
+                    extracted_facts=["Inspected original conversation context"],
                 )
 
         if tool_name == "get_document":
@@ -1085,6 +1095,7 @@ class GoalCompletionValidator:
                 "search_memories",
                 "get_events",
                 "get_document",
+                "get_conversation",
                 "web_search",
                 "lookup_contact",
                 "resolve_contacts",
@@ -1098,6 +1109,12 @@ class GoalCompletionValidator:
         has_required_detail = required_detail_tool is None or any(
             tc.tool_name == required_detail_tool for tc in successful_query_calls
         )
+        if required_detail_tool == "get_conversation":
+            has_required_detail = any(
+                tc.tool_name == "get_conversation" and tc.success
+                and str(((tc.result or {}).get("conversation") or {}).get("message_id")) == str((best_search_candidate or {}).get("id"))
+                for tc in successful_query_calls
+            )
         if (
             required_detail_tool == "get_document"
             and self._is_temporal_interaction_query(goal)
@@ -1265,6 +1282,8 @@ class GoalCompletionValidator:
         # Check count indicators
         if result.get("count", 0) > 0:
             return True
+        if isinstance(result.get("conversation"), dict) and result["conversation"].get("messages"):
+            return True
 
         # Check success with data
         return bool(result.get("success") and not result.get("error"))
@@ -1325,6 +1344,7 @@ class GoalCompletionValidator:
                     "score": score,
                     "composite": composite,
                     "goal_overlap": goal_overlap,
+                    "thread_id": row.get("thread_id"),
                 }
 
         return best_candidate
@@ -1341,6 +1361,8 @@ class GoalCompletionValidator:
             return "get_document"
         if kind == "event":
             return "get_events"
+        if kind == "conversation":
+            return "get_conversation"
         return None
 
     def _preferred_candidate_kinds(self, goal: str) -> list[str]:
@@ -1411,6 +1433,8 @@ class GoalCompletionValidator:
         candidate_id = str(candidate.get("id") or "").strip()
         candidate_title = str(candidate.get("title") or "").strip()
         candidate_label = f"'{candidate_title}'" if candidate_title else ""
+        if required_detail_tool == "get_conversation" and candidate_id:
+            return f"Call get_conversation with thread_id='{candidate.get('thread_id')}' and message_id={candidate_id} before responding"
 
         if required_detail_tool == "get_document" and candidate_id:
             return f"Call get_document with document_id='{candidate_id}' for {candidate_label} before responding"

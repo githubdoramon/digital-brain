@@ -20,6 +20,7 @@ from .state import AgentState, ToolCallRecord
 logger = get_runtime_logger(__name__)
 
 PARALLEL_SAFE_TOOLS = {
+    "get_conversation",
     "search_memories",
     "get_events",
     "get_document",
@@ -29,6 +30,7 @@ PARALLEL_SAFE_TOOLS = {
 }
 
 DEDUPLICATION_SAFE_TOOLS = {
+    "get_conversation",
     "search_memories",
     "get_events",
     "get_document",
@@ -43,6 +45,7 @@ DEDUPLICATION_SAFE_TOOLS = {
 }
 
 _SET_LIKE_ARG_KEYS = {
+    "sources",
     "contact_ids",
     "event_ids",
     "place_ids",
@@ -1018,6 +1021,9 @@ class ToolExecutionCoordinator:
                 "tags": row.get("tags"),
                 "types": row.get("types"),
             }
+            if row.get("kind") == "conversation":
+                for key in ("thread_id", "message_id", "role", "created_at", "source_items"):
+                    compact_row[key] = row.get(key)
             snippet = self._truncate_text(row.get("snippet"), snippet_limit)
             summary = self._truncate_text(row.get("summary"), summary_limit)
             if snippet:
@@ -1025,7 +1031,8 @@ class ToolExecutionCoordinator:
             if summary:
                 compact_row["summary"] = summary
             compact_rows.append(compact_row)
-        return {"results": compact_rows, "count": int(result.get("count", len(rows)) or 0)}
+        return {"results": compact_rows, "count": int(result.get("count", len(rows)) or 0),
+                "conversation_scope_note": result.get("conversation_scope_note")}
 
     def _compact_get_document_result(
         self,
@@ -1071,6 +1078,53 @@ class ToolExecutionCoordinator:
             compact_document["content_preview"] = preview
         return {"document": compact_document}
 
+    def _compact_get_conversation_result(
+        self, result: dict[str, Any], *, aggressive: bool,
+    ) -> dict[str, Any]:
+        conversation = result.get("conversation")
+        if not isinstance(conversation, dict):
+            return result
+        target_id = str(conversation.get("message_id"))
+        messages = []
+        for message in (conversation.get("messages") or [])[:5]:
+            if not isinstance(message, dict):
+                continue
+            is_target = str(message.get("message_id")) == target_id
+            content_limit = (
+                (2400 if aggressive else 6000) if is_target else (500 if aggressive else 1000)
+            )
+            original = str(message.get("content") or "")
+            refs = []
+            for ref in (message.get("source_items") or [])[: 2 if aggressive else 3]:
+                if not isinstance(ref, dict) or len(str(ref.get("entity_id") or "")) > 512:
+                    continue
+                refs.append(
+                    {
+                        "entity_type": ref.get("entity_type"),
+                        "entity_id": ref.get("entity_id"),
+                        "message_id": ref.get("message_id"),
+                        "title": self._truncate_text(ref.get("title"), 160),
+                    }
+                )
+            messages.append(
+                {
+                    "message_id": message.get("message_id"),
+                    "role": message.get("role"),
+                    "created_at": message.get("created_at"),
+                    "content": self._truncate_text(original, content_limit),
+                    "excerpted": bool(message.get("excerpted")) or len(original) > content_limit,
+                    "source_items": refs,
+                }
+            )
+        return {
+            "conversation": {
+                "thread_id": conversation.get("thread_id"),
+                "message_id": conversation.get("message_id"),
+                "title": self._truncate_text(conversation.get("title"), 200),
+                "messages": messages,
+            }
+        }
+
     def _compact_get_events_result(
         self,
         result: dict[str, Any],
@@ -1084,13 +1138,15 @@ class ToolExecutionCoordinator:
 
         action = str(args.get("action") or "").strip().lower()
         detail_mode = action == "by_ids"
-        event_limit = len(events) if detail_mode else (
-            COMPACT_EVENT_RESULT_ITEM_LIMIT if aggressive else EVENT_RESULT_ITEM_LIMIT
+        event_limit = (
+            len(events)
+            if detail_mode
+            else (COMPACT_EVENT_RESULT_ITEM_LIMIT if aggressive else EVENT_RESULT_ITEM_LIMIT)
         )
         summary_limit = (
-            COMPACT_DETAILED_EVENT_SUMMARY_CHARS if aggressive else DETAILED_EVENT_SUMMARY_CHARS
-        ) if detail_mode else (
-            COMPACT_EVENT_SUMMARY_CHARS if aggressive else EVENT_SUMMARY_CHARS
+            (COMPACT_DETAILED_EVENT_SUMMARY_CHARS if aggressive else DETAILED_EVENT_SUMMARY_CHARS)
+            if detail_mode
+            else (COMPACT_EVENT_SUMMARY_CHARS if aggressive else EVENT_SUMMARY_CHARS)
         )
 
         compact_events: list[dict[str, Any]] = []
@@ -1208,6 +1264,8 @@ class ToolExecutionCoordinator:
             payload = self._compact_search_memories_result(result, aggressive=aggressive)
         elif tool_name == "get_document":
             payload = self._compact_get_document_result(result, aggressive=aggressive)
+        elif tool_name == "get_conversation":
+            payload = self._compact_get_conversation_result(result, aggressive=aggressive)
         elif tool_name == "get_events":
             payload = self._compact_get_events_result(result, args=args, aggressive=aggressive)
         elif tool_name == "summarize_memories":
@@ -1241,7 +1299,7 @@ class ToolExecutionCoordinator:
         args: dict[str, Any],
         result: dict[str, Any],
     ) -> str:
-        if tool_name == "get_document":
+        if tool_name in {"get_document", "get_conversation"}:
             return "high"
         if tool_name == "get_events" and str(args.get("action") or "").strip().lower() == "by_ids":
             return "high"
@@ -1339,6 +1397,9 @@ class ToolExecutionCoordinator:
                 "end_date": row.get("end_date"),
                 "document_date": row.get("document_date"),
                 "snippet": row.get("snippet"),
+                "thread_id": row.get("thread_id"),
+                "message_id": row.get("message_id"),
+                "created_at": row.get("created_at"),
                 "tags": row.get("tags") if isinstance(row.get("tags"), list) else [],
                 "types": row.get("types") if isinstance(row.get("types"), list) else [],
             }

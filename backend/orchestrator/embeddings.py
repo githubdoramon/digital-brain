@@ -76,7 +76,10 @@ def _extract_embedding(data: dict[str, Any]) -> list[float] | None:
     return None
 
 
-def embed_text(text: str) -> list[float]:
+def embed_text(
+    text: str, *, log_response_body: bool = True,
+    request_timeout: float | tuple[float, float] = 30,
+) -> list[float]:
     global _adaptive_max_input_bytes
 
     text = (text or "").strip()
@@ -96,7 +99,7 @@ def embed_text(text: str) -> list[float]:
                 "input": payload_text,
                 "encoding_format": "float",
             },
-            timeout=30,
+            timeout=request_timeout,
         )
 
     response = _post_embed(input_text)
@@ -108,7 +111,7 @@ def embed_text(text: str) -> list[float]:
             response.status_code,
             input_chars,
             input_bytes,
-            body[:300],
+            body[:300] if log_response_body else "[redacted]",
         )
         if _is_context_length_error(body):
             retry_caps = [2500, 2000, 1600, 1200, 1000, 800]
@@ -131,7 +134,7 @@ def embed_text(text: str) -> list[float]:
                     logger.warning(
                         "[embeddings] retry failed status=%s body=%s",
                         retry_response.status_code,
-                        retry_body[:300],
+                        retry_body[:300] if log_response_body else "[redacted]",
                     )
                     continue
                 retry_data = retry_response.json()

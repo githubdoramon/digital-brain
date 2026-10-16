@@ -84,6 +84,7 @@ function humanToolName(toolNameRaw: string): string {
   const toolName = toolNameRaw.trim();
   const aliases: Record<string, string> = {
     search_memories: 'Searching memory',
+    get_conversation: 'Reading past conversation',
     get_events: 'Checking an event',
     get_document: 'Looking at a document',
     create_pdf: 'Creating a PDF',

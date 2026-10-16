@@ -1,5 +1,6 @@
 import { BrainWindow } from "@/features/brain/BrainWindow";
+import { Suspense } from "react";
 
 export default function Home() {
-  return <BrainWindow />;
+  return <Suspense><BrainWindow /></Suspense>;
 }

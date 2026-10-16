@@ -490,6 +490,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        state.current_thread_id = session_id
         state.visual_attachments = list(visual_attachments or [])
         self._inject_inferred_location(state=state, user_email=user_email)
 
@@ -761,6 +762,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        state.current_thread_id = session_id
         state.visual_attachments = list(visual_attachments or [])
         self._inject_inferred_location(state=state, user_email=user_email)
 
@@ -1781,6 +1783,10 @@ class AgentController:
             if parsed_limit < 25:
                 normalized_args["limit"] = 25
 
+        if normalized_args.get("sources") == ["conversation"]:
+            # A name in a chat is a text mention, not an entity association.
+            return normalized_args, None
+
         active_scope, active_scope_ids, preempt, _ = self._ensure_contact_scope(
             state=state,
             text=query_text or goal_text,
@@ -1973,7 +1979,7 @@ class AgentController:
         same_scope = tuple(
             sorted(str(cid) for cid in (reference_args.get("contact_ids") or []))
         ) == tuple(sorted(str(cid) for cid in (args.get("contact_ids") or [])))
-        if not same_scope:
+        if not same_scope or self._memory_search_signature(reference_args)[-1] != self._memory_search_signature(args)[-1]:
             return None
 
         label = str(inspected_candidate.get("label") or "untitled").strip()
@@ -1994,7 +2000,8 @@ class AgentController:
         time_start = str(args.get("time_start") or "")
         time_end = str(args.get("time_end") or "")
         sort_order = str(args.get("sort_order") or "relevance").lower()
-        return (query, contact_ids, tags, time_start, time_end, sort_order)
+        sources = tuple(sorted(args.get("sources") or ["event", "document", "conversation"]))
+        return (query, contact_ids, tags, time_start, time_end, sort_order, sources)
 
     def _coerce_limit(self, value: Any) -> int:
         """Parse result limit from arbitrary input with a sane default."""
@@ -2465,7 +2472,7 @@ class AgentController:
                 continue
             entity_type = str(candidate.get("kind") or "").strip().lower()
             entity_id = str(candidate.get("candidate_id") or "").strip()
-            if entity_type not in {"event", "document", "contact", "place"} or not entity_id:
+            if entity_type not in {"event", "document", "contact", "place", "conversation"} or not entity_id:
                 continue
 
             payload = self._linked_item_entity_payload(
@@ -2646,6 +2653,17 @@ class AgentController:
                 "searchable_text": " ".join(str(part) for part in searchable_parts if part),
             }
 
+        if entity_type == "conversation":
+            if not candidate.get("inspected"):
+                return None
+            return {
+                **base_payload,
+                "entity_id": metadata.get("thread_id"),
+                "message_id": metadata.get("message_id"),
+                "subtitle": metadata.get("created_at"),
+                "searchable_text": f"{label} {metadata.get('snippet') or ''}",
+            }
+
         if entity_type == "contact":
             title = str(metadata.get("display_name") or label).strip() or label
             subtitle = None
@@ -2769,13 +2787,16 @@ class AgentController:
         }, round(support_score, 4))
 
     def _linked_item_payload(self, candidate: dict[str, Any]) -> dict[str, Any]:
-        return {
+        payload = {
             "entity_type": candidate.get("entity_type"),
             "entity_id": candidate.get("entity_id"),
             "title": candidate.get("title"),
             "subtitle": candidate.get("subtitle"),
             "role": candidate.get("selected_role"),
         }
+        if candidate.get("entity_type") == "conversation":
+            payload["message_id"] = candidate.get("message_id")
+        return payload
 
     def _linked_item_tokens(self, text: str) -> set[str]:
         stop_words = {

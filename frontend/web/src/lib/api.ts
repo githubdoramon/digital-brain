@@ -254,11 +254,12 @@ export type StreamEvent =
   | { type: "error"; message: string };
 
 export type LinkedItem = {
-  entity_type: "event" | "document" | "contact" | "place";
+  entity_type: "event" | "document" | "contact" | "place" | "conversation";
   entity_id: string;
   title: string;
   subtitle?: string | null;
   role?: string | null;
+  message_id?: number | null;
 };
 
 export type GeneratedFile = {

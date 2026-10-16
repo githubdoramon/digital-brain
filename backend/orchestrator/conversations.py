@@ -166,7 +166,7 @@ def list_threads(user_email: str) -> list[dict[str, Any]]:
     return rows
 
 
-def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[str, Any]]:
+def _keyword_search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[str, Any]]:
     """Search a user's thread titles and messages with PostgreSQL full-text search."""
     normalized_query = str(query or "").strip()
     if not user_email or not normalized_query:
@@ -181,6 +181,7 @@ def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[s
             ), message_matches AS (
                 SELECT DISTINCT ON (m.thread_id)
                     m.thread_id,
+                    m.message_id AS matched_message_id,
                     ts_rank_cd(m.content_tsv, q.tsquery) AS message_score,
                     LEFT(m.content, 160) AS matched_message_preview
                 FROM conversation_messages m
@@ -202,7 +203,8 @@ def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[s
                     ORDER BY m.created_at DESC, m.message_id DESC
                     LIMIT 1
                 ) AS last_message_preview,
-                mm.matched_message_preview
+                mm.matched_message_preview,
+                mm.matched_message_id
             FROM conversation_threads t
             CROSS JOIN search_query q
             LEFT JOIN message_matches mm ON mm.thread_id = t.id
@@ -219,6 +221,36 @@ def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[s
             (normalized_query, user_email, user_email, bounded_limit),
         )
         return cur.fetchall()
+
+
+def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Search History with shared keyword and semantic conversation retrieval."""
+    import conversation_search
+
+    limit = max(1, min(int(limit), 200))
+    lexical = _keyword_search_threads(user_email, query, limit)
+    matches = conversation_search.search_messages(user_email, query, limit=limit, per_thread=1)
+    threads = {row["id"]: row for row in lexical}
+    scores = {row["id"]: 1 / (20 + rank) for rank, row in enumerate(lexical, 1)}
+    missing = [row["thread_id"] for row in matches if row["thread_id"] not in threads]
+    if missing:
+        with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """SELECT t.id, t.title, t.created_at, t.updated_at,
+                   (SELECT LEFT(m.content, 160) FROM conversation_messages m WHERE m.thread_id = t.id
+                    ORDER BY m.created_at DESC, m.message_id DESC LIMIT 1) AS last_message_preview
+                   FROM conversation_threads t WHERE t.user_email = %s AND t.id = ANY(%s)""",
+                (user_email, missing),
+            )
+            threads.update({row["id"]: row for row in cur.fetchall()})
+    for rank, match in enumerate(matches, 1):
+        thread_id = match["thread_id"]
+        if thread_id not in threads:
+            continue
+        threads[thread_id]["matched_message_preview"] = match["snippet"]
+        threads[thread_id]["matched_message_id"] = match["message_id"]
+        scores[thread_id] = scores.get(thread_id, 0) + 1 / (20 + rank)
+    return sorted(threads.values(), key=lambda row: (-scores.get(row["id"], 0), row["id"]))[:limit]
 
 
 def get_thread_with_messages(thread_id: str, user_email: str) -> dict[str, Any] | None:

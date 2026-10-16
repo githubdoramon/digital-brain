@@ -8,7 +8,6 @@ import {
   FlatList,
   Image,
   Keyboard,
-  KeyboardEvent,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -20,6 +19,7 @@ import {
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as DocumentPicker from 'expo-document-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -51,6 +51,7 @@ import type {
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
 import {
+  buildComposerPdfAttachment,
   buildComposerMediaAttachment,
   MAX_CHAT_MEDIA_ATTACHMENTS,
   type ComposerMediaAttachment,
@@ -193,6 +194,7 @@ type ContactAction = {
 type ChatConversationScreenProps = {
   mode?: 'main' | 'thread';
   initialThreadId?: string | null;
+  initialMessageId?: string | null;
   tabBarHeight?: number;
 };
 
@@ -1249,6 +1251,7 @@ function pruneContactPreviewBlocks(directives: UiDirectives, previewId: string):
 export function ChatConversationScreen({
   mode = 'main',
   initialThreadId = null,
+  initialMessageId = null,
   tabBarHeight = 0,
 }: ChatConversationScreenProps) {
   const router = useRouter();
@@ -1262,6 +1265,13 @@ export function ChatConversationScreen({
     : insets.bottom;
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
+  const targetMessageRef = useRef(initialMessageId);
+  const [highlightedMessageId, setHighlightedMessageId] = useState(initialMessageId);
+  const onSourceViewable = useRef(({ viewableItems }: { viewableItems: { item: Message }[] }) => {
+    if (targetMessageRef.current && viewableItems.some(({ item }) => item.id === targetMessageRef.current)) {
+      targetMessageRef.current = null;
+    }
+  }).current;
   const inputRef = useRef<TextInput>(null);
   const scrollFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState('');
@@ -1297,17 +1307,16 @@ export function ChatConversationScreen({
   const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const commandsEnabled = isMainChat;
   const composerBottomOffset = keyboardVisible
     ? Platform.OS === 'ios'
-      ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
-      : Math.max(0, keyboardHeight - insets.bottom) + 2 * COMPOSER_KEYBOARD_GAP
+      ? COMPOSER_KEYBOARD_GAP
+      : 2 * COMPOSER_KEYBOARD_GAP
     : 0;
   const listBottomInset =
     composerHeight > 0
       ? composerHeight + composerBottomOffset + 16
-      : tabBarClearance + keyboardHeight + 80;
+      : tabBarClearance + 80;
 
   const allowedEmails = (process.env.EXPO_PUBLIC_ALLOWED_EMAILS ?? '')
     .split(',')
@@ -1692,13 +1701,11 @@ export function ChatConversationScreen({
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
-    const showListener = Keyboard.addListener(showEvent, (event: KeyboardEvent) => {
+    const showListener = Keyboard.addListener(showEvent, () => {
       setKeyboardVisible(true);
-      setKeyboardHeight(event.endCoordinates?.height ?? 0);
     });
     const hideListener = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
-      setKeyboardHeight(0);
     });
 
     return () => {
@@ -1721,7 +1728,7 @@ export function ChatConversationScreen({
         {
           id: `${Date.now()}-media-limit`,
           role: 'assistant',
-          content: `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} photos to one message.`,
+          content: `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} files to one message.`,
         },
       ]);
       setForceScrollNext(true);
@@ -1758,6 +1765,55 @@ export function ChatConversationScreen({
       setForceScrollNext(true);
     }
   }, [allowed, composerMediaAttachments.length, isSending, pickImages, showError]);
+
+  const addComposerPdfAttachment = useCallback(async () => {
+    if (!allowed || isSending) return;
+    if (composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
+      const message = `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} files to one message.`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-attachment-limit`,
+          role: 'assistant',
+          content: message,
+        },
+      ]);
+      setForceScrollNext(true);
+      return;
+    }
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      const attachment = await buildComposerPdfAttachment(result.assets[0]);
+      setComposerMediaAttachments((prev) => {
+        if (prev.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
+          return prev;
+        }
+        return [...prev, attachment];
+      });
+      setForceScrollNext(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to attach that PDF.';
+      showError(message);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-pdf-error`,
+          role: 'assistant',
+          content: message,
+        },
+      ]);
+      setForceScrollNext(true);
+    }
+  }, [allowed, composerMediaAttachments.length, isSending, showError]);
 
   const handleRegenerateThreadTitle = useCallback(async () => {
     const activeThreadId = threadId || initialThreadId;
@@ -2636,11 +2692,13 @@ export function ChatConversationScreen({
   );
 
   const scrollToBottom = useCallback((animated: boolean) => {
+    if (targetMessageRef.current) return;
     if (scrollFallbackTimeoutRef.current) {
       clearTimeout(scrollFallbackTimeoutRef.current);
     }
 
     const runScroll = () => {
+      if (targetMessageRef.current) return;
       listRef.current?.scrollToEnd({ animated });
     };
 
@@ -2650,6 +2708,46 @@ export function ChatConversationScreen({
 
     scrollFallbackTimeoutRef.current = setTimeout(runScroll, animated ? 140 : 0);
   }, []);
+
+  useEffect(() => {
+    targetMessageRef.current = initialMessageId;
+    setHighlightedMessageId(initialMessageId);
+    if (initialMessageId) {
+      isAtBottomRef.current = false;
+      setForceScrollNext(false);
+    }
+  }, [initialThreadId, initialMessageId]);
+
+  useEffect(() => {
+    if (isBootstrapping || !targetMessageRef.current) return;
+    const index = messages.findIndex((message) => message.id === targetMessageRef.current);
+    if (index < 0) {
+      targetMessageRef.current = null;
+      setHighlightedMessageId(null);
+      return;
+    }
+    setForceScrollNext(false);
+    isAtBottomRef.current = false;
+    let attempts = 0;
+    let retry: ReturnType<typeof setInterval> | null = null;
+    const seek = () => {
+      if (!targetMessageRef.current || attempts++ >= 40) {
+        targetMessageRef.current = null;
+        if (retry) clearInterval(retry);
+        return;
+      }
+      listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.3 });
+    };
+    const frame = requestAnimationFrame(seek);
+    retry = setInterval(seek, 150);
+    return () => { cancelAnimationFrame(frame); if (retry) clearInterval(retry); };
+  }, [initialMessageId, isBootstrapping, messages]);
+
+  useEffect(() => {
+    if (!highlightedMessageId || isBootstrapping) return;
+    const timeout = setTimeout(() => setHighlightedMessageId(null), 6000);
+    return () => clearTimeout(timeout);
+  }, [highlightedMessageId, isBootstrapping]);
 
   useEffect(() => {
     return () => {
@@ -2680,15 +2778,21 @@ export function ChatConversationScreen({
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
-        style={[styles.screen, !isMainChat && styles.threadScreen]}
-        behavior={undefined}
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
+        <View style={[styles.screen, !isMainChat && styles.threadScreen]}>
         <FlatList
           ref={listRef}
           style={styles.list}
           data={messages}
           keyExtractor={(item) => item.id}
+          onViewableItemsChanged={onSourceViewable}
+          onScrollToIndexFailed={({ averageItemLength, index }) => {
+            listRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
+          }}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           onContentSizeChange={() => {
             if (!isAtBottomRef.current && !forceScrollNext) return;
             scrollToBottom(forceScrollNext);
@@ -2830,27 +2934,46 @@ export function ChatConversationScreen({
                 style={[
                   styles.messageBubble,
                   item.role === 'user' ? styles.userBubble : styles.assistantBubble,
+                  item.id === highlightedMessageId && { borderColor: theme.colors.teal, borderWidth: 2 },
                 ]}
               >
                 {item.role === 'user' && userMediaAttachments.length > 0 ? (
                   <View style={styles.userMediaRow}>
-                    {userMediaAttachments.slice(0, 4).map((attachment, index) =>
-                      attachment.uri ? (
-                        <Image
-                          key={`${item.id}:media:${attachment.attachment_id || index}`}
-                          source={{ uri: attachment.uri }}
-                          style={styles.userMediaImage}
-                          resizeMode="cover"
-                        />
-                      ) : (
+                    {userMediaAttachments.slice(0, 4).map((attachment, index) => {
+                      const attachmentKey = `${item.id}:media:${attachment.attachment_id || index}`;
+                      const isPdf =
+                        attachment.mime_type?.toLowerCase() === 'application/pdf' ||
+                        attachment.file_name?.toLowerCase().endsWith('.pdf');
+                      if (isPdf) {
+                        return (
+                          <View
+                            key={attachmentKey}
+                            style={[styles.userMediaImage, styles.userMediaPdf]}
+                          >
+                            <Ionicons name="document-text-outline" size={22} color="#fff" />
+                            <Text style={styles.userMediaPdfLabel}>PDF</Text>
+                          </View>
+                        );
+                      }
+                      if (attachment.uri) {
+                        return (
+                          <Image
+                            key={attachmentKey}
+                            source={{ uri: attachment.uri }}
+                            style={styles.userMediaImage}
+                            resizeMode="cover"
+                          />
+                        );
+                      }
+                      return (
                         <View
-                          key={`${item.id}:media:${attachment.attachment_id || index}`}
+                          key={attachmentKey}
                           style={[styles.userMediaImage, styles.userMediaFallback]}
                         >
                           <Ionicons name="image-outline" size={18} color="#fff" />
                         </View>
-                      ),
-                    )}
+                      );
+                    })}
                     {userMediaAttachments.length > 4 ? (
                       <View style={[styles.userMediaImage, styles.userMediaOverflow]}>
                         <Text
@@ -3052,13 +3175,15 @@ export function ChatConversationScreen({
           onAttachPhoto={() => {
             void addComposerMediaAttachment();
           }}
+          onAttachPdf={() => {
+            void addComposerPdfAttachment();
+          }}
           onInputFocus={() => {
             setForceScrollNext(true);
           }}
           onInputBlur={() => {
             if (Platform.OS === 'android') {
               setKeyboardVisible(false);
-              setKeyboardHeight(0);
             }
           }}
           onErrorMessage={showError}
@@ -3066,6 +3191,7 @@ export function ChatConversationScreen({
             !allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS
           }
         />
+        </View>
       </KeyboardAvoidingView>
       {imagePickerSheet}
     </LinearGradient>
@@ -3140,6 +3266,17 @@ const styles = StyleSheet.create({
   userMediaFallback: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  userMediaPdf: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  userMediaPdfLabel: {
+    color: '#fff',
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '700',
   },
   userMediaOverflow: {
     alignItems: 'center',

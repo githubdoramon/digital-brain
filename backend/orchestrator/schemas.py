@@ -692,11 +692,12 @@ class UiDirectivesOut(BaseModel):
 
 
 class LinkedItemOut(BaseModel):
-    entity_type: Literal["event", "document", "contact", "place"]
+    entity_type: Literal["event", "document", "contact", "place", "conversation"]
     entity_id: str
     title: str
     subtitle: str | None = None
     role: str | None = None
+    message_id: int | None = None
 
 
 class ChatMediaAttachmentIn(BaseModel):
@@ -774,6 +775,7 @@ class ThreadOut(BaseModel):
     updated_at: datetime
     last_message_preview: str | None = None
     matched_message_preview: str | None = None
+    matched_message_id: int | None = None
 
 
 class ThreadDetailOut(ThreadOut):

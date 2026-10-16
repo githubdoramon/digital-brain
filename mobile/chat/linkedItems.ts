@@ -1,6 +1,6 @@
 import type { Href } from 'expo-router';
 
-export type LinkedItemType = 'event' | 'document' | 'contact' | 'place';
+export type LinkedItemType = 'event' | 'document' | 'contact' | 'place' | 'conversation';
 
 export type LinkedItem = {
   entity_type: LinkedItemType;
@@ -8,11 +8,21 @@ export type LinkedItem = {
   title: string;
   subtitle?: string | null;
   role?: string | null;
+  message_id?: number | null;
 };
 
 export function routeForLinkedItem(item: LinkedItem): Href | null {
   const entityId = item.entity_id.trim();
   if (!entityId) return null;
+  if (item.entity_type === 'conversation') {
+    return {
+      pathname: '/chat/[threadId]',
+      params: {
+        threadId: entityId,
+        ...(item.message_id ? { messageId: String(item.message_id) } : {}),
+      },
+    };
+  }
 
   if (item.entity_type === 'event') {
     return { pathname: '/events/[eventId]', params: { eventId: entityId } };

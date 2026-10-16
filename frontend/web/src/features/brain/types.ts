@@ -30,6 +30,8 @@ export type ThreadSummary = {
   created_at: string;
   updated_at: string;
   last_message_preview?: string | null;
+  matched_message_preview?: string | null;
+  matched_message_id?: number | null;
 };
 
 export type ThreadMessage = {

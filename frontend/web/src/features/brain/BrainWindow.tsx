@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
 
 import {
   api,
@@ -107,6 +108,15 @@ function parseCommandAction(optionIdRaw: unknown, prefixes: {
 }
 
 export function BrainWindow() {
+  const searchParams = useSearchParams();
+  const requestedThreadId = searchParams.get("thread_id");
+  const requestedMessageId = searchParams.get("message_id");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const historyQueryRef = useRef(historyQuery);
+  historyQueryRef.current = historyQuery;
+  const searchRequestRef = useRef(0);
+  const sourceMessageRef = useRef<string | null>(requestedMessageId);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(requestedMessageId);
   const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
   const [quickChatMessages, setQuickChatMessages] = useState<Message[]>([]);
@@ -144,7 +154,7 @@ export function BrainWindow() {
 
   const scrollToLatestMessage = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || (!isAtBottom && !forceScrollNext)) return;
+    if (!container || sourceMessageRef.current || (!isAtBottom && !forceScrollNext)) return;
 
     requestAnimationFrame(() => {
       container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
@@ -156,17 +166,18 @@ export function BrainWindow() {
     scrollToLatestMessage();
   }, [displayMessages.length, isLoading, latestMessageContent, scrollToLatestMessage]);
 
-  const refreshThreads = useCallback(async () => {
+  const refreshThreads = useCallback(async (query: string = historyQueryRef.current) => {
+    const requestId = ++searchRequestRef.current;
     setIsLoadingThreads(true);
     try {
-      const data = await api.get<ThreadSummary[]>("/threads");
-      setThreads(data);
+      const data = await api.get<ThreadSummary[]>(query.trim() ? `/threads?q=${encodeURIComponent(query.trim())}` : "/threads");
+      if (requestId === searchRequestRef.current) setThreads(data);
       return data;
     } catch (error) {
       console.error("Failed to fetch conversation threads", error);
       return [];
     } finally {
-      setIsLoadingThreads(false);
+      if (requestId === searchRequestRef.current) setIsLoadingThreads(false);
     }
   }, []);
 
@@ -202,10 +213,17 @@ export function BrainWindow() {
 
   useEffect(() => {
     let isMounted = true;
+    sourceMessageRef.current = requestedMessageId;
+    setHighlightedMessageId(requestedMessageId);
+    setIsAtBottom(!requestedMessageId);
+    setForceScrollNext(false);
     (async () => {
       const fetched = await refreshThreads();
       if (!isMounted) return;
-      if (fetched.length > 0) {
+      if (requestedThreadId) {
+        setChatMode("threads");
+        await loadThread(requestedThreadId);
+      } else if (fetched.length > 0) {
         await loadThread(fetched[0].id);
       } else {
         setMessages([]);
@@ -215,7 +233,30 @@ export function BrainWindow() {
     return () => {
       isMounted = false;
     };
-  }, [loadThread, refreshThreads]);
+  }, [loadThread, refreshThreads, requestedThreadId, requestedMessageId]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => { void refreshThreads(historyQuery); }, 350);
+    return () => { clearTimeout(timeout); searchRequestRef.current += 1; };
+  }, [historyQuery, refreshThreads]);
+
+  useEffect(() => {
+    if (isLoadingMessages || !sourceMessageRef.current || chatMode !== "threads") return;
+    const element = document.getElementById(`chat-message-${sourceMessageRef.current}`);
+    if (!element) return;
+    const frame = requestAnimationFrame(() => {
+      element.scrollIntoView({ block: "center" });
+      sourceMessageRef.current = null;
+      setIsAtBottom(false);
+    });
+    return () => { cancelAnimationFrame(frame); };
+  }, [messages, chatMode, isLoadingMessages]);
+
+  useEffect(() => {
+    if (!highlightedMessageId || isLoadingMessages) return;
+    const timeout = setTimeout(() => setHighlightedMessageId(null), 6000);
+    return () => clearTimeout(timeout);
+  }, [highlightedMessageId, isLoadingMessages]);
 
   const deleteThread = useCallback(
     async (threadId: string) => {
@@ -625,6 +666,11 @@ export function BrainWindow() {
               New
             </button>
           </div>
+          <input
+            type="search" aria-label="Search conversations" placeholder="Search conversations"
+            value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)}
+            style={{ border: "1px solid #cbd5e1", borderRadius: "6px", padding: "8px 10px", width: "100%", boxSizing: "border-box" }}
+          />
           <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "6px", overflowY: "auto" }}>
             {isLoadingThreads ? (
               <div style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading conversations...</div>
@@ -639,7 +685,10 @@ export function BrainWindow() {
                   key={thread.id}
                   type="button"
                   onClick={() => {
-                    if (!isActive) void loadThread(thread.id);
+                    sourceMessageRef.current = historyQuery.trim() && thread.matched_message_id ? String(thread.matched_message_id) : null;
+                    setHighlightedMessageId(sourceMessageRef.current);
+                    setIsAtBottom(!sourceMessageRef.current);
+                    if (!isActive || sourceMessageRef.current) void loadThread(thread.id);
                   }}
                   style={{
                     background: isActive ? "#e0f2fe" : "#fafafa",
@@ -657,7 +706,7 @@ export function BrainWindow() {
                     {thread.title?.trim() || "Untitled conversation"}
                   </span>
                   <span style={{ color: "#64748b", fontSize: "0.75rem" }}>
-                    {thread.last_message_preview || "No messages yet"}
+                    {(historyQuery.trim() ? thread.matched_message_preview : thread.last_message_preview) || thread.last_message_preview || "No messages yet"}
                   </span>
                   <span style={{ alignItems: "center", color: "#94a3b8", display: "flex", fontSize: "0.7rem", justifyContent: "space-between" }}>
                     Updated{" "}
@@ -835,12 +884,15 @@ export function BrainWindow() {
               return (
                 <div
                   key={message.id}
+                  id={`chat-message-${message.id}`}
                   ref={isLastMessage ? lastMessageRef : undefined}
                   style={{
                     alignItems: message.role === "user" ? "flex-end" : "flex-start",
                     display: "flex",
                     flexDirection: "column",
                     gap: "7px",
+                    outline: String(message.id) === highlightedMessageId ? "2px solid #0b6bcb" : undefined,
+                    outlineOffset: "4px",
                   }}
                 >
                   {message.metadata?.progress_chip && message.pending ? (

@@ -3,7 +3,16 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -43,43 +52,46 @@ export default function ThreadHistoryScreen() {
     return () => clearTimeout(timeout);
   }, [searchText]);
 
-  const loadThreads = useCallback(async (query: string) => {
-    const requestId = ++requestIdRef.current;
-    if (!token) {
-      setThreads([]);
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    try {
-      const [nextThreads, pendingRun, mainSession] = await Promise.all([
-        listNonCommandThreads(token, query),
-        loadPendingRun(),
-        loadChatSession(),
-      ]);
-      const unreadIds = await getUnreadThreadIds(nextThreads);
-      if (mainSession?.threadId) unreadIds.delete(mainSession.threadId);
-      if (requestId === requestIdRef.current) {
-        setThreads(nextThreads);
-        setUnreadThreadIds(unreadIds);
-        setPendingThreadId(
-          pendingRun?.threadId && pendingRun.threadId !== mainSession?.threadId
-            ? pendingRun.threadId
-            : null,
-        );
-      }
-    } catch {
-      if (requestId === requestIdRef.current) {
-        setError('Could not load thread history right now.');
-      }
-    } finally {
-      if (requestId === requestIdRef.current) {
+  const loadThreads = useCallback(
+    async (query: string) => {
+      const requestId = ++requestIdRef.current;
+      if (!token) {
+        setThreads([]);
         setIsLoading(false);
+        return;
       }
-    }
-  }, [token]);
+
+      setIsLoading(true);
+      setError(null);
+      try {
+        const [nextThreads, pendingRun, mainSession] = await Promise.all([
+          listNonCommandThreads(token, query),
+          loadPendingRun(),
+          loadChatSession(),
+        ]);
+        const unreadIds = await getUnreadThreadIds(nextThreads);
+        if (mainSession?.threadId) unreadIds.delete(mainSession.threadId);
+        if (requestId === requestIdRef.current) {
+          setThreads(nextThreads);
+          setUnreadThreadIds(unreadIds);
+          setPendingThreadId(
+            pendingRun?.threadId && pendingRun.threadId !== mainSession?.threadId
+              ? pendingRun.threadId
+              : null,
+          );
+        }
+      } catch {
+        if (requestId === requestIdRef.current) {
+          setError('Could not load thread history right now.');
+        }
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [token],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -137,64 +149,89 @@ export default function ThreadHistoryScreen() {
           ),
         }}
       />
-      <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-      {isLoading && threads.length === 0 ? (
-        <View style={styles.centerState}>
-          <ActivityIndicator color={theme.colors.accent} />
-        </View>
-      ) : error ? (
-        <View style={styles.centerState}>
-          <Text style={styles.stateText}>{error}</Text>
-        </View>
-      ) : threads.length === 0 ? (
-        <View style={styles.centerState}>
-          <Text style={styles.stateTitle}>
-            {debouncedQuery ? 'No conversations found' : 'No chat threads yet'}
-          </Text>
-          <Text style={styles.stateText}>
-            {debouncedQuery
-              ? 'Try a different search.'
-              : 'Your regular conversations will appear here.'}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={threads}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => router.push(`/chat/${encodeURIComponent(item.id)}`)}
-              style={({ pressed }) => [pressed && styles.itemPressed]}
-            >
-              <Card variant="elevated" style={styles.card}>
-                {unreadThreadIds.has(item.id) || pendingThreadId === item.id ? (
-                  <View style={styles.notificationDot} accessibilityLabel="Thread has an update" />
-                ) : null}
-                <Text style={styles.cardTitle} numberOfLines={1}>
-                  {(item.title || 'Untitled thread').trim() || 'Untitled thread'}
-                </Text>
-                {(debouncedQuery
-                  ? item.matched_message_preview || item.last_message_preview
-                  : item.last_message_preview) ? (
-                  <Text style={styles.cardPreview} numberOfLines={2}>
-                    {debouncedQuery
-                      ? item.matched_message_preview || item.last_message_preview
-                      : item.last_message_preview}
-                  </Text>
-                ) : null}
-                <Text style={styles.cardMeta}>{`Updated ${formatThreadDate(item.updated_at)}`}</Text>
-              </Card>
-            </Pressable>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
+          {isLoading && threads.length === 0 ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator color={theme.colors.accent} />
+            </View>
+          ) : error ? (
+            <View style={styles.centerState}>
+              <Text style={styles.stateText}>{error}</Text>
+            </View>
+          ) : threads.length === 0 ? (
+            <View style={styles.centerState}>
+              <Text style={styles.stateTitle}>
+                {debouncedQuery ? 'No conversations found' : 'No chat threads yet'}
+              </Text>
+              <Text style={styles.stateText}>
+                {debouncedQuery
+                  ? 'Try a different search.'
+                  : 'Your regular conversations will appear here.'}
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={threads}
+              keyExtractor={(item) => item.id}
+              automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              contentContainerStyle={styles.listContent}
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: '/chat/[threadId]',
+                      params: {
+                        threadId: item.id,
+                        ...(debouncedQuery && item.matched_message_id
+                          ? { messageId: String(item.matched_message_id) }
+                          : {}),
+                      },
+                    })
+                  }
+                  style={({ pressed }) => [pressed && styles.itemPressed]}
+                >
+                  <Card variant="elevated" style={styles.card}>
+                    {unreadThreadIds.has(item.id) || pendingThreadId === item.id ? (
+                      <View
+                        style={styles.notificationDot}
+                        accessibilityLabel="Thread has an update"
+                      />
+                    ) : null}
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {(item.title || 'Untitled thread').trim() || 'Untitled thread'}
+                    </Text>
+                    {(
+                      debouncedQuery
+                        ? item.matched_message_preview || item.last_message_preview
+                        : item.last_message_preview
+                    ) ? (
+                      <Text style={styles.cardPreview} numberOfLines={2}>
+                        {debouncedQuery
+                          ? item.matched_message_preview || item.last_message_preview
+                          : item.last_message_preview}
+                      </Text>
+                    ) : null}
+                    <Text
+                      style={styles.cardMeta}
+                    >{`Updated ${formatThreadDate(item.updated_at)}`}</Text>
+                  </Card>
+                </Pressable>
+              )}
+            />
           )}
-        />
-      )}
-      {isLoading && threads.length > 0 ? (
-        <View pointerEvents="none" style={styles.loadingOverlay}>
-          <ActivityIndicator color={theme.colors.accent} />
-        </View>
-      ) : null}
-      </LinearGradient>
+          {isLoading && threads.length > 0 ? (
+            <View pointerEvents="none" style={styles.loadingOverlay}>
+              <ActivityIndicator color={theme.colors.accent} />
+            </View>
+          ) : null}
+        </LinearGradient>
+      </KeyboardAvoidingView>
     </>
   );
 }

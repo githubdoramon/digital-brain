@@ -26,6 +26,7 @@ Linked items may now include:
 - `document`
 - `contact`
 - `place`
+- `conversation` (thread ID plus matching message ID; inspected original messages)
 
 ## Selection Model
 
@@ -67,7 +68,7 @@ skill.
 
 ## Runtime Contract
 
-- Source entities: `event`, `document`, `contact`, `place`
+- Source entities: `event`, `document`, `contact`, `place`, `conversation`
 - Source evidence: successful retrieval/inspection results plus controller-held
   provenance from the run
 - Selection policy: role-based, query-aligned, answer-aware ranking

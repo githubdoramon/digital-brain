@@ -19,12 +19,19 @@ export function ComposerMediaTray({ attachments, onRemoveAttachment }: Props) {
   return (
     <View style={styles.container}>
       <Text style={styles.label}>
-        {attachments.length} {attachments.length === 1 ? 'photo attached' : 'photos attached'}
+        {attachments.length} {attachments.length === 1 ? 'attachment' : 'attachments'}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
         {attachments.map((attachment) => (
           <View key={attachment.attachmentId} style={styles.card}>
-            <Image source={{ uri: attachment.uri }} style={styles.image} resizeMode="cover" />
+            {attachment.mimeType.toLowerCase() === 'application/pdf' ? (
+              <View style={[styles.image, styles.pdfPreview]}>
+                <Ionicons name="document-text-outline" size={28} color={theme.colors.accentDeep} />
+                <Text style={styles.pdfLabel}>PDF</Text>
+              </View>
+            ) : (
+              <Image source={{ uri: attachment.uri }} style={styles.image} resizeMode="cover" />
+            )}
             <View style={styles.captionRow}>
               <Text numberOfLines={1} style={styles.caption}>
                 {attachment.fileName}
@@ -70,6 +77,20 @@ const styles = StyleSheet.create({
     height: 88,
     borderRadius: 14,
     backgroundColor: '#fff',
+  },
+  pdfPreview: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#fff8f2',
+    borderWidth: 1,
+    borderColor: '#eadfd3',
+  },
+  pdfLabel: {
+    fontSize: 10,
+    lineHeight: 12,
+    color: theme.colors.accentDeep,
+    fontWeight: '700',
   },
   captionRow: {
     flexDirection: 'row',

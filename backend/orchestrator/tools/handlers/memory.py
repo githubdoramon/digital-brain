@@ -42,7 +42,9 @@ def handle_search_memories(
     time_start = args.get("time_start")
     time_end = args.get("time_end")
     raw_contact_ids = args.get("contact_ids") or []
-    contact_ids = [str(contact_id).strip() for contact_id in raw_contact_ids if str(contact_id).strip()]
+    contact_ids = [
+        str(contact_id).strip() for contact_id in raw_contact_ids if str(contact_id).strip()
+    ]
     sort_order = args.get("sort_order", "relevance")
     tags = args.get("tags")
     salience_hints = state.get_episodic_hints() if state is not None else []
@@ -67,23 +69,110 @@ def handle_search_memories(
                             "Removed self contact from document-oriented search scope to avoid over-constraining legacy documents"
                         )
 
-    search_result = retrieval.search_memories(
-        query,
-        people=contact_ids,
-        time_start=time_start,
-        time_end=time_end,
-        limit=limit,
-        sort_order=sort_order,
-        tags=tags,
-        salience_hints=salience_hints,
+    sources = set(args.get("sources") or ["event", "document", "conversation"])
+    search_result = (
+        retrieval.search_memories(
+            query,
+            people=contact_ids,
+            time_start=time_start,
+            time_end=time_end,
+            limit=limit if sources & {"event", "document"} == {"event", "document"} else None,
+            sort_order=sort_order,
+            tags=tags,
+            salience_hints=salience_hints,
+        )
+        if sources & {"event", "document"}
+        else {"results": []}
     )
-    results = search_result.get("results", [])
+    results = [row for row in search_result.get("results", []) if row.get("kind") in sources]
+    conversation_scope_note = None
+    if "conversation" in sources:
+        # Chat mentions are not verified contact/tag associations.
+        if contact_ids or tags:
+            conversation_scope_note = (
+                "Conversations have no verified contact/tag associations and were excluded by these filters. "
+                "To find past chats, search with sources=['conversation'] and a topic including the person's name, without contact_ids/tags."
+            )
+        elif kwargs.get("user_email"):
+            import conversation_search
 
+            matches = conversation_search.search_messages(
+                kwargs["user_email"],
+                query,
+                limit=limit,
+                exclude_thread_id=state.current_thread_id if state is not None else None,
+                time_start=time_start,
+                time_end=time_end,
+                per_thread=None if limit is None else 2,
+                sort_order=sort_order,
+            )
+            results = conversation_search.merge_memory_results(
+                results, matches, limit=limit, sort_order=sort_order
+            )
+
+    results = results if limit is None else results[:limit]
     # Update state if provided
     if state is not None and results:
         state.add_fact(f"Found {len(results)} memories matching '{query}'")
 
-    return {"results": results, "count": len(results)}
+    output = {"results": results, "count": len(results)}
+    if conversation_scope_note:
+        output["conversation_scope_note"] = conversation_scope_note
+    return output
+
+
+def handle_get_conversation(args: dict[str, Any], state=None, **kwargs) -> dict[str, Any]:
+    """Inspect owner-checked original conversation evidence, never an instruction source."""
+    import conversation_search
+
+    user_email = str(kwargs.get("user_email") or "").strip()
+    thread_id = str(args.get("thread_id") or "").strip()
+    if not user_email or (state is not None and thread_id == state.current_thread_id):
+        return {"conversation": None}
+    focus = ""
+    if state is not None:
+        for call in reversed(state.tool_calls):
+            if call.tool_name != "search_memories" or not call.success:
+                continue
+            for row in call.result.get("results", []):
+                if (
+                    row.get("kind") == "conversation"
+                    and str(row.get("message_id")) == str(args["message_id"])
+                    and row.get("thread_id") == thread_id
+                ):
+                    focus = str(row.get("snippet") or "")
+                    break
+            if focus:
+                break
+        for candidate in state.information_candidates:
+            if (
+                not focus
+                and candidate.get("kind") == "conversation"
+                and candidate.get("candidate_id") == str(args["message_id"])
+            ):
+                focus = str((candidate.get("metadata") or {}).get("snippet") or "")
+                break
+    conversation = conversation_search.get_context(
+        user_email, thread_id, int(args["message_id"]), focus=focus
+    )
+    if conversation and state is not None:
+        messages = conversation["messages"]
+        target = next((row for row in messages if row["message_id"] == args["message_id"]), {})
+        state.remember_information_candidate(
+            kind="conversation",
+            candidate_id=str(args["message_id"]),
+            label=conversation.get("title") or "Untitled conversation",
+            inspected=True,
+            source_tool="get_conversation",
+            metadata={
+                "thread_id": thread_id,
+                "message_id": args["message_id"],
+                "created_at": target.get("created_at"),
+                "snippet": target.get("content", "")[:1200],
+            },
+            role_hints=["evidence_anchor"],
+        )
+    return {"conversation": conversation}
 
 
 def handle_get_events(

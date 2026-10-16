@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import contact_enrichment_jobs
 import contact_tag_jobs
+import conversation_index_jobs
 import conversations
 import daily_briefing_jobs
 import database_backup_jobs
@@ -156,6 +157,7 @@ async def lifespan(_app: FastAPI):
     event_tag_jobs.start_worker()
     document_tag_jobs.start_worker()
     document_enhancement_jobs.start_worker()
+    conversation_index_jobs.start_worker()
     contact_tag_jobs.start_worker()
     contact_enrichment_jobs.start_worker()
     daily_briefing_jobs.start_worker()
@@ -177,6 +179,7 @@ async def lifespan(_app: FastAPI):
         contact_enrichment_jobs.stop_worker()
         document_tag_jobs.stop_worker()
         document_enhancement_jobs.stop_worker()
+        conversation_index_jobs.stop_worker()
         event_tag_jobs.stop_worker()
         meeting_transcript_jobs.stop_worker()
         shutdown_mirador()

@@ -8,6 +8,7 @@ These are extracted from the original llm_tools.py for better organization.
 from .graph import handle_query_graph
 from .homeassistant import handle_home_assistant
 from .memory import (
+    handle_get_conversation,
     handle_get_document,
     handle_get_events,
     handle_search_memories,
@@ -31,6 +32,7 @@ from .web import handle_fetch_web_page, handle_web_search
 # Handler dispatch table
 HANDLERS = {
     "search_memories": handle_search_memories,
+    "get_conversation": handle_get_conversation,
     "get_events": handle_get_events,
     "get_document": handle_get_document,
     "summarize_memories": handle_summarize_memories,

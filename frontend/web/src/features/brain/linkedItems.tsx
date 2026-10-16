@@ -12,6 +12,7 @@ function routeForLinkedItem(item: LinkedItem): string | null {
   if (item.entity_type === "document") return `/documents?document_id=${encoded}`;
   if (item.entity_type === "contact") return `/contacts?contact_id=${encoded}`;
   if (item.entity_type === "place") return `/contacts?place_id=${encoded}`;
+  if (item.entity_type === "conversation") return `/?thread_id=${encoded}${item.message_id ? `&message_id=${item.message_id}` : ''}`;
   return null;
 }
 

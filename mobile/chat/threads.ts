@@ -39,6 +39,7 @@ export type ThreadSummary = {
   updated_at: string;
   last_message_preview?: string | null;
   matched_message_preview?: string | null;
+  matched_message_id?: number | null;
 };
 
 export type ThreadDetail = ThreadSummary & {
@@ -112,7 +113,9 @@ function mapThreadMessage(msg: ThreadMessage): ChatMessage {
   };
 }
 
-function sortThreadsByUpdatedAtDesc<T extends { updated_at: string; created_at: string }>(threads: T[]): T[] {
+function sortThreadsByUpdatedAtDesc<T extends { updated_at: string; created_at: string }>(
+  threads: T[],
+): T[] {
   return [...threads].sort(
     (a, b) =>
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime() ||
@@ -140,10 +143,10 @@ export async function regenerateThreadTitle(
   token: string,
   threadId: string,
 ): Promise<ThreadSummary> {
-  return (await apiFetch(
-    `/mobile/threads/${encodeURIComponent(threadId)}/regenerate-title`,
-    { method: 'POST', token },
-  )) as ThreadSummary;
+  return (await apiFetch(`/mobile/threads/${encodeURIComponent(threadId)}/regenerate-title`, {
+    method: 'POST',
+    token,
+  })) as ThreadSummary;
 }
 
 export async function loadThreadHistory(token: string, threadId: string): Promise<RestoreResult> {
@@ -192,7 +195,9 @@ export async function restoreChatHistory(
     threadTitle: mainSession.thread_title ?? null,
     pendingEventId:
       resolvedPendingEventId ??
-      (threadId && storedSession?.threadId === threadId ? storedSession?.pendingEventId ?? null : null),
+      (threadId && storedSession?.threadId === threadId
+        ? (storedSession?.pendingEventId ?? null)
+        : null),
     messages,
   };
 }

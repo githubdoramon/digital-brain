@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import type * as DocumentPicker from 'expo-document-picker';
 import type * as ImagePicker from 'expo-image-picker';
 
 import { resolvePickedImageAsset, type ResolvedPickedImageAsset } from '@/media/pickedImageAsset';
@@ -107,6 +108,44 @@ export async function buildComposerMediaAttachment(
     capturedAt: extractAssetCapturedAt(resolvedAsset),
     width: resolvedAsset.width ?? null,
     height: resolvedAsset.height ?? null,
+  };
+}
+
+export async function buildComposerPdfAttachment(
+  asset: DocumentPicker.DocumentPickerAsset,
+): Promise<ComposerMediaAttachment> {
+  if (!asset.uri) {
+    throw new Error('The selected PDF is missing a file location.');
+  }
+
+  const fileName = asset.name?.trim() || `chat-document-${Date.now()}.pdf`;
+  const isPdf =
+    asset.mimeType?.toLowerCase() === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
+  if (!isPdf) {
+    throw new Error('Choose a PDF file to attach.');
+  }
+
+  const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+  const fileSize = asset.size ?? (fileInfo.exists ? fileInfo.size : null);
+  if (typeof fileSize === 'number' && fileSize > MAX_CHAT_MEDIA_BYTES) {
+    const maxMb = Math.round((MAX_CHAT_MEDIA_BYTES / (1024 * 1024)) * 10) / 10;
+    throw new Error(`Each attached PDF must be ${maxMb} MB or smaller.`);
+  }
+
+  const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  if (!contentBase64.trim()) {
+    throw new Error('Unable to read that PDF right now.');
+  }
+
+  return {
+    attachmentId: `chat-pdf-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`,
+    fileName,
+    mimeType: 'application/pdf',
+    uri: asset.uri,
+    contentBase64,
+    source: 'mobile_chat',
   };
 }
 

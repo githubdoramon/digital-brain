@@ -84,6 +84,7 @@ class AgentState:
 
     # Core task tracking
     goal: str
+    current_thread_id: str | None = None
     constraints: list[str] = field(default_factory=list)
 
     # Knowledge accumulation

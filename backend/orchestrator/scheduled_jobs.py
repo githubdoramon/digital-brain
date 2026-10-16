@@ -219,7 +219,16 @@ MICROSOFT_CALENDAR_SYNC = ScheduledJobSpec(
     trigger_source="backend scheduler",
 )
 
+CONVERSATION_INDEX = ScheduledJobSpec(
+    job_type="conversation_index", label="Conversation search index",
+    worker_module="conversation_index_jobs", schedule_kind="polling",
+    time_utc=None, poll_seconds=2, retry_seconds=60,
+    description="Indexes saved conversation passages for History and memory retrieval; backfills existing messages and retries failures.",
+    trigger_source="conversation persistence and startup backfill",
+)
+
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
+    CONVERSATION_INDEX,
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
     EMERGENCY_STOCK,
@@ -264,6 +273,14 @@ def list_scheduled_job_statuses() -> list[dict[str, Any]]:
 
 def _load_runtime_status() -> dict[str, dict[str, Any]]:
     status: dict[str, dict[str, Any]] = {}
+    try:
+        import conversation_index_jobs
+        status[CONVERSATION_INDEX.job_type] = conversation_index_jobs.get_worker_status()
+    except Exception:
+        status[CONVERSATION_INDEX.job_type] = {
+            "job_type": CONVERSATION_INDEX.job_type, "worker_alive": False,
+            "error": "Conversation index status unavailable",
+        }
     try:
         import proposed_event_jobs
 
