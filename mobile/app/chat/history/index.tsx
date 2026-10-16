@@ -9,6 +9,8 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { listNonCommandThreads, type ThreadSummary } from '@/chat/threads';
+import { loadChatSession, loadPendingRun } from '@/chat/session';
+import { getUnreadThreadIds } from '@/chat/threadNotifications';
 import { theme } from '@/theme';
 
 function formatThreadDate(value: string): string {
@@ -27,6 +29,8 @@ export default function ThreadHistoryScreen() {
   const router = useRouter();
   const { token, isLoading: isAuthLoading } = useAuth();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(new Set());
+  const [pendingThreadId, setPendingThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -50,9 +54,21 @@ export default function ThreadHistoryScreen() {
     setIsLoading(true);
     setError(null);
     try {
-      const nextThreads = await listNonCommandThreads(token, query);
+      const [nextThreads, pendingRun, mainSession] = await Promise.all([
+        listNonCommandThreads(token, query),
+        loadPendingRun(),
+        loadChatSession(),
+      ]);
+      const unreadIds = await getUnreadThreadIds(nextThreads);
+      if (mainSession?.threadId) unreadIds.delete(mainSession.threadId);
       if (requestId === requestIdRef.current) {
         setThreads(nextThreads);
+        setUnreadThreadIds(unreadIds);
+        setPendingThreadId(
+          pendingRun?.threadId && pendingRun.threadId !== mainSession?.threadId
+            ? pendingRun.threadId
+            : null,
+        );
       }
     } catch {
       if (requestId === requestIdRef.current) {
@@ -152,6 +168,9 @@ export default function ThreadHistoryScreen() {
               style={({ pressed }) => [pressed && styles.itemPressed]}
             >
               <Card variant="elevated" style={styles.card}>
+                {unreadThreadIds.has(item.id) || pendingThreadId === item.id ? (
+                  <View style={styles.notificationDot} accessibilityLabel="Thread has an update" />
+                ) : null}
                 <Text style={styles.cardTitle} numberOfLines={1}>
                   {(item.title || 'Untitled thread').trim() || 'Untitled thread'}
                 </Text>
@@ -228,6 +247,16 @@ const styles = StyleSheet.create({
   card: {
     padding: 16,
     gap: 10,
+    position: 'relative',
+  },
+  notificationDot: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#F28C28',
   },
   itemPressed: {
     opacity: 0.82,
@@ -236,6 +265,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: theme.colors.ink,
+    paddingRight: 20,
   },
   cardPreview: {
     fontSize: 14,

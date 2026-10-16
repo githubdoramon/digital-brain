@@ -245,13 +245,44 @@ def configure_mirador() -> None:
             SpanExporter,
             SpanExportResult,
         )
+        from requests import Session
+
+        class _ResponseLoggingSession(Session):
+            """Capture safe OTLP response metadata without logging response bodies."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.last_status_code: int | None = None
+                self.last_rejected_spans = 0
+
+            def post(self, *args: Any, **kwargs: Any) -> Any:
+                response = super().post(*args, **kwargs)
+                self.last_status_code = response.status_code
+                self.last_rejected_spans = 0
+                if response.ok:
+                    try:
+                        payload = response.json()
+                        partial_success = payload.get("partialSuccess", {})
+                        self.last_rejected_spans = int(
+                            partial_success.get("rejectedSpans", 0)
+                        )
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+                return response
 
         class _LoggingSpanExporter(SpanExporter):
             """Log failed batch exports with a safe destination label."""
 
-            def __init__(self, exporter: Any, destination_name: str) -> None:
+            def __init__(
+                self,
+                exporter: Any,
+                destination_name: str,
+                response_session: _ResponseLoggingSession | None = None,
+            ) -> None:
                 self._exporter = exporter
                 self._destination_name = destination_name
+                self._response_session = response_session
+                self._acknowledgement_logged = False
 
             def export(self, spans: Any) -> Any:
                 span_count = len(spans)
@@ -266,12 +297,40 @@ def configure_mirador() -> None:
                     return SpanExportResult.FAILURE
 
                 if result != SpanExportResult.SUCCESS:
+                    status_code = (
+                        self._response_session.last_status_code
+                        if self._response_session is not None
+                        else None
+                    )
                     logger.error(
-                        "OTLP trace export failed destination=%s span_count=%d result=%s",
+                        "OTLP trace export failed destination=%s http_status=%s "
+                        "span_count=%d result=%s",
                         self._destination_name,
+                        status_code,
                         span_count,
                         getattr(result, "name", str(result)),
                     )
+                elif self._response_session is not None:
+                    status_code = self._response_session.last_status_code
+                    rejected_spans = self._response_session.last_rejected_spans
+                    if rejected_spans:
+                        logger.error(
+                            "OTLP trace batch partially rejected destination=%s "
+                            "http_status=%s span_count=%d rejected_span_count=%d",
+                            self._destination_name,
+                            status_code,
+                            span_count,
+                            rejected_spans,
+                        )
+                    elif not self._acknowledgement_logged:
+                        logger.info(
+                            "OTLP trace batch acknowledged destination=%s "
+                            "http_status=%s span_count=%d",
+                            self._destination_name,
+                            status_code,
+                            span_count,
+                        )
+                        self._acknowledgement_logged = True
                 return result
 
             def shutdown(self) -> None:
@@ -296,11 +355,19 @@ def configure_mirador() -> None:
 
         for destination_name, endpoint, headers in destinations:
             try:
+                response_session = (
+                    _ResponseLoggingSession() if destination_name == "additional" else None
+                )
                 provider.add_span_processor(
                     BatchSpanProcessor(
                         _LoggingSpanExporter(
-                            OTLPSpanExporter(endpoint=endpoint, headers=headers),
+                            OTLPSpanExporter(
+                                endpoint=endpoint,
+                                headers=headers,
+                                session=response_session,
+                            ),
                             destination_name,
+                            response_session,
                         )
                     )
                 )

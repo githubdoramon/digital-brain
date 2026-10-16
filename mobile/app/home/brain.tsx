@@ -67,9 +67,11 @@ import {
 import { downloadGeneratedFile } from '@/chat/generatedFileDownloads';
 import {
   loadThreadHistory,
+  listNonCommandThreads,
   regenerateThreadTitle,
   restoreChatHistory,
 } from '@/chat/threads';
+import { getUnreadThreadIds, markThreadRead } from '@/chat/threadNotifications';
 import type { GeneratedFile } from '@/chat/generatedFiles';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
@@ -1267,6 +1269,7 @@ export function ChatConversationScreen({
   const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [threadTitle, setThreadTitle] = useState<string | null>(null);
+  const [hasThreadNotifications, setHasThreadNotifications] = useState(false);
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
@@ -1333,6 +1336,39 @@ export function ChatConversationScreen({
     [allowed],
   );
   const [messages, setMessages] = useState<Message[]>(starterMessages);
+
+  useEffect(() => {
+    if (isMainChat || !threadId || isBootstrapping) return;
+    void markThreadRead(threadId).catch(() => undefined);
+  }, [isBootstrapping, isMainChat, messages, threadId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isMainChat || !token || isAuthLoading || isBootstrapping) return () => undefined;
+      let cancelled = false;
+      void (async () => {
+        try {
+          const [threads, pendingRun] = await Promise.all([
+            listNonCommandThreads(token),
+            loadPendingRun(),
+          ]);
+          const unreadThreadIds = await getUnreadThreadIds(threads);
+          unreadThreadIds.delete(threadId ?? '');
+          const hasPendingThread = Boolean(
+            pendingRun?.threadId && pendingRun.threadId !== threadId,
+          );
+          if (!cancelled) {
+            setHasThreadNotifications(unreadThreadIds.size > 0 || hasPendingThread);
+          }
+        } catch {
+          if (!cancelled) setHasThreadNotifications(false);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [isAuthLoading, isBootstrapping, isMainChat, threadId, token]),
+  );
 
   useEffect(() => {
     if (messages.length === 1 && messages[0]?.id === 'welcome') {
@@ -1431,11 +1467,9 @@ export function ChatConversationScreen({
     if (!token) return;
     const pendingRun = await loadPendingRun();
     if (!pendingRun?.runId) return;
-    if (!isMainChat) {
-      const activeThreadId = initialThreadId ?? threadId;
-      if (!activeThreadId || pendingRun.threadId !== activeThreadId) {
-        return;
-      }
+    const activeThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
+    if (!activeThreadId || pendingRun.threadId !== activeThreadId) {
+      return;
     }
 
     setForceScrollNext(true);
@@ -1556,13 +1590,15 @@ export function ChatConversationScreen({
     setThreadId(restored.threadId);
     setThreadTitle(restored.threadTitle ?? null);
     setPendingEventId(restored.pendingEventId);
-    if (restored.messages.length > 0) {
-      const pendingRun = await loadPendingRun();
-      const relevantPendingRun =
-        pendingRun &&
-        (isMainChat || pendingRun.threadId === (initialThreadId ?? threadId))
-          ? pendingRun
-          : null;
+    const pendingRun = await loadPendingRun();
+    const activeScreenThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
+    const relevantPendingRun =
+      pendingRun &&
+      activeScreenThreadId &&
+      pendingRun.threadId === activeScreenThreadId
+        ? pendingRun
+        : null;
+    if (restored.messages.length > 0 || relevantPendingRun) {
       setMessages((prev) => {
         if (relevantPendingRun) {
           return mergePendingTurn(
@@ -1585,6 +1621,8 @@ export function ChatConversationScreen({
             )
           : restored.messages;
       });
+    } else {
+      setMessages(starterMessages);
     }
   }, [
     allowed,
@@ -1593,6 +1631,7 @@ export function ChatConversationScreen({
     isBootstrapping,
     isMainChat,
     pendingEventId,
+    starterMessages,
     threadId,
     token,
   ]);
@@ -2940,13 +2979,17 @@ export function ChatConversationScreen({
               <Pressable
                 onPress={() => router.push('/chat/history')}
                 accessibilityRole="button"
-                accessibilityLabel="Open thread history"
+                accessibilityLabel={
+                  hasThreadNotifications ? 'Open thread history with updates' : 'Open thread history'
+                }
                 style={({ pressed }) => [
                   styles.headerActionButton,
+                  styles.threadHistoryButton,
                   pressed && styles.headerActionButtonPressed,
                 ]}
               >
                 <Ionicons name="time-outline" size={18} color={theme.colors.ink} />
+                {hasThreadNotifications ? <View style={styles.notificationDot} /> : null}
               </Pressable>
             ) : (
               <Pressable
@@ -3176,6 +3219,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.line,
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
+  },
+  threadHistoryButton: {
+    position: 'relative',
+  },
+  notificationDot: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#F28C28',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
   },
   headerActionButtonPressed: {
     opacity: 0.75,
