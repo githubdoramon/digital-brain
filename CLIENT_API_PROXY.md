@@ -15,6 +15,7 @@ Examples:
 - `/mobile/threads/{id}`
 - `/mobile/commands/event/confirm`
 - `/mobile/glasses/commands` (fixed gate intents; no transcript or LLM)
+- `/mobile/glasses/speech-eval/*` (explicit replay experiments; authenticated bounded audio)
 
 If a new backend endpoint is added for mobile usage, make sure the client calls it
 with the `/mobile` prefix and the proxy middleware routes it to the backend. And make sure the backend can handle this route as well (for example, by responding to both `/api_endpoint` and `/mobile/api_endpoint`)

@@ -249,6 +249,17 @@ export default function GlassesListeningScreen() {
             </>
           )}
         </Card>
+        <Card style={styles.card}>
+          <Text style={styles.title}>Speech comparisons</Text>
+          <Text style={styles.body}>
+            Compare recognition accuracy and response times using saved recordings.
+          </Text>
+          <Button
+            label="Compare recognition"
+            variant="secondary"
+            onPress={() => router.push('/settings/glasses/listening/comparison')}
+          />
+        </Card>
       </Animated.ScrollView>
     </View>
   );

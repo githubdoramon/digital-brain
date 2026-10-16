@@ -123,7 +123,7 @@ export type GlassesAlertsStatus = {
   mediaMuted: boolean;
   dndActive: boolean;
   dndBlocksMedia: boolean;
-  playing: 'call' | 'chime' | 'preview' | null;
+  playing: 'call' | 'chime' | 'preview' | 'wake' | 'command' | null;
   lastPlaybackError: string | null;
 };
 
@@ -133,6 +133,12 @@ export type GlassesAlertApp = { packageName: string; label: string };
 type DigitalBrainRuntimeModule = NativeModule & {
   setGlassesSignedIn(signedIn: boolean): Promise<void>;
   setGlassesEnabled(enabled: boolean): Promise<void>;
+  getGlassesSpeechTestModels(): Promise<SpeechTestModel[]>;
+  getGlassesSpeechTestStatus(): Promise<SpeechTestStatus>;
+  startGlassesSpeechTest(folder: string, models: string[], repeats: number): Promise<void>;
+  resumeGlassesSpeechTest(): Promise<void>;
+  pauseGlassesSpeechTest(): Promise<void>;
+  exportGlassesSpeechTest(baseUri: string): Promise<void>;
   getGlassesListeningStatus(): Promise<GlassesListeningStatus>;
   setGlassesListeningMinimumVolume(value: number): Promise<void>;
   setGlassesListening(
@@ -227,4 +233,36 @@ export type GlassesListeningStatus = {
   count: number;
   pending: number;
   lastTranscriptAtMs: number | null;
+};
+
+export type SpeechTestModel = {
+  id: string;
+  label: string;
+  location: 'local' | 'server';
+  bytes: number;
+};
+export type SpeechTestSummary = {
+  candidate: string;
+  mode: 'cold' | 'warm';
+  count: number;
+  completed: number;
+  failures: number;
+  correct: number;
+  positives: number;
+  negatives: number;
+  missed: number;
+  wrong: number;
+  falseAccepts: number;
+  accuracy: number | null;
+  wer: number | null;
+  medianMs: number | null;
+  p95Ms: number | null;
+};
+export type SpeechTestStatus = {
+  state: 'empty' | 'ready' | 'running' | 'paused' | 'complete';
+  completed: number;
+  total: number;
+  samples?: number;
+  message?: string;
+  summary: SpeechTestSummary[];
 };

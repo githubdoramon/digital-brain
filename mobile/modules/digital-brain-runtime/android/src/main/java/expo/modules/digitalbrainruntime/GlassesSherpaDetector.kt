@@ -3,16 +3,16 @@ package expo.modules.digitalbrainruntime
 import android.content.Context
 import com.k2fsa.sherpa.onnx.*
 
-/** Original V8 Sherpa stage, same assets/search settings; no JS or embedding verifier. */
+/** Personal acoustic model: 2026-10-15 epoch 3. See the asset model-manifest.json. */
 internal class GlassesSherpaDetector(c: Context) : GlassesWakeDetector {
   private val spotter = KeywordSpotter(c.assets, KeywordSpotterConfig(
     featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80, dither = 0f),
     modelConfig = OnlineModelConfig(
-      transducer = OnlineTransducerModelConfig(encoder = "wake-word-v8/encoder.onnx",
-        decoder = "wake-word-v8/decoder.onnx", joiner = "wake-word-v8/joiner.onnx"),
-      tokens = "wake-word-v8/tokens.txt", numThreads = 1, provider = "cpu"),
-    maxActivePaths = 16, keywordsFile = "wake-word-v8/keywords.txt", keywordsScore = 1f,
-    keywordsThreshold = 0.25f, numTrailingBlanks = 1))
+      transducer = OnlineTransducerModelConfig(encoder = "wake-word-personal-2026-10-15/encoder.onnx",
+        decoder = "wake-word-personal-2026-10-15/decoder.onnx", joiner = "wake-word-personal-2026-10-15/joiner.onnx"),
+      tokens = "wake-word-personal-2026-10-15/tokens.txt", numThreads = 1, provider = "cpu"),
+    maxActivePaths = 16, keywordsFile = "wake-word-personal-2026-10-15/keywords.txt", keywordsScore = 0.000001f,
+    keywordsThreshold = 0.35f, numTrailingBlanks = 1))
   private var stream = spotter.createStream()
   private val frame = ByteArray(640)
   private var used = 0

@@ -8,7 +8,7 @@ internal interface GlassesWakeDetector {
   fun release()
 }
 internal enum class WakeEnd { SILENCE, LIMIT }
-internal data class WakeCapture(val chunk: SpeechChunk, val wakeAtMs: Long, val endAtMs: Long, val reason: WakeEnd)
+internal data class WakeCapture(val chunk: SpeechChunk, val wakeAtMs: Long, val endAtMs: Long, val reason: WakeEnd, val completedElapsedMs: Long = 0)
 
 /** Serial-worker state machine. No audio leaves memory before an accepted wake completes. */
 internal class GlassesWakePolicy(
@@ -48,7 +48,7 @@ internal class GlassesWakePolicy(
       appendCapture(bytes)
       val voiced = speech && GlassesAudioLevel.db(bytes) >= (-60.0 + minimum * 0.4)
       if (voiced) silenceAt = null else if (silenceAt == null) silenceAt = elapsed
-      if (capture!!.size() >= MAX_BYTES) finish(wall, WakeEnd.LIMIT)
+      if (capture!!.size() >= MAX_BYTES) finish(wall, elapsed, WakeEnd.LIMIT)
       return
     }
     if (elapsed - lastWake < COOLDOWN_MS) return
@@ -91,19 +91,19 @@ internal class GlassesWakePolicy(
       // Supply trailing decoder blanks when firmware suppresses quiet PCM; never save these as received audio.
       if (detector.accept(ByteArray(9600))) begin(wall, elapsed)
     }
-    if (capture != null && elapsed - lastWake >= 30_000) { finish(wall, WakeEnd.LIMIT); return }
+    if (capture != null && elapsed - lastWake >= 30_000) { finish(wall, elapsed, WakeEnd.LIMIT); return }
     if (silenceAt?.let { elapsed - it >= SILENCE_MS } == true) {
-      if (capture != null) finish(wall, WakeEnd.SILENCE) else resetUtterance()
+      if (capture != null) finish(wall, elapsed, WakeEnd.SILENCE) else resetUtterance()
       speech = false; silenceAt = null
     } else if (lastPcm > 0 && elapsed - lastPcm >= 3000) {
       // Unknown transport loss is not proof of silence: discard rather than save partial audio.
       discard(); speech = false; silenceAt = null
     }
   }
-  private fun finish(wall: Long, reason: WakeEnd) {
+  private fun finish(wall: Long, elapsed: Long, reason: WakeEnd) {
     val bytes = capture?.toByteArray() ?: return
     capture = null
-    onCapture(WakeCapture(SpeechChunk(startWall, bytes), wakeWall, wall, reason))
+    onCapture(WakeCapture(SpeechChunk(startWall, bytes), wakeWall, wall, reason, elapsed))
     resetUtterance()
   }
   private fun resetUtterance() {

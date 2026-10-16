@@ -15,6 +15,7 @@ internal data class GlassesCommandDecision(val match: GlassesCommandMatch, val c
 
 /** Full-utterance matching; transcript contents never enter general diagnostics. */
 internal object GlassesCommandMatcher {
+  const val VERSION = 1
   private data class Phrase(val command: GlassesCommand, val words: List<String>, val protected: Set<Int>)
   // Narrow phonetic aliases after Sherpa detection; do not match arbitrary similar words like train/rain.
   private val wakeNames = setOf("brain", "brane", "bring", "brian")

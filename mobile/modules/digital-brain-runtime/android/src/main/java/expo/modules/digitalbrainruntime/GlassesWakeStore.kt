@@ -67,6 +67,11 @@ internal object GlassesWakeStore {
       .put("transcriptionDurationMs", duration).put("transcriptionStatus", if (success) "complete" else "failed")
     atomic(File(dir, "capture.json"), meta.toString().toByteArray())
   }
+  @Synchronized fun timing(dir: File, timing: Map<String, Any?>) {
+    val file = File(dir, "capture.json")
+    val meta = JSONObject(file.readText()).put("timing", JSONObject(timing))
+    atomic(file, meta.toString().toByteArray())
+  }
   @Synchronized fun command(dir: File, decision: GlassesCommandDecision, requestId: String,
                             outcome: GlassesCommandOutcome?) {
     val meta = JSONObject(File(dir, "capture.json").readText())

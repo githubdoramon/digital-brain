@@ -3,11 +3,24 @@ package expo.modules.digitalbrainruntime
 import kotlin.math.PI
 import kotlin.math.sin
 
+internal enum class GlassesFeedbackSound(val key: String) { WAKE("wake"), COMMAND("command") }
+
 /** Shared by the settings previews and automatic alerts. No Android or notification data. */
 internal object GlassesAlertTone {
   const val SAMPLE_RATE = 48_000
   const val CALL_CYCLE_MS = 1_600
   const val NOTIFICATION_MS = 560
+
+  fun feedback(sound: GlassesFeedbackSound): ByteArray = when (sound) {
+    GlassesFeedbackSound.WAKE -> render(120) { ms -> note(ms, 120.0, 1040.0) }
+    GlassesFeedbackSound.COMMAND -> render(280) { ms ->
+      when {
+        ms < 90 -> note(ms, 90.0, 1320.0)
+        ms >= 150 -> note(ms - 150, 130.0, 1760.0)
+        else -> 0.0
+      }
+    }
+  }
 
   fun notification(): ByteArray = render(NOTIFICATION_MS) { ms ->
     when {

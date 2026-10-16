@@ -1,0 +1,29 @@
+{
+  "id": "wake-word-personal-2026-10-15",
+  "sourceModel": "pkufool/icefall-kws-zipformer-zh-en-3M-2025-12-20",
+  "icefallRevision": "1c388ad9be94c0ee9de76f7a6ed45b1cff677d13",
+  "pretrainedCheckpointSha256": "62188d073aaf7ec33f85a2c1e1f2a75751658743daeb203f17241ec3bf4ff6eb",
+  "fineTune": "full acoustic RNNT; epoch 3; 2026-10-15",
+  "sampleRate": 16000,
+  "featureDim": 80,
+  "dither": 0,
+  "numThreads": 1,
+  "provider": "cpu",
+  "maxActivePaths": 16,
+  "keywordsScore": 1e-06,
+  "keywordsThreshold": 0.35,
+  "numTrailingBlanks": 1,
+  "wakeResults": [
+    "hey_brain",
+    "okay_brain"
+  ],
+  "speakerVerification": false,
+  "validationRuntime": "Sherpa 1.13.2 desktop component replay; physical phone/glasses validation pending",
+  "assets": {
+    "encoder.onnx": "a52ffd443951fcd3ad768874e689c8f869ab30588ff5ce9db18c0effdee597ab",
+    "decoder.onnx": "1a0d85c5841666093d98dc4047f5b8d0328c6fc3630a3a8bf7484610ff0af2c4",
+    "joiner.onnx": "d354be1fde38f4fa52e870b8f199ff6617df3af8d59b11d7d2268799d7e96d74",
+    "tokens.txt": "2d3f32311f9b692b964da3c90e830258d3e78e013cb0c992dbfb15cd5a1a71b0",
+    "keywords.txt": "1f7ba729f7c69c15178170aea269979f63ee4ceeb7f92d18f96ccc9dcda04114"
+  }
+}

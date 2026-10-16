@@ -67,7 +67,7 @@ object RuntimeGlasses {
     GlassesLedDiagnostics.record(c, attempt, source, result, android.os.SystemClock.elapsedRealtime() - started)
     return mapOf("attempt" to attempt, "sent" to (current == generation && result in setOf(LedResult.RESPONSE_SUCCESS, LedResult.RESPONSE_TIMEOUT)))
   }
-  fun blinkWake(onRequested: () -> Unit, onFailure: () -> Unit) {
+  fun feedbackWake(onRequested: () -> Unit, onFailure: () -> Unit) {
     val c = context
     if (c == null) { onFailure(); return }
     val current = generation
@@ -78,16 +78,19 @@ object RuntimeGlasses {
         return@launch
       }
       onRequested()
+      GlassesAlertPlayback.feedback(c, GlassesFeedbackSound.WAKE)
       val result = sendLedLight(c, LedSource.WAKE, GlassesLightPattern.QUICK, RgbLedColor.GREEN)
       if (current == generation && result["sent"] != true) onFailure()
     }
   }
-  internal fun blinkCommandAccepted(eligible: () -> Boolean) {
+  internal fun feedbackCommandAccepted(eligible: () -> Boolean) {
     val c = context ?: return
     val current = generation
     scope.launch {
-      if (generation == current && eligible())
+      if (generation == current && eligible()) {
+        GlassesAlertPlayback.feedback(c, GlassesFeedbackSound.COMMAND)
         sendLedLight(c, LedSource.COMMAND, GlassesLightPattern.QUICK, RgbLedColor.ORANGE)
+      }
     }
   }
   suspend fun testLight(c: Context, colorKey: String, patternKey: String): Map<String, Any> {
