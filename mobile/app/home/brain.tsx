@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   AppState,
+  ActivityIndicator,
   FlatList,
   Image,
   Keyboard,
@@ -64,7 +65,11 @@ import {
   StoredChatSession,
 } from '@/chat/session';
 import { downloadGeneratedFile } from '@/chat/generatedFileDownloads';
-import { loadThreadHistory, restoreChatHistory } from '@/chat/threads';
+import {
+  loadThreadHistory,
+  regenerateThreadTitle,
+  restoreChatHistory,
+} from '@/chat/threads';
 import type { GeneratedFile } from '@/chat/generatedFiles';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
@@ -1259,7 +1264,9 @@ export function ChatConversationScreen({
   const scrollFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
+  const [threadTitle, setThreadTitle] = useState<string | null>(null);
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
@@ -1337,6 +1344,7 @@ export function ChatConversationScreen({
     hasHydratedSessionRef.current = false;
     if (!isMainChat) {
       setThreadId(initialThreadId);
+      setThreadTitle(null);
       setPendingEventId(null);
     }
   }, [initialThreadId, isMainChat]);
@@ -1357,6 +1365,7 @@ export function ChatConversationScreen({
         hasHydratedSessionRef.current = false;
         if (!isCurrentRestore()) return;
         setThreadId(initialThreadId);
+        setThreadTitle(null);
         setPendingEventId(null);
         setMessages(starterMessages);
         setIsBootstrapping(false);
@@ -1381,6 +1390,7 @@ export function ChatConversationScreen({
 
         hasHydratedSessionRef.current = true;
         setThreadId(restored.threadId);
+        setThreadTitle(restored.threadTitle ?? null);
         setPendingEventId(restored.pendingEventId);
 
         if (restored.messages.length > 0) {
@@ -1497,6 +1507,7 @@ export function ChatConversationScreen({
           ? await loadThreadHistory(token, pendingRun.threadId)
           : { threadId: null, pendingEventId: null, messages: [] };
       setThreadId(restored.threadId);
+      setThreadTitle(restored.threadTitle ?? null);
       setPendingEventId(restored.pendingEventId);
       if (restored.messages.length > 0) {
         setMessages(restored.messages);
@@ -1543,6 +1554,7 @@ export function ChatConversationScreen({
         ? await loadThreadHistory(token, threadId)
         : { threadId: null, pendingEventId: null, messages: [] };
     setThreadId(restored.threadId);
+    setThreadTitle(restored.threadTitle ?? null);
     setPendingEventId(restored.pendingEventId);
     if (restored.messages.length > 0) {
       const pendingRun = await loadPendingRun();
@@ -1670,7 +1682,7 @@ export function ChatConversationScreen({
         {
           id: `${Date.now()}-media-limit`,
           role: 'assistant',
-          content: `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} photos to one /event message.`,
+          content: `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} photos to one message.`,
         },
       ]);
       setForceScrollNext(true);
@@ -1707,6 +1719,22 @@ export function ChatConversationScreen({
       setForceScrollNext(true);
     }
   }, [allowed, composerMediaAttachments.length, isSending, pickImages, showError]);
+
+  const handleRegenerateThreadTitle = useCallback(async () => {
+    const activeThreadId = threadId || initialThreadId;
+    if (!token || !activeThreadId || isRegeneratingTitle || isSending) return;
+
+    setIsRegeneratingTitle(true);
+    try {
+      const updatedThread = await regenerateThreadTitle(token, activeThreadId);
+      setThreadTitle(updatedThread.title ?? null);
+      showSuccess('Thread title updated.');
+    } catch (error) {
+      showError(conciseBackendErrorMessage(error, 'Could not update the thread title.'));
+    } finally {
+      setIsRegeneratingTitle(false);
+    }
+  }, [initialThreadId, isRegeneratingTitle, isSending, showError, showSuccess, threadId, token]);
 
   const sendMessage = useCallback(
     async (override?: SendMessageInput) => {
@@ -2899,7 +2927,7 @@ export function ChatConversationScreen({
           }}
         />
         <CollapsingTopBar
-          title={isMainChat ? 'Brain' : undefined}
+          title={isMainChat ? 'Brain' : threadTitle || undefined}
           secondaryTitle={isMainChat ? 'Talk to "your" memory' : undefined}
           scrollY={scrollY}
           profileName={name || email || 'You'}
@@ -2920,7 +2948,26 @@ export function ChatConversationScreen({
               >
                 <Ionicons name="time-outline" size={18} color={theme.colors.ink} />
               </Pressable>
-            ) : undefined
+            ) : (
+              <Pressable
+                onPress={() => void handleRegenerateThreadTitle()}
+                disabled={!threadId || isBootstrapping || isRegeneratingTitle || isSending}
+                accessibilityRole="button"
+                accessibilityLabel="Regenerate thread title"
+                style={({ pressed }) => [
+                  styles.headerActionButton,
+                  pressed && styles.headerActionButtonPressed,
+                  (!threadId || isBootstrapping || isRegeneratingTitle || isSending) &&
+                    styles.headerActionButtonDisabled,
+                ]}
+              >
+                {isRegeneratingTitle ? (
+                  <ActivityIndicator size="small" color={theme.colors.ink} />
+                ) : (
+                  <Ionicons name="refresh-outline" size={18} color={theme.colors.ink} />
+                )}
+              </Pressable>
+            )
           }
         />
         {showAnchoredSlashPalette && (
@@ -3132,5 +3179,8 @@ const styles = StyleSheet.create({
   },
   headerActionButtonPressed: {
     opacity: 0.75,
+  },
+  headerActionButtonDisabled: {
+    opacity: 0.55,
   },
 });

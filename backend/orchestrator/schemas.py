@@ -773,6 +773,7 @@ class ThreadOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_message_preview: str | None = None
+    matched_message_preview: str | None = None
 
 
 class ThreadDetailOut(ThreadOut):

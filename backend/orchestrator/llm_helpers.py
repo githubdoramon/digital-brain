@@ -393,6 +393,7 @@ def _post_chat_completion(
     payload: dict[str, Any],
     *,
     timeout: Optional[int] = None,
+    sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     resolved_timeout = timeout or LLM_TIMEOUT
@@ -402,27 +403,37 @@ def _post_chat_completion(
     message_count = len(messages) if isinstance(messages, list) else 0
     request_url = f"{base_url}/chat/completions"
 
-    logger.info(
-        "[llm_helpers] LLM outbound request: %s",
-        json.dumps(
-            {
-                "url": request_url,
-                "method": "POST",
-                "timeout_seconds": resolved_timeout,
-                "headers": {
-                    "content-type": "application/json",
-                    "authorization_present": bool(get_llm_headers().get("Authorization")),
+    if sensitive_payload:
+        logger.info(
+            "[llm_helpers] Sensitive LLM request model=%s timeout=%ss messages=%d",
+            model_name,
+            resolved_timeout,
+            message_count,
+        )
+    else:
+        logger.info(
+            "[llm_helpers] LLM outbound request: %s",
+            json.dumps(
+                {
+                    "url": request_url,
+                    "method": "POST",
+                    "timeout_seconds": resolved_timeout,
+                    "headers": {
+                        "content-type": "application/json",
+                        "authorization_present": bool(get_llm_headers().get("Authorization")),
+                    },
+                    "payload": payload,
                 },
-                "payload": payload,
-            },
-            ensure_ascii=False,
-            default=str,
-        ),
-    )
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
 
     def _preview_response_text(response: requests.Response | None) -> str:
         if response is None:
             return ""
+        if sensitive_payload:
+            return "[redacted]"
         text = (response.text or "").strip().replace("\n", " ")
         return text[:400]
 
@@ -646,7 +657,7 @@ def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[di
 
 
 def _call_llm_raw(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
@@ -660,6 +671,7 @@ def _call_llm_raw(
     extra_body: Optional[dict[str, Any]] = None,
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
+    sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     payload = build_chat_payload(
         messages,
@@ -682,20 +694,28 @@ def _call_llm_raw(
         stream,
         timeout,
     )
-    logger.info(
-        "[llm_helpers] LLM input: %s",
-        json.dumps(payload.get("messages"), ensure_ascii=False),
-    )
-    logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
-    logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
+    if not sensitive_payload:
+        logger.info(
+            "[llm_helpers] LLM input: %s",
+            json.dumps(payload.get("messages"), ensure_ascii=False),
+        )
+        logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
+        logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
 
     content = (
         _post_chat_completion_stream(payload, timeout=timeout)
         if stream
-        else _post_chat_completion(payload, timeout=timeout)
+        else _post_chat_completion(
+            payload,
+            timeout=timeout,
+            sensitive_payload=sensitive_payload,
+        )
     )
 
-    logger.info("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
+    if sensitive_payload:
+        logger.info("[llm_helpers] Sensitive LLM response received model=%s", payload.get("model"))
+    else:
+        logger.info("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
 
     return content
 
@@ -715,6 +735,7 @@ def call_llm_chat(
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
+    sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     data = _call_llm_raw(
         messages,
@@ -730,6 +751,7 @@ def call_llm_chat(
         extra_body=extra_body,
         tools=tools,
         tool_choice=tool_choice,
+        sensitive_payload=sensitive_payload,
     )
     _raise_for_llm_error(data)
     return data
@@ -907,6 +929,7 @@ def call_llm(
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
+    sensitive_payload: bool = False,
 ) -> str:
     """
     Make a synchronous chat request to the LLM.
@@ -941,6 +964,7 @@ def call_llm(
         reasoning_effort=reasoning_effort,
         response_format=response_format,
         extra_body=extra_body,
+        sensitive_payload=sensitive_payload,
     )
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 

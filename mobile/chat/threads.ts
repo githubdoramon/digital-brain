@@ -38,6 +38,7 @@ export type ThreadSummary = {
   created_at: string;
   updated_at: string;
   last_message_preview?: string | null;
+  matched_message_preview?: string | null;
 };
 
 export type ThreadDetail = ThreadSummary & {
@@ -79,6 +80,7 @@ export type ChatMessage = {
 
 type RestoreResult = {
   threadId: string | null;
+  threadTitle?: string | null;
   pendingEventId: string | null;
   messages: ChatMessage[];
 };
@@ -122,9 +124,26 @@ export function isCommandThread(thread: Pick<ThreadSummary, 'title'>): boolean {
   return (thread.title || '').trim().startsWith(COMMAND_THREAD_PREFIX);
 }
 
-export async function listNonCommandThreads(token: string): Promise<ThreadSummary[]> {
-  const threads = (await apiFetch('/mobile/threads', { token })) as ThreadSummary[];
+export async function listNonCommandThreads(
+  token: string,
+  query?: string,
+): Promise<ThreadSummary[]> {
+  const normalizedQuery = String(query || '').trim();
+  const endpoint = normalizedQuery
+    ? `/mobile/threads?q=${encodeURIComponent(normalizedQuery)}`
+    : '/mobile/threads';
+  const threads = (await apiFetch(endpoint, { token })) as ThreadSummary[];
   return sortThreadsByUpdatedAtDesc((threads || []).filter((thread) => !isCommandThread(thread)));
+}
+
+export async function regenerateThreadTitle(
+  token: string,
+  threadId: string,
+): Promise<ThreadSummary> {
+  return (await apiFetch(
+    `/mobile/threads/${encodeURIComponent(threadId)}/regenerate-title`,
+    { method: 'POST', token },
+  )) as ThreadSummary;
 }
 
 export async function loadThreadHistory(token: string, threadId: string): Promise<RestoreResult> {
@@ -134,6 +153,7 @@ export async function loadThreadHistory(token: string, threadId: string): Promis
 
   return {
     threadId: thread.id,
+    threadTitle: thread.title ?? null,
     pendingEventId: thread.pending_event_id ?? null,
     messages: (thread.messages || []).map(mapThreadMessage),
   };
@@ -169,6 +189,7 @@ export async function restoreChatHistory(
 
   return {
     threadId,
+    threadTitle: mainSession.thread_title ?? null,
     pendingEventId:
       resolvedPendingEventId ??
       (threadId && storedSession?.threadId === threadId ? storedSession?.pendingEventId ?? null : null),

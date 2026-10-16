@@ -26,6 +26,7 @@ from .skills import handle_run_skill_script
 from .system import handle_bash
 from .ui import handle_emit_ui_directive
 from .web import handle_fetch_web_page, handle_web_search
+from .visual import handle_visual_inspect
 
 # Handler dispatch table
 HANDLERS = {
@@ -42,6 +43,7 @@ HANDLERS = {
     "lookup_place_contacts": handle_lookup_place_contacts,
     "web_search": handle_web_search,
     "fetch_web_page": handle_fetch_web_page,
+    "visual_inspect": handle_visual_inspect,
     "run_skill_script": handle_run_skill_script,
     "create_pdf": handle_create_pdf,
     "ingest_generated_pdf": handle_ingest_generated_pdf,
@@ -78,4 +80,5 @@ __all__ = [
     "handle_select_contacts",
     "handle_summarize_memories",
     "handle_web_search",
+    "handle_visual_inspect",
 ]

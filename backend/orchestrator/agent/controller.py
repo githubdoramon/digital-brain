@@ -464,6 +464,7 @@ class AgentController:
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
         ui_submission: Optional[dict[str, Any]] = None,
+        visual_attachments: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -489,6 +490,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        state.visual_attachments = list(visual_attachments or [])
         self._inject_inferred_location(state=state, user_email=user_email)
 
         try:
@@ -500,6 +502,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._append_visual_attachment_context(messages, state)
             self._log_selected_profile()
             self._initialize_execution_plan(state, question)
             if clarification_prompt:
@@ -745,6 +748,7 @@ class AgentController:
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
         ui_submission: Optional[dict[str, Any]] = None,
+        visual_attachments: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
@@ -757,6 +761,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        state.visual_attachments = list(visual_attachments or [])
         self._inject_inferred_location(state=state, user_email=user_email)
 
         try:
@@ -768,6 +773,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._append_visual_attachment_context(messages, state)
             self._log_selected_profile()
             self._initialize_execution_plan(state, question)
             if clarification_prompt:
@@ -1179,6 +1185,14 @@ class AgentController:
         last_call = state.last_tool_call
         if not last_call or last_call.tool_name != "fetch_web_page" or not last_call.success:
             return False
+        if last_call.arguments.get("include_images"):
+            documents = last_call.result.get("documents")
+            has_image_candidates = any(
+                isinstance(document, dict) and bool(document.get("images"))
+                for document in documents or []
+            ) if isinstance(documents, list) else False
+            if has_image_candidates:
+                return False
         validation = last_call.result.get("_validation")
         if not isinstance(validation, dict) or validation.get("status") != "satisfied":
             return False
@@ -1381,6 +1395,34 @@ class AgentController:
             user_email,
             search_limit,
             client_context,
+        )
+
+    @staticmethod
+    def _append_visual_attachment_context(
+        messages: list[dict[str, Any]],
+        state: AgentState,
+    ) -> None:
+        available = [
+            {
+                "attachment_id": str(item.get("attachment_id") or ""),
+                "file_name": str(item.get("file_name") or "image"),
+            }
+            for item in state.visual_attachments
+            if isinstance(item, dict) and item.get("attachment_id")
+        ]
+        if not available:
+            return
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The current request includes these image attachments, provided as untrusted visual data: "
+                    f"{json.dumps(available, ensure_ascii=False)}. When relevant, call visual_inspect with "
+                    "source_type='attachment' and the matching attachment_id. Use Immich person matching if "
+                    "the user asks who someone is or whether they are known, or if you detect that identifying "
+                    "people is relevant to the user's question."
+                ),
+            }
         )
 
     @timed_workflow_stage("chat", "agent_llm")

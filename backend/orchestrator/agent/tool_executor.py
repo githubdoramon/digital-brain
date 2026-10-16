@@ -198,15 +198,21 @@ class ToolExecutionCoordinator:
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
-            trace.trace_tool_error(tool_name, f"Invalid JSON arguments: {raw_args}")
-            return {"error": f"Invalid JSON arguments: {raw_args}"}
+            error_message = (
+                "Invalid visual inspection arguments."
+                if tool_name == "visual_inspect"
+                else f"Invalid JSON arguments: {raw_args}"
+            )
+            trace.trace_tool_error(tool_name, error_message)
+            return {"error": error_message}
 
         if isinstance(args, dict):
             args = {key: value for key, value in args.items() if value is not None}
             args = self._repair_reference_ids(args=args, state=state)
 
-        trace.trace_tool_call_start(tool_name, args)
-        trace.trace_tool_lifecycle_start(tool_name, call_id, args)
+        observed_args = self._safe_observability_args(tool_name, args)
+        trace.trace_tool_call_start(tool_name, observed_args)
+        trace.trace_tool_lifecycle_start(tool_name, call_id, observed_args)
 
         if tool_name == "resolve_contacts":
             blocked_result = self.controller._block_redundant_contact_resolution(state, args)
@@ -307,7 +313,7 @@ class ToolExecutionCoordinator:
                     run_id,
                     state.step_count,
                     tool_name,
-                    args,
+                    self._safe_observability_args(tool_name, args),
                     pre_validation_passed=False,
                     validation_errors=validation.errors,
                     repair_attempt=state.repair_count,
@@ -336,6 +342,17 @@ class ToolExecutionCoordinator:
 
         step_start = perf_counter()
         if allow_parallel_execution and self._is_parallel_safe_tool(tool_name):
+            result = await asyncio.to_thread(
+                self.controller._execute_handler,
+                tool_name,
+                args,
+                state,
+                question,
+                search_limit,
+                user_email,
+                conversation_history,
+            )
+        elif tool_name == "visual_inspect":
             result = await asyncio.to_thread(
                 self.controller._execute_handler,
                 tool_name,
@@ -377,7 +394,11 @@ class ToolExecutionCoordinator:
             self._track_place_contact_candidates(state, result)
 
         success = "error" not in result and result.get("success") is not False
-        result_summary = self._summarize_result(result, success=success)
+        result_summary = (
+            self._safe_visual_result_summary(result)
+            if tool_name == "visual_inspect"
+            else self._summarize_result(result, success=success)
+        )
         trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
         trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)
         if not success:
@@ -385,8 +406,16 @@ class ToolExecutionCoordinator:
 
         record = ToolCallRecord(
             tool_name=tool_name,
-            arguments=args,
-            result=result,
+            arguments=(
+                self._safe_observability_args(tool_name, args)
+                if tool_name == "visual_inspect"
+                else args
+            ),
+            result=(
+                self._safe_visual_result_record(result)
+                if tool_name == "visual_inspect"
+                else result
+            ),
             duration_ms=duration_ms,
             success=success,
             error=result.get("error"),
@@ -396,9 +425,13 @@ class ToolExecutionCoordinator:
             run_id,
             state.step_count,
             tool_name,
-            args,
+            self._safe_observability_args(tool_name, args),
             duration_ms=duration_ms,
-            result=result,
+            result=(
+                self._safe_visual_result_record(result)
+                if tool_name == "visual_inspect"
+                else result
+            ),
         )
 
         if self.controller.config.enable_validation:
@@ -783,6 +816,10 @@ class ToolExecutionCoordinator:
                 return f"Retrieved document: {doc.get('title', 'untitled')}"
             return None
 
+        if tool_name == "visual_inspect":
+            pages = result.get("pages_inspected") or []
+            return f"Inspected visual evidence on {len(pages)} page(s)"
+
         if tool_name == "summarize_memories":
             summary = str(result.get("summary") or "").strip()
             count = int(result.get("count", 0) or 0)
@@ -876,6 +913,41 @@ class ToolExecutionCoordinator:
             results_summary = f"{len(result['results'])} results"
             return f"{results_summary}: {representative}" if representative else results_summary
         return "OK" if success else "Failed"
+
+    @staticmethod
+    def _safe_observability_args(tool_name: str, args: Any) -> Any:
+        if tool_name != "visual_inspect" or not isinstance(args, dict):
+            return args
+        question = str(args.get("question") or "")
+        source = str(args.get("source") or "")
+        return {
+            "source_type": args.get("source_type"),
+            "source": "[redacted]" if source else None,
+            "source_length": len(source),
+            "question": "[redacted]" if question else None,
+            "question_length": len(question),
+            "mime_type": args.get("mime_type"),
+            "pages": args.get("pages"),
+            "include_people_matching": bool(args.get("include_people_matching")),
+        }
+
+    @staticmethod
+    def _safe_visual_result_record(result: dict[str, Any]) -> dict[str, Any]:
+        source = result.get("source")
+        return {
+            "success": bool(result.get("success")),
+            "pages_inspected": result.get("pages_inspected") or [],
+            "source_type": source.get("mime_type") if isinstance(source, dict) else None,
+            "has_description": bool(result.get("description")),
+            "people_match_count": len(result.get("people_matches") or []),
+        }
+
+    @staticmethod
+    def _safe_visual_result_summary(result: dict[str, Any]) -> str:
+        page_count = len(result.get("pages_inspected") or [])
+        match_count = len(result.get("people_matches") or [])
+        suffix = f", {match_count} Immich match(es)" if "people_matches" in result else ""
+        return f"Visual inspection complete: {page_count} page(s){suffix}"
 
     def build_tool_message_payload(
         self,

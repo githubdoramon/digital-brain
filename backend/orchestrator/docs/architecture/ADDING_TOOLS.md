@@ -88,6 +88,7 @@ Existing groups (canonical source: `tools/registry.py`):
 | `memory` | Memory/document search | search_memories, get_events, get_document |
 | `resolution` | Entity resolution | resolve_contacts, lookup_contact, select_contacts, lookup_places, lookup_contact_places, lookup_place_contacts |
 | `web` | External web access | web_search, fetch_web_page |
+| `visual` | Image and PDF inspection | visual_inspect |
 | `home` | Home automation | home_assistant |
 | `skills` | Skill scripts | run_skill_script |
 | `pdf` | Generated PDF artifacts and document ingestion | create_pdf, ingest_generated_pdf |
@@ -95,6 +96,24 @@ Existing groups (canonical source: `tools/registry.py`):
 | `system` | System commands | bash |
 
 **If you need a new group**, see [ADDING_INTENTS.md](./ADDING_INTENTS.md).
+
+### Visual inspection
+
+`visual_inspect` accepts an image or PDF through a direct public URL, current
+request attachment, base64 payload, stored `document_id`, or a path resolved
+inside managed document/chat-media storage. It renders at most
+four selected PDF pages and sends image content to the configured vision model.
+Web pages expose candidate image URLs through `fetch_web_page(include_images=true)`;
+the agent can pass a candidate to `visual_inspect` for pixel-level analysis.
+Set `LLM_CHAT_MODEL_VISION` to a multimodal, image-capable model when the
+configured smart model is text-only; it falls back to `LLM_CHAT_MODEL_SMART`.
+
+People matching is an optional explicit mode. When the user asks who someone is
+or whether they are known, the handler can pass the image to the configured
+Immich face-identify endpoint and map returned person IDs to contacts. Visual
+inspection results and source data are excluded from tool observability payloads.
+Tool callers must use opaque attachment/document references; arbitrary filesystem
+paths are not exposed to the model.
 
 ## Step 3: Implement the Handler
 

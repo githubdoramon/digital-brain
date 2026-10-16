@@ -200,6 +200,20 @@ class PostExecutionValidator:
                 extracted_facts=self._extract_facts_from_result(tool_name, result),
             )
 
+        if tool_name == "visual_inspect":
+            description = str(result.get("description") or "").strip()
+            if not description:
+                return PostExecutionResult(
+                    coverage=GoalCoverage.FAILED,
+                    reason="Visual inspection returned no analysis",
+                    suggested_next_tools=self._suggest_alternative_tools(tool_name),
+                )
+            return PostExecutionResult(
+                coverage=GoalCoverage.SATISFIED,
+                reason="Visual evidence inspected; synthesize an answer with source context",
+                extracted_facts=self._extract_facts_from_result(tool_name, result),
+            )
+
         # Check for empty results from search/query tools
         if tool_name in ("search_memories", "web_search", "get_events"):
             if tool_name == "search_memories":
@@ -662,6 +676,13 @@ Rules:
             results = result.get("results", [])
             if results:
                 facts.append(f"Web search returned {len(results)} results")
+
+        elif tool_name == "visual_inspect":
+            pages = result.get("pages_inspected") or []
+            facts.append(f"Visual inspection analyzed {len(pages)} page(s)")
+            matches = result.get("people_matches")
+            if isinstance(matches, list) and matches:
+                facts.append(f"Immich matched {len(matches)} known contact(s) in the visual source")
 
         elif tool_name == "home_assistant":
             if result.get("tools"):

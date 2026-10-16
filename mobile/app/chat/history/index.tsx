@@ -1,8 +1,9 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Stack, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -28,8 +29,18 @@ export default function ThreadHistoryScreen() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const requestIdRef = useRef(0);
 
-  const loadThreads = useCallback(async () => {
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedQuery(searchText.trim()), 350);
+    return () => clearTimeout(timeout);
+  }, [searchText]);
+
+  const loadThreads = useCallback(async (query: string) => {
+    const requestId = ++requestIdRef.current;
     if (!token) {
       setThreads([]);
       setIsLoading(false);
@@ -39,25 +50,79 @@ export default function ThreadHistoryScreen() {
     setIsLoading(true);
     setError(null);
     try {
-      const nextThreads = await listNonCommandThreads(token);
-      setThreads(nextThreads);
+      const nextThreads = await listNonCommandThreads(token, query);
+      if (requestId === requestIdRef.current) {
+        setThreads(nextThreads);
+      }
     } catch {
-      setError('Could not load thread history right now.');
+      if (requestId === requestIdRef.current) {
+        setError('Could not load thread history right now.');
+      }
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [token]);
 
   useFocusEffect(
     useCallback(() => {
       if (isAuthLoading) return;
-      void loadThreads();
-    }, [isAuthLoading, loadThreads]),
+      void loadThreads(debouncedQuery);
+      return () => {
+        requestIdRef.current += 1;
+      };
+    }, [debouncedQuery, isAuthLoading, loadThreads]),
   );
 
+  const toggleSearch = useCallback(() => {
+    if (isSearchOpen) {
+      setIsSearchOpen(false);
+      setSearchText('');
+      setDebouncedQuery('');
+      return;
+    }
+    setIsSearchOpen(true);
+  }, [isSearchOpen]);
+
   return (
-    <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-      {isLoading ? (
+    <>
+      <Stack.Screen
+        options={{
+          headerTitle: isSearchOpen
+            ? () => (
+                <TextInput
+                  autoFocus
+                  value={searchText}
+                  onChangeText={setSearchText}
+                  placeholder="Search conversations"
+                  placeholderTextColor={theme.colors.mutedInk}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  style={styles.searchInput}
+                  accessibilityLabel="Search threads"
+                />
+              )
+            : 'Thread history',
+          headerRight: () => (
+            <Pressable
+              onPress={toggleSearch}
+              accessibilityRole="button"
+              accessibilityLabel={isSearchOpen ? 'Close thread search' : 'Search threads'}
+              style={({ pressed }) => [styles.searchButton, pressed && styles.itemPressed]}
+            >
+              <Ionicons
+                name={isSearchOpen ? 'close' : 'search'}
+                size={21}
+                color={theme.colors.ink}
+              />
+            </Pressable>
+          ),
+        }}
+      />
+      <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
+      {isLoading && threads.length === 0 ? (
         <View style={styles.centerState}>
           <ActivityIndicator color={theme.colors.accent} />
         </View>
@@ -67,8 +132,14 @@ export default function ThreadHistoryScreen() {
         </View>
       ) : threads.length === 0 ? (
         <View style={styles.centerState}>
-          <Text style={styles.stateTitle}>No chat threads yet</Text>
-          <Text style={styles.stateText}>Only regular conversations appear here. Command threads stay hidden.</Text>
+          <Text style={styles.stateTitle}>
+            {debouncedQuery ? 'No conversations found' : 'No chat threads yet'}
+          </Text>
+          <Text style={styles.stateText}>
+            {debouncedQuery
+              ? 'Try a different search.'
+              : 'Your regular conversations will appear here.'}
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -84,9 +155,13 @@ export default function ThreadHistoryScreen() {
                 <Text style={styles.cardTitle} numberOfLines={1}>
                   {(item.title || 'Untitled thread').trim() || 'Untitled thread'}
                 </Text>
-                {item.last_message_preview ? (
+                {(debouncedQuery
+                  ? item.matched_message_preview || item.last_message_preview
+                  : item.last_message_preview) ? (
                   <Text style={styles.cardPreview} numberOfLines={2}>
-                    {item.last_message_preview}
+                    {debouncedQuery
+                      ? item.matched_message_preview || item.last_message_preview
+                      : item.last_message_preview}
                   </Text>
                 ) : null}
                 <Text style={styles.cardMeta}>{`Updated ${formatThreadDate(item.updated_at)}`}</Text>
@@ -95,7 +170,13 @@ export default function ThreadHistoryScreen() {
           )}
         />
       )}
-    </LinearGradient>
+      {isLoading && threads.length > 0 ? (
+        <View pointerEvents="none" style={styles.loadingOverlay}>
+          <ActivityIndicator color={theme.colors.accent} />
+        </View>
+      ) : null}
+      </LinearGradient>
+    </>
   );
 }
 
@@ -124,6 +205,25 @@ const styles = StyleSheet.create({
   listContent: {
     padding: 20,
     gap: 12,
+    paddingBottom: 32,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 12,
+    right: 20,
+  },
+  searchButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchInput: {
+    width: 220,
+    paddingVertical: 6,
+    fontSize: 17,
+    color: theme.colors.ink,
   },
   card: {
     padding: 16,

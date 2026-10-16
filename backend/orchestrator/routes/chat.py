@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any, Callable
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
 import conversations
@@ -147,14 +147,18 @@ def _prepare_command_media(
     )
     parsed_command = parse_command(payload.question)
     is_event_command = bool(parsed_command and parsed_command.command == "event")
-    if not has_pending_event and not is_event_command:
+    if not has_pending_event and not is_event_command and parsed_command is not None:
         raise HTTPException(
             status_code=400,
-            detail="Media attachments are currently supported only with /event.",
+            detail="Media attachments are supported with /event or a regular chat request.",
         )
 
     try:
-        staged = stage_chat_media_attachments(raw_attachments, user_email=user_email)
+        staged = stage_chat_media_attachments(
+            raw_attachments,
+            user_email=user_email,
+            allow_pdf=not has_pending_event and not is_event_command,
+        )
     except ChatMediaError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -300,6 +304,7 @@ def create_chat_router() -> APIRouter:
 
         if ctx.is_reset_only:
             logger.info("[ask] session reset session=%s user=%s", ctx.session_id, user_email)
+            delete_staged_chat_media_attachments(staged_media_attachments)
             return AskOut(**_make_reset_bundle(ctx))
 
         limit = payload.limit or 30
@@ -339,11 +344,14 @@ def create_chat_router() -> APIRouter:
                 ui_submission=payload.ui_submission.model_dump(exclude_none=True)
                 if payload.ui_submission
                 else None,
+                visual_attachments=staged_media_attachments,
                 on_exchange_persisted=_schedule_fact_extraction,
                 on_thread_title_needed=_schedule_thread_title,
             )
         except LLMUnavailableError as exc:
             _raise_http_for_llm_unavailable(exc)
+        finally:
+            delete_staged_chat_media_attachments(staged_media_attachments)
         bundle["thread_id"] = ctx.session_id
         bundle["session_id"] = ctx.session_id
         bundle["is_new_session"] = ctx.is_new_session
@@ -602,6 +610,7 @@ def create_chat_router() -> APIRouter:
         if ctx.is_reset_only:
             _touch_ask_run(run_id, thread_id=ctx.session_id)
             logger.info("[ask/stream] session reset session=%s user=%s", ctx.session_id, user_email)
+            delete_staged_chat_media_attachments(staged_media_attachments)
             reset_bundle = _make_reset_bundle(ctx)
 
             async def reset_generator():
@@ -672,6 +681,7 @@ def create_chat_router() -> APIRouter:
                         ui_submission=payload.ui_submission.model_dump(exclude_none=True)
                         if payload.ui_submission
                         else None,
+                        visual_attachments=staged_media_attachments,
                         on_exchange_persisted=_schedule_fact_extraction,
                         on_thread_title_needed=_schedule_thread_title,
                     ):
@@ -754,6 +764,7 @@ def create_chat_router() -> APIRouter:
                     if not disconnect_event.is_set():
                         await queue.put({"type": "error", "message": str(exc)})
                 finally:
+                    delete_staged_chat_media_attachments(staged_media_attachments)
                     if not disconnect_event.is_set():
                         await queue.put(None)
 
@@ -827,12 +838,20 @@ def create_chat_router() -> APIRouter:
 
     @router.get("/threads", response_model=list[ThreadOut])
     @router.get("/mobile/threads", response_model=list[ThreadOut])
-    def list_conversation_threads(user: dict = Depends(get_current_user)):
+    def list_conversation_threads(
+        q: str | None = Query(default=None, max_length=200),
+        user: dict = Depends(get_current_user),
+    ):
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
         conversations.delete_empty_threads(user_email)
-        threads = conversations.list_threads(user_email)
+        normalized_query = str(q or "").strip()
+        threads = (
+            conversations.search_threads(user_email, normalized_query)
+            if normalized_query
+            else conversations.list_threads(user_email)
+        )
         return [ThreadOut(**thread) for thread in threads]
 
     @router.get("/main-session", response_model=MainSessionOut)
@@ -898,6 +917,26 @@ def create_chat_router() -> APIRouter:
                 ),
             }
         )
+
+    @router.post("/threads/{thread_id}/regenerate-title", response_model=ThreadOut)
+    @router.post("/mobile/threads/{thread_id}/regenerate-title", response_model=ThreadOut)
+    def regenerate_conversation_thread_title(
+        thread_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        user_email = user.get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        thread = conversations.get_thread_with_messages(thread_id, user_email)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Conversation thread not found")
+        generated_title = llm.generate_thread_title_from_messages(thread.get("messages") or [])
+        if not generated_title:
+            raise HTTPException(status_code=503, detail="Could not generate a thread title right now.")
+        updated_thread = conversations.update_thread_title(thread_id, user_email, generated_title)
+        if not updated_thread:
+            raise HTTPException(status_code=404, detail="Conversation thread not found")
+        return ThreadOut(**updated_thread)
 
     @router.put("/threads/{thread_id}", response_model=ThreadOut)
     @router.put("/mobile/threads/{thread_id}", response_model=ThreadOut)

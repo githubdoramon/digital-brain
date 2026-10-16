@@ -166,6 +166,61 @@ def list_threads(user_email: str) -> list[dict[str, Any]]:
     return rows
 
 
+def search_threads(user_email: str, query: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Search a user's thread titles and messages with PostgreSQL full-text search."""
+    normalized_query = str(query or "").strip()
+    if not user_email or not normalized_query:
+        return []
+
+    bounded_limit = max(1, min(int(limit), 200))
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            WITH search_query AS (
+                SELECT plainto_tsquery('simple', unaccent(%s)) AS tsquery
+            ), message_matches AS (
+                SELECT DISTINCT ON (m.thread_id)
+                    m.thread_id,
+                    ts_rank_cd(m.content_tsv, q.tsquery) AS message_score,
+                    LEFT(m.content, 160) AS matched_message_preview
+                FROM conversation_messages m
+                JOIN conversation_threads owner
+                    ON owner.id = m.thread_id AND owner.user_email = %s
+                CROSS JOIN search_query q
+                WHERE m.content_tsv @@ q.tsquery
+                ORDER BY m.thread_id, message_score DESC, m.created_at DESC, m.message_id DESC
+            )
+            SELECT
+                t.id,
+                t.title,
+                t.created_at,
+                t.updated_at,
+                (
+                    SELECT LEFT(content, 160)
+                    FROM conversation_messages m
+                    WHERE m.thread_id = t.id
+                    ORDER BY m.created_at DESC, m.message_id DESC
+                    LIMIT 1
+                ) AS last_message_preview,
+                mm.matched_message_preview
+            FROM conversation_threads t
+            CROSS JOIN search_query q
+            LEFT JOIN message_matches mm ON mm.thread_id = t.id
+            WHERE t.user_email = %s
+              AND (
+                  t.title_tsv @@ q.tsquery
+                  OR mm.thread_id IS NOT NULL
+              )
+            ORDER BY (
+                2 * ts_rank_cd(t.title_tsv, q.tsquery) + COALESCE(mm.message_score, 0)
+            ) DESC, t.updated_at DESC, t.created_at DESC
+            LIMIT %s
+            """,
+            (normalized_query, user_email, user_email, bounded_limit),
+        )
+        return cur.fetchall()
+
+
 def get_thread_with_messages(thread_id: str, user_email: str) -> dict[str, Any] | None:
     if not thread_id or not user_email:
         return None

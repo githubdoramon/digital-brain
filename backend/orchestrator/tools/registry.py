@@ -35,6 +35,7 @@ TOOL_GROUPS = {
         "lookup_place_contacts",
     ],
     "web": ["web_search", "fetch_web_page"],
+    "visual": ["visual_inspect"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
     "pdf": ["create_pdf", "ingest_generated_pdf"],
@@ -735,7 +736,9 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="fetch_web_page",
             description=(
-                "Fetch and extract content from a specific URL. Use after `web_search` when you need details from one source."
+                "Fetch and extract content from a specific URL. Use after `web_search` when you need details from one source. "
+                "Set include_images=true when the user asks about an image on the page; then pass a returned image URL "
+                "to visual_inspect so the vision model can inspect its pixels."
             ),
             parameters=[
                 ToolParameter(
@@ -754,7 +757,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="include_images",
                     type="boolean",
-                    description="Whether to include extracted image URLs (default false).",
+                    description="Whether to include extracted image URLs and alt text (default false).",
                     required=False,
                 ),
                 ToolParameter(
@@ -772,6 +775,70 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     maximum=20000,
                 ),
             ],
+        )
+    )
+
+    registry.register(
+        ToolContract(
+            name="visual_inspect",
+            description=(
+                "Inspect an image or selected PDF pages with the vision model. Sources may be a direct image/PDF URL, "
+                "small base64 image/PDF data, an image/PDF attached to the current request, an uploaded document_id, "
+                "or a path inside managed document/chat-media storage. "
+                "Use include_people_matching only when the user asks who someone is or whether they are known; "
+                "Immich will compare faces against the configured library. Paths outside managed storage are rejected."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="source_type",
+                    type="string",
+                    description="How to resolve source.",
+                    required=True,
+                    enum=["url", "base64", "attachment", "document", "path"],
+                ),
+                ToolParameter(
+                    name="source",
+                    type="string",
+                    description=(
+                        "HTTP(S) image/PDF URL, base64 image bytes, current attachment_id, or document_id, "
+                        "according to source_type; path inputs must be inside managed storage."
+                    ),
+                    required=True,
+                    min_length=1,
+                    max_length=8_500_000,
+                ),
+                ToolParameter(
+                    name="question",
+                    type="string",
+                    description="What to inspect, compare, or read from the visual source.",
+                    required=True,
+                    min_length=1,
+                    max_length=1200,
+                ),
+                ToolParameter(
+                    name="mime_type",
+                    type="string",
+                    description="Optional MIME type for base64 data.",
+                    required=False,
+                    max_length=100,
+                ),
+                ToolParameter(
+                    name="pages",
+                    type="array",
+                    description="Optional one-based PDF page numbers; at most four pages per call.",
+                    required=False,
+                    items_type="integer",
+                ),
+                ToolParameter(
+                    name="include_people_matching",
+                    type="boolean",
+                    description=(
+                        "Set true only when the user explicitly asks to identify people or check whether they are known."
+                    ),
+                    required=False,
+                ),
+            ],
+            constraints=["read_only"],
         )
     )
 

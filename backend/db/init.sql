@@ -483,6 +483,7 @@ CREATE TABLE IF NOT EXISTS conversation_threads (
   id TEXT PRIMARY KEY,
   user_email TEXT NOT NULL,
   title TEXT,
+  title_tsv TSVECTOR NOT NULL DEFAULT ''::TSVECTOR,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -495,12 +496,42 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   thread_id TEXT NOT NULL REFERENCES conversation_threads(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
   content TEXT NOT NULL,
+  content_tsv TSVECTOR NOT NULL DEFAULT ''::TSVECTOR,
   metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_thread_created
   ON conversation_messages (thread_id, created_at, message_id);
+
+CREATE OR REPLACE FUNCTION conversation_messages_tsv_update() RETURNS trigger AS $$
+BEGIN
+  NEW.content_tsv := to_tsvector('simple', unaccent(COALESCE(NEW.content, '')));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS conversation_messages_tsv_trg ON conversation_messages;
+CREATE TRIGGER conversation_messages_tsv_trg
+BEFORE INSERT OR UPDATE OF content ON conversation_messages
+FOR EACH ROW EXECUTE FUNCTION conversation_messages_tsv_update();
+
+CREATE OR REPLACE FUNCTION conversation_threads_title_tsv_update() RETURNS trigger AS $$
+BEGIN
+  NEW.title_tsv := to_tsvector('simple', unaccent(COALESCE(NEW.title, '')));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS conversation_threads_title_tsv_trg ON conversation_threads;
+CREATE TRIGGER conversation_threads_title_tsv_trg
+BEFORE INSERT OR UPDATE OF title ON conversation_threads
+FOR EACH ROW EXECUTE FUNCTION conversation_threads_title_tsv_update();
+
+CREATE INDEX IF NOT EXISTS idx_conversation_threads_title_tsv
+  ON conversation_threads USING GIN (title_tsv);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_content_tsv
+  ON conversation_messages USING GIN (content_tsv);
 
 -- Main sessions (quick chat mode - one main session per user)
 CREATE TABLE IF NOT EXISTS main_sessions (

@@ -85,14 +85,14 @@ TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 
 # Intent to tool group mappings
 INTENT_TOOL_MAP = {
-    IntentType.MEMORY_SEARCH: ["memory", "resolution"],
+    IntentType.MEMORY_SEARCH: ["memory", "resolution", "visual"],
     IntentType.DATA_QUERY: ["graph", "memory", "resolution"],
-    IntentType.CONTACT_LOOKUP: ["resolution", "memory"],
-    IntentType.WEB_SEARCH: ["web"],
+    IntentType.CONTACT_LOOKUP: ["resolution", "memory", "visual"],
+    IntentType.WEB_SEARCH: ["web", "visual"],
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
-    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "pdf", "ui"],
+    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "visual", "pdf", "ui"],
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }
 

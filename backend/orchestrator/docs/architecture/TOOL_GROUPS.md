@@ -19,6 +19,7 @@ TOOL_GROUPS = {
         "lookup_place_contacts",
     ],
     "web": ["web_search", "fetch_web_page"],
+    "visual": ["visual_inspect"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
     "pdf": ["create_pdf", "ingest_generated_pdf"],
@@ -46,14 +47,14 @@ flowchart LR
 
 ## Intent-to-Group Mapping
 
-- `MEMORY_SEARCH`: `memory`, `resolution`
+- `MEMORY_SEARCH`: `memory`, `resolution`, `visual`
 - `DATA_QUERY`: `graph`, `memory`, `resolution`
-- `CONTACT_LOOKUP`: `resolution`, `memory`
-- `WEB_SEARCH`: `web`
+- `CONTACT_LOOKUP`: `resolution`, `memory`, `visual`
+- `WEB_SEARCH`: `web`, `visual`
 - `HOME_CONTROL`: `home`
 - `SKILL_EXECUTION`: `skills`, `memory`
 - `SYSTEM_COMMAND`: `system`
-- `CONVERSATIONAL`: `memory`, `resolution`, `web`, `pdf`, `ui`
+- `CONVERSATIONAL`: `memory`, `resolution`, `web`, `visual`, `pdf`, `ui`
 - `UNKNOWN`: all groups
 
 ## Policy Summary

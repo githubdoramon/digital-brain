@@ -24,6 +24,7 @@ def stage_chat_media_attachments(
     raw_attachments: Sequence[dict[str, Any]] | None,
     *,
     user_email: str,
+    allow_pdf: bool = False,
 ) -> list[dict[str, Any]]:
     attachments = [item for item in (raw_attachments or []) if isinstance(item, dict)]
     if not attachments:
@@ -35,8 +36,19 @@ def stage_chat_media_attachments(
 
     base_dir = _ensure_chat_media_dir()
     staged: list[dict[str, Any]] = []
-    for raw in attachments:
-        staged.append(_stage_single_attachment(raw, user_email=user_email, base_dir=base_dir))
+    try:
+        for raw in attachments:
+            staged.append(
+                _stage_single_attachment(
+                    raw,
+                    user_email=user_email,
+                    base_dir=base_dir,
+                    allow_pdf=allow_pdf,
+                )
+            )
+    except Exception:
+        delete_staged_chat_media_attachments(staged)
+        raise
     return staged
 
 
@@ -115,12 +127,14 @@ def _stage_single_attachment(
     *,
     user_email: str,
     base_dir: Path,
+    allow_pdf: bool,
 ) -> dict[str, Any]:
     attachment_id = _normalize_string(raw.get("attachment_id")) or f"chat-media:{uuid4().hex}"
     file_name = _safe_file_name(raw.get("file_name"))
     mime_type = _normalize_string(raw.get("mime_type")) or "application/octet-stream"
-    if not mime_type.startswith("image/"):
-        raise ChatMediaError("Only image chat attachments are currently supported.")
+    is_pdf = mime_type == "application/pdf" or Path(file_name).suffix.lower() == ".pdf"
+    if not mime_type.startswith("image/") and not (allow_pdf and is_pdf):
+        raise ChatMediaError("Chat attachments must be an image or PDF.")
     content_base64 = _normalize_string(raw.get("content_base64"))
     if not content_base64:
         raise ChatMediaError("Chat attachment content is missing.")

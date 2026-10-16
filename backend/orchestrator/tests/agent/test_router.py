@@ -116,10 +116,10 @@ class TestIntentToolMap:
         # memory remains as a semantic fallback for hybrid quantitative + qualitative queries
         assert "memory" in groups
 
-    def test_conversational_has_web_pdf_and_ui_tools(self):
-        """Test CONVERSATIONAL intent has creation, web search, and UI tools."""
+    def test_conversational_has_visual_web_pdf_and_ui_tools(self):
+        """Test CONVERSATIONAL intent has visual, creation, web, and UI tools."""
         groups = INTENT_TOOL_MAP[IntentType.CONVERSATIONAL]
-        assert groups == ["memory", "resolution", "web", "pdf", "ui"]
+        assert groups == ["memory", "resolution", "web", "visual", "pdf", "ui"]
 
     def test_unknown_has_all_tools(self):
         """UNKNOWN remains the catch-all that exposes every tool group."""

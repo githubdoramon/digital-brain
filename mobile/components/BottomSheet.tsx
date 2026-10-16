@@ -47,6 +47,7 @@ export function BottomSheet({
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const animationCycleRef = useRef(0);
   const onAfterCloseRef = useRef(onAfterClose);
+  const renderedRef = useRef(visible);
 
   useEffect(() => {
     onAfterCloseRef.current = onAfterClose;
@@ -57,6 +58,7 @@ export function BottomSheet({
     const cycle = animationCycleRef.current;
 
     if (visible) {
+      renderedRef.current = true;
       setRendered(true);
       translateY.setValue(ENTER_TRANSLATE_Y);
       backdropOpacity.setValue(0);
@@ -75,7 +77,7 @@ export function BottomSheet({
       return;
     }
 
-    if (!rendered) {
+    if (!renderedRef.current) {
       return;
     }
 
@@ -95,29 +97,28 @@ export function BottomSheet({
         return;
       }
       if (!visible) {
+        renderedRef.current = false;
         setRendered(false);
         if (Platform.OS !== 'ios') {
           requestAnimationFrame(() => {
-            if (animationCycleRef.current === cycle) {
-              onAfterCloseRef.current?.();
-            }
+            setTimeout(() => {
+              if (animationCycleRef.current === cycle) {
+                onAfterCloseRef.current?.();
+              }
+            }, 100);
           });
         }
       }
     });
-  }, [backdropOpacity, rendered, translateY, visible]);
-
-  if (!rendered) {
-    return null;
-  }
+  }, [backdropOpacity, translateY, visible]);
 
   return (
     <Modal
       transparent
-      visible
+      visible={rendered}
       animationType="none"
       onRequestClose={onClose}
-      onDismiss={Platform.OS === 'ios' ? onAfterClose : undefined}
+      onDismiss={Platform.OS === 'ios' ? () => onAfterCloseRef.current?.() : undefined}
     >
       <Animated.View style={[styles.backdrop, backdropStyle, { opacity: backdropOpacity }]}>
         <Pressable

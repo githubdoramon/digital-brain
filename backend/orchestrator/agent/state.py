@@ -123,6 +123,10 @@ class AgentState:
     episodic_memory: list[dict[str, Any]] = field(default_factory=list)
     ui_directives: dict[str, Any] | None = None
     request_context: dict[str, Any] = field(default_factory=dict)
+    # Request-scoped uploaded media is intentionally excluded from state
+    # serialization and observability metadata. Tool handlers use it only to
+    # resolve attachment IDs during this agent run.
+    visual_attachments: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     # Timestamps
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

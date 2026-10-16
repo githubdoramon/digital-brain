@@ -14,6 +14,7 @@ DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_FETCH_TIMEOUT_SECONDS = 20
 MAX_RESULTS = 10
 DEFAULT_MAX_CHARACTERS = 20000
+MAX_IMAGE_CANDIDATES = 20
 DEFAULT_USER_AGENT = "digital-brain/1.0"
 
 logger = get_runtime_logger(__name__)
@@ -201,7 +202,7 @@ def fetch_web_page(
     if include_links_flag and parser.links:
         document["links"] = parser.links
     if include_images_flag and parser.images:
-        document["images"] = parser.images
+        document["images"] = parser.images[:MAX_IMAGE_CANDIDATES]
     if include_raw_html_flag:
         raw_html = response.text
         if len(raw_html) > max_chars:
@@ -338,11 +339,14 @@ class _ReadableHtmlParser(HTMLParser):
             return
         if tag == "img":
             src = attrs_dict.get("src")
-            if src:
-                image: dict[str, Any] = {"url": urljoin(self.base_url, src)}
+            if src and len(self.images) < MAX_IMAGE_CANDIDATES:
+                image_url = urljoin(self.base_url, src)
+                if urlparse(image_url).scheme not in {"http", "https"}:
+                    return
+                image: dict[str, Any] = {"url": image_url}
                 alt = (attrs_dict.get("alt") or "").strip()
                 if alt:
-                    image["alt"] = alt
+                    image["alt"] = alt[:300]
                 self.images.append(image)
             return
         if tag in {"p", "div", "section", "article", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:

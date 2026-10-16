@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urlunparse
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
 LLM_CHAT_MODEL_FAST = os.getenv("LLM_CHAT_MODEL_FAST", "").strip()
 LLM_CHAT_MODEL_SMART = os.getenv("LLM_CHAT_MODEL_SMART", "").strip()
+LLM_CHAT_MODEL_VISION = os.getenv("LLM_CHAT_MODEL_VISION", "").strip()
 OLLAMA_CHAT_KEEP_ALIVE = os.getenv(
     "OLLAMA_CHAT_KEEP_ALIVE",
     os.getenv("OLLAMA_FAST_KEEP_ALIVE", "-1"),
@@ -24,6 +25,12 @@ def get_smart_model() -> str:
     if not model:
         raise RuntimeError("LLM_CHAT_MODEL_SMART environment variable is required")
     return model
+
+
+def get_vision_model() -> str:
+    """Return the configured multimodal model, falling back to the smart model."""
+    model = os.getenv("LLM_CHAT_MODEL_VISION", LLM_CHAT_MODEL_VISION).strip()
+    return model or get_smart_model()
 
 
 def get_chat_keep_alive() -> str | int:
