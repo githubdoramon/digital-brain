@@ -33,6 +33,9 @@ additional destination receives traces only; Mirador continues to receive
 traces and metrics when `MIRADOR_API_KEY` is configured. The additional
 destination is independent, so it can be configured without Mirador. Its
 authorization header is omitted when `ADDITIONAL_OTEL_AUTHORIZATION` is unset.
+Failed trace batches log `OTLP trace export failed` or
+`OTLP trace export raised`, including the destination label and batch size but
+never the endpoint URL or authorization value. Successful batches remain quiet.
 Both providers flush queued telemetry during graceful shutdown.
 
 ## What is exported

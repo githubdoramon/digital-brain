@@ -240,7 +240,45 @@ def configure_mirador() -> None:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            SpanExporter,
+            SpanExportResult,
+        )
+
+        class _LoggingSpanExporter(SpanExporter):
+            """Log failed batch exports with a safe destination label."""
+
+            def __init__(self, exporter: Any, destination_name: str) -> None:
+                self._exporter = exporter
+                self._destination_name = destination_name
+
+            def export(self, spans: Any) -> Any:
+                span_count = len(spans)
+                try:
+                    result = self._exporter.export(spans)
+                except Exception:
+                    logger.exception(
+                        "OTLP trace export raised destination=%s span_count=%d",
+                        self._destination_name,
+                        span_count,
+                    )
+                    return SpanExportResult.FAILURE
+
+                if result != SpanExportResult.SUCCESS:
+                    logger.error(
+                        "OTLP trace export failed destination=%s span_count=%d result=%s",
+                        self._destination_name,
+                        span_count,
+                        getattr(result, "name", str(result)),
+                    )
+                return result
+
+            def shutdown(self) -> None:
+                self._exporter.shutdown()
+
+            def force_flush(self, timeout_millis: int = 30000) -> bool:
+                return self._exporter.force_flush(timeout_millis)
 
         resource = Resource.create({"service.name": service_name})
         provider = TracerProvider(resource=resource)
@@ -260,7 +298,10 @@ def configure_mirador() -> None:
             try:
                 provider.add_span_processor(
                     BatchSpanProcessor(
-                        OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                        _LoggingSpanExporter(
+                            OTLPSpanExporter(endpoint=endpoint, headers=headers),
+                            destination_name,
+                        )
                     )
                 )
                 logger.info("OTLP tracing export enabled destination=%s", destination_name)
