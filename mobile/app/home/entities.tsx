@@ -2,10 +2,11 @@ import React from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
+  Easing,
   LayoutChangeEvent,
   FlatList,
   ScrollView,
@@ -52,10 +53,13 @@ import {
   type PlaceListItem,
 } from '@/components/entities/types';
 import { RelationshipChips } from '@/components/RelationshipChips';
+import { fetchContactGroups, matchesContactGroupSearch, type ContactGroup } from '@/utils/contactGroups';
+import { normalizeSearch } from '@/utils/text';
 import { theme } from '@/theme';
 
 const EVENT_PAGE_SIZE = 30;
-type EntityListRow = ContactListItem | PlaceListItem | EventListItem | DocumentListItem;
+type ContactGroupRow = { isContactGroupRow: true; group: ContactGroup };
+type EntityListRow = ContactListItem | ContactGroupRow | PlaceListItem | EventListItem | DocumentListItem;
 
 function getEventSortTime(event: EventListItem): number {
   if (!event.start_date) return Number.NEGATIVE_INFINITY;
@@ -133,6 +137,28 @@ function ContactCard({
           />
         </Pressable>
       </View>
+    </Card>
+  );
+}
+
+function ContactGroupCard({ group, onPress }: { group: ContactGroup; onPress: () => void }) {
+  return (
+    <Card variant="elevated">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${group.name}, ${group.member_count} ${group.member_count === 1 ? 'person' : 'people'}`}
+        onPress={onPress}
+        style={({ pressed }) => [styles.groupCard, pressed && styles.groupCardPressed]}
+      >
+        <View style={styles.groupAvatar}>
+          <Ionicons name="people" size={20} color={theme.colors.teal} />
+        </View>
+        <View style={styles.cardBody}>
+          <Text numberOfLines={1} style={styles.cardTitle}>{group.name}</Text>
+          <Text style={styles.cardSubtitle}>{group.member_count} {group.member_count === 1 ? 'person' : 'people'}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
+      </Pressable>
     </Card>
   );
 }
@@ -302,6 +328,9 @@ export default function EntitiesScreen() {
   const [filters, setFilters] = React.useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
   const [showFilterSheet, setShowFilterSheet] = React.useState(false);
   const [contacts, setContacts] = React.useState<ContactListItem[]>([]);
+  const [contactGroups, setContactGroups] = React.useState<ContactGroup[]>([]);
+  const [addMenuOpen, setAddMenuOpen] = React.useState(false);
+  const addMenuProgress = React.useRef(new Animated.Value(0)).current;
   const [places, setPlaces] = React.useState<PlaceListItem[]>([]);
   const [events, setEvents] = React.useState<EventListItem[]>([]);
   const [documents, setDocuments] = React.useState<DocumentListItem[]>([]);
@@ -368,11 +397,20 @@ export default function EntitiesScreen() {
   const activeFilterChips = React.useMemo(() => buildActiveFilterChips(filters, optionMap), [filters, optionMap]);
   const activeFilterCount = React.useMemo(() => countActiveFilters(filters), [filters]);
   const listData = React.useMemo<EntityListRow[]>(() => {
-    if (selectedEntity === 'contacts') return contacts;
+    if (selectedEntity === 'contacts') {
+      const matchingGroups = contactGroups
+        .filter((group) => matchesContactGroupSearch(group, query))
+        .map((group): ContactGroupRow => ({ isContactGroupRow: true, group }));
+      return [...contacts, ...matchingGroups].sort((left, right) => {
+        const leftName = 'isContactGroupRow' in left ? left.group.name : left.display_name;
+        const rightName = 'isContactGroupRow' in right ? right.group.name : right.display_name;
+        return normalizeSearch(leftName).localeCompare(normalizeSearch(rightName));
+      });
+    }
     if (selectedEntity === 'places') return places;
     if (selectedEntity === 'documents') return documents;
     return events;
-  }, [contacts, documents, events, places, selectedEntity]);
+  }, [contactGroups, contacts, documents, events, places, query, selectedEntity]);
 
   const loadFilterOptions = React.useCallback(async () => {
     try {
@@ -413,6 +451,15 @@ export default function EntitiesScreen() {
       setFilterOptions(nextOptions);
     } catch (error) {
       console.warn('[entities] filter options load failed', error);
+    }
+  }, []);
+
+  const loadContactGroups = React.useCallback(async () => {
+    try {
+      setContactGroups(await fetchContactGroups());
+    } catch (error) {
+      console.warn('[entities] contact groups load failed', error);
+      setContactGroups([]);
     }
   }, []);
 
@@ -649,9 +696,19 @@ export default function EntitiesScreen() {
     React.useCallback(() => {
       setFocusTick((current) => current + 1);
       void loadFilterOptions();
+      void loadContactGroups();
       return undefined;
-    }, [loadFilterOptions]),
+    }, [loadContactGroups, loadFilterOptions]),
   );
+
+  React.useEffect(() => {
+    Animated.timing(addMenuProgress, {
+      toValue: addMenuOpen ? 1 : 0,
+      duration: addMenuOpen ? 230 : 170,
+      easing: addMenuOpen ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [addMenuOpen, addMenuProgress]);
 
   React.useEffect(() => {
     const shouldShowInitialLoader = !hasLoadedOnceRef.current[selectedEntity];
@@ -701,6 +758,7 @@ export default function EntitiesScreen() {
   }, []);
 
   const handleChipPress = React.useCallback((kind: EntityKind) => {
+    setAddMenuOpen(false);
     setSelectedEntity(kind);
     setTimeout(() => ensureChipVisible(kind), 0);
   }, [ensureChipVisible]);
@@ -786,6 +844,7 @@ export default function EntitiesScreen() {
       <FlatList<EntityListRow>
         data={listData}
         keyExtractor={(item) => {
+          if ('isContactGroupRow' in item) return `group:${item.group.group_id}`;
           if ('contact_id' in item) return item.contact_id;
           if ('place_id' in item) return item.place_id;
           if ('document_id' in item) return item.document_id;
@@ -820,6 +879,16 @@ export default function EntitiesScreen() {
         }
         renderItem={({ item }) => {
           if (selectedEntity === 'contacts') {
+            if ('isContactGroupRow' in item) {
+              return (
+                <ContactGroupCard
+                  group={item.group}
+                  onPress={() => router.push(
+                    `/contact-groups/${encodeURIComponent(item.group.group_id)}` as Href,
+                  )}
+                />
+              );
+            }
             const contact = item as ContactListItem;
             return (
               <ContactCard
@@ -899,7 +968,55 @@ export default function EntitiesScreen() {
         onPressProfile={() => router.push('/settings')}
       />
 
-      {selectedEntity === 'places' || selectedEntity === 'documents' ? (
+      {selectedEntity === 'contacts' ? (
+        <>
+          <Animated.View
+            pointerEvents={addMenuOpen ? 'auto' : 'none'}
+            style={[styles.addMenuScrim, { opacity: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) }]}
+          >
+            <Pressable accessibilityRole="button" accessibilityLabel="Close add menu" style={StyleSheet.absoluteFill} onPress={() => setAddMenuOpen(false)} />
+          </Animated.View>
+          <Animated.View
+            pointerEvents={addMenuOpen ? 'auto' : 'none'}
+            style={[
+              styles.addMenu,
+              { bottom: insets.bottom + tabBarHeight + 92 },
+              {
+                opacity: addMenuProgress,
+                transform: [{ translateY: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }, { scale: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
+              },
+            ]}
+          >
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => { setAddMenuOpen(false); router.push('/contacts/new'); }}
+              style={({ pressed }) => [styles.addMenuItem, pressed && styles.addMenuItemPressed]}
+            >
+              <View style={styles.addMenuIcon}><Ionicons name="person-add-outline" size={18} color={theme.colors.accentDeep} /></View>
+              <Text style={styles.addMenuLabel}>Single contact</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => { setAddMenuOpen(false); router.push('/contact-groups/new' as Href); }}
+              style={({ pressed }) => [styles.addMenuItem, pressed && styles.addMenuItemPressed]}
+            >
+              <View style={styles.addMenuIcon}><Ionicons name="people-outline" size={18} color={theme.colors.accentDeep} /></View>
+              <Text style={styles.addMenuLabel}>Group</Text>
+            </Pressable>
+          </Animated.View>
+          <Pressable
+            onPress={() => setAddMenuOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityLabel={addMenuOpen ? 'Close add menu' : 'Add contact or group'}
+            accessibilityState={{ expanded: addMenuOpen }}
+            style={({ pressed }) => [styles.fab, { bottom: insets.bottom + tabBarHeight + 24 }, pressed && styles.fabPressed]}
+          >
+            <Animated.View style={{ transform: [{ rotate: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] }) }] }}>
+              <Ionicons name="add" size={26} color="#fff" />
+            </Animated.View>
+          </Pressable>
+        </>
+      ) : selectedEntity === 'places' || selectedEntity === 'documents' ? (
         <Pressable
           onPress={() => router.push(selectedEntity === 'documents' ? '/documents/new' : '/places/new')}
           accessibilityRole="button"
@@ -1110,6 +1227,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 22,
+    zIndex: 10,
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -1125,5 +1243,68 @@ const styles = StyleSheet.create({
   fabPressed: {
     transform: [{ scale: 0.97 }],
     shadowOpacity: 0.18,
+  },
+  addMenuScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(20, 25, 24, 0.12)',
+    zIndex: 8,
+  },
+  addMenu: {
+    position: 'absolute',
+    right: 22,
+    width: 176,
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    zIndex: 9,
+    shadowColor: '#111',
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+  addMenuItem: {
+    minHeight: 52,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    borderRadius: 15,
+  },
+  addMenuItemPressed: {
+    backgroundColor: '#f5f8f6',
+  },
+  addMenuIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
+  },
+  addMenuLabel: {
+    color: theme.colors.ink,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  groupCard: {
+    minHeight: 80,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderRadius: theme.radius.lg,
+  },
+  groupCardPressed: {
+    opacity: 0.82,
+  },
+  groupAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
   },
 });

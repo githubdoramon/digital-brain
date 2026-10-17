@@ -48,7 +48,7 @@ class SelectContactsAction(str, Enum):
     LIST_GROUPS = "list_groups"
     GET_GROUP = "get_group"
     CREATE_GROUP = "create_group"
-    ARCHIVE_GROUP = "archive_group"
+    DELETE_GROUP = "delete_group"
 
     @classmethod
     def from_value(

@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card } from '@/components/Card';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
+import { ContactSearchSuggestions } from '@/components/ContactSearchSuggestions';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -44,7 +45,7 @@ import { getEventDraftEditSession, submitEventDraftEditSession } from '@/events/
 import { theme } from '@/theme';
 import { useAuth } from '@/auth/AuthContext';
 import { normalizeSearch } from '@/utils/text';
-import { matchesContactSearch } from '@/utils/contactSearch';
+import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
 
 type EventDetailsFormProps = {
   initialDraft: EventDraft;
@@ -204,6 +205,7 @@ export function EventDetailsForm({
   const [tagsInput, setTagsInput] = React.useState(listToInput(initialDraft.tags));
   const [typesInput, setTypesInput] = React.useState(listToInput(initialDraft.types));
   const [participantQuery, setParticipantQuery] = React.useState('');
+  const [contactGroups, setContactGroups] = React.useState<ContactGroup[]>([]);
   const [selectedParticipantIds, setSelectedParticipantIds] = React.useState<string[]>(
     initialDraft.participants.map((participant) => participant.contactId),
   );
@@ -238,6 +240,20 @@ export function EventDetailsForm({
     setMediaSuggestions(initialDraft.mediaSuggestions || []);
     setShowCandidatePicker(false);
   }, [initialDraft]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    void fetchContactGroups()
+      .then((groups) => {
+        if (mounted) setContactGroups(groups);
+      })
+      .catch(() => {
+        if (mounted) setContactGroups([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!editable) {
@@ -287,16 +303,10 @@ export function EventDetailsForm({
     [contactNameById, selectedParticipantIds],
   );
 
-  const filteredContacts = React.useMemo(() => {
-    if (!editable) return [];
-    const query = participantQuery.trim();
-    if (!query) return [];
-    const selectedSet = new Set(selectedParticipantIds);
-    return availableContacts
-      .filter((contact) => !selectedSet.has(contact.contact_id))
-      .filter((contact) => matchesContactSearch(contact, query))
-      .slice(0, 5);
-  }, [availableContacts, editable, participantQuery, selectedParticipantIds]);
+  const selectedParticipantIdSet = React.useMemo(
+    () => new Set(selectedParticipantIds),
+    [selectedParticipantIds],
+  );
 
   const filteredPlaces = React.useMemo(() => {
     if (!editable) return [];
@@ -311,6 +321,15 @@ export function EventDetailsForm({
     setSelectedParticipantIds((prev) =>
       prev.includes(contactId) ? prev.filter((id) => id !== contactId) : [...prev, contactId],
     );
+    setParticipantQuery('');
+  }, []);
+
+  const addParticipantGroup = React.useCallback((group: ContactGroup) => {
+    setSelectedParticipantIds((previous) => {
+      const next = new Set(previous);
+      group.members.forEach((member) => next.add(member.contact_id));
+      return Array.from(next);
+    });
     setParticipantQuery('');
   }, []);
 
@@ -825,25 +844,16 @@ export function EventDetailsForm({
                   <Text style={styles.helperText}>No participants selected.</Text>
                 )}
 
-                {participantQuery.trim().length > 0 && filteredContacts.length > 0 ? (
-                  <View style={styles.suggestionList}>
-                    {filteredContacts.map((contact) => (
-                      <Pressable
-                        key={contact.contact_id}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Add ${contact.display_name}`}
-                        onPress={() => toggleParticipant(contact.contact_id)}
-                        style={({ pressed }) => [
-                          styles.suggestionRow,
-                          pressed && styles.suggestionPressed,
-                        ]}
-                      >
-                        <Text style={styles.suggestionText}>{contact.display_name}</Text>
-                        <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
+                <ContactSearchSuggestions
+                  query={participantQuery}
+                  contacts={availableContacts}
+                  groups={contactGroups}
+                  selectedContactIds={selectedParticipantIdSet}
+                  includeGroups
+                  maxResults={5}
+                  onSelectContact={(contact) => toggleParticipant(contact.contact_id)}
+                  onSelectGroup={addParticipantGroup}
+                />
               </>
             ) : readOnlyParticipants.length > 0 ? (
               <View style={styles.chipRow}>

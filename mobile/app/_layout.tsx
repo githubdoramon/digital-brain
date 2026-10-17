@@ -334,6 +334,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
+          name="contact-groups/[groupId]/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
           name="contacts/[contactId]/relationships"
           options={{
             headerShown: true,

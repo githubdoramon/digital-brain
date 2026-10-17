@@ -201,17 +201,11 @@ def create_contacts_router(
 
     @router.get("/contact-groups")
     @router.get("/mobile/contact-groups")
-    def list_contact_groups(
-        include_archived: bool = Query(default=False, alias="includeArchived"),
-        user: dict = Depends(get_current_user),
-    ):
+    def list_contact_groups(user: dict = Depends(get_current_user)):
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        groups = contact_groups_service.list_contact_groups(
-            user_email,
-            include_archived=include_archived,
-        )
+        groups = contact_groups_service.list_contact_groups(user_email)
         return {"groups": groups}
 
     @router.post("/contact-groups", response_model=ContactGroupOut)
@@ -250,16 +244,34 @@ def create_contacts_router(
             raise HTTPException(status_code=404, detail="Contact group not found")
         return ContactGroupOut(**group)
 
-    @router.delete("/contact-groups/{group_id}")
-    @router.delete("/mobile/contact-groups/{group_id}")
-    def archive_contact_group(group_id: str, user: dict = Depends(get_current_user)):
+    @router.put("/contact-groups/{group_id}", response_model=ContactGroupOut)
+    @router.put("/mobile/contact-groups/{group_id}", response_model=ContactGroupOut)
+    def update_contact_group(
+        group_id: str, payload: ContactGroupIn, user: dict = Depends(get_current_user)
+    ):
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        archived = contact_groups_service.archive_contact_group(user_email, group_id)
-        if not archived:
+        group = contact_groups_service.update_contact_group(
+            user_email=user_email,
+            group_id=group_id,
+            name=payload.name,
+            member_contact_ids=list(payload.member_contact_ids or []),
+        )
+        if not group:
             raise HTTPException(status_code=404, detail="Contact group not found")
-        return {"ok": True}
+        return ContactGroupOut(**group)
+
+    @router.delete("/contact-groups/{group_id}")
+    @router.delete("/mobile/contact-groups/{group_id}")
+    def delete_contact_group(group_id: str, user: dict = Depends(get_current_user)):
+        user_email = user.get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        deleted = contact_groups_service.delete_contact_group(user_email, group_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Contact group not found")
+        return {"ok": True, "deleted": True}
 
     @router.get("/contacts/merge-candidates")
     def list_merge_candidates(user: dict = Depends(get_current_user)):

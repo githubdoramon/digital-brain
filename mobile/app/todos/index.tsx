@@ -19,6 +19,7 @@ import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Card } from '@/components/Card';
+import { ContactSearchSuggestions } from '@/components/ContactSearchSuggestions';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -29,7 +30,7 @@ import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
-import { matchesContactSearch } from '@/utils/contactSearch';
+import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
 import { formatDateOnlyLocal } from '@/utils/date';
 
 const dueDatePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -125,6 +126,7 @@ function NewTodoContent() {
   const [loadingTodo, setLoadingTodo] = React.useState(false);
   const [todoStatus, setTodoStatus] = React.useState('pending');
   const [contacts, setContacts] = React.useState<Contact[]>([]);
+  const [contactGroups, setContactGroups] = React.useState<ContactGroup[]>([]);
   const [contactQuery, setContactQuery] = React.useState('');
   const [selectedContacts, setSelectedContacts] = React.useState<Contact[]>([]);
   const [eventQuery, setEventQuery] = React.useState('');
@@ -189,15 +191,6 @@ function NewTodoContent() {
     [currentSnapshot, initialSnapshot]
   );
 
-  const filteredContacts = React.useMemo(() => {
-    const trimmed = contactQuery.trim();
-    if (!trimmed) return [];
-    return contacts
-      .filter((contact) => matchesContactSearch(contact, trimmed))
-      .filter((contact) => !selectedContactIds.has(contact.contact_id))
-      .slice(0, 6);
-  }, [contactQuery, contacts, selectedContactIds]);
-
   React.useEffect(() => {
     let mounted = true;
     (async () => {
@@ -212,6 +205,20 @@ function NewTodoContent() {
         }
       }
     })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let mounted = true;
+    void fetchContactGroups()
+      .then((groups) => {
+        if (mounted) setContactGroups(groups);
+      })
+      .catch(() => {
+        if (mounted) setContactGroups([]);
+      });
     return () => {
       mounted = false;
     };
@@ -317,6 +324,23 @@ function NewTodoContent() {
     });
     setContactQuery('');
   }, []);
+
+  const handleAddContactGroup = React.useCallback((group: ContactGroup) => {
+    const contactsById = new Map(contacts.map((contact) => [contact.contact_id, contact]));
+    setSelectedContacts((previous) => {
+      const next = [...previous];
+      const seen = new Set(previous.map((contact) => contact.contact_id));
+      group.members.forEach((member) => {
+        const contact = contactsById.get(member.contact_id);
+        if (contact && !seen.has(contact.contact_id)) {
+          seen.add(contact.contact_id);
+          next.push(contact);
+        }
+      });
+      return next;
+    });
+    setContactQuery('');
+  }, [contacts]);
 
   const handleRemoveContact = React.useCallback((contactId: string) => {
     setSelectedContacts((prev) => prev.filter((contact) => contact.contact_id !== contactId));
@@ -508,20 +532,15 @@ function NewTodoContent() {
               placeholder="Search contacts"
               placeholderTextColor={theme.colors.mutedInk}
             />
-            {filteredContacts.length > 0 ? (
-              <View style={styles.suggestionList}>
-                {filteredContacts.map((contact) => (
-                  <Pressable
-                    key={contact.contact_id}
-                    onPress={() => handleAddContact(contact)}
-                    style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
-                  >
-                    <Text style={styles.suggestionText}>{contact.display_name}</Text>
-                    <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
+            <ContactSearchSuggestions
+              query={contactQuery}
+              contacts={contacts}
+              groups={contactGroups}
+              selectedContactIds={selectedContactIds}
+              includeGroups
+              onSelectContact={handleAddContact}
+              onSelectGroup={handleAddContactGroup}
+            />
             {selectedContacts.length > 0 ? (
               <View style={styles.chipRow}>
                 {selectedContacts.map((contact) => (

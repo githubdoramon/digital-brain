@@ -295,7 +295,6 @@ def resolve_group_members(
             SELECT cg.group_id, cg.name, cg.description, cg.source, cg.confirmed
             FROM contact_groups cg
             WHERE cg.owner_contact_id = %s
-              AND cg.status = 'active'
               AND (
                 unaccent(LOWER(cg.name)) = %s
                 OR EXISTS (
@@ -358,33 +357,21 @@ def resolve_group_members(
     }
 
 
-def list_contact_groups(user_email: str, *, include_archived: bool = False) -> list[dict[str, Any]]:
+def list_contact_groups(user_email: str) -> list[dict[str, Any]]:
     owner_contact_id = contacts.get_self_contact_id(user_email)
     if not owner_contact_id:
         return []
 
     with get_conn() as conn, conn.cursor() as cur:
-        if include_archived:
-            cur.execute(
-                """
-                SELECT group_id, name, description, status, source, confirmed
-                FROM contact_groups
-                WHERE owner_contact_id = %s
-                ORDER BY updated_at DESC
-                """,
-                (owner_contact_id,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT group_id, name, description, status, source, confirmed
-                FROM contact_groups
-                WHERE owner_contact_id = %s
-                  AND status = 'active'
-                ORDER BY updated_at DESC
-                """,
-                (owner_contact_id,),
-            )
+        cur.execute(
+            """
+            SELECT group_id, name, description, status, source, confirmed
+            FROM contact_groups
+            WHERE owner_contact_id = %s
+            ORDER BY updated_at DESC
+            """,
+            (owner_contact_id,),
+        )
         rows = cur.fetchall() or []
 
     groups: list[dict[str, Any]] = []
@@ -419,7 +406,63 @@ def get_contact_group(user_email: str, group_id: str) -> dict[str, Any] | None:
     return serialized or None
 
 
-def archive_contact_group(user_email: str, group_id: str) -> bool:
+def update_contact_group(
+    *, user_email: str, group_id: str, name: str, member_contact_ids: list[str]
+) -> dict[str, Any] | None:
+    owner_contact_id = contacts.get_self_contact_id(user_email)
+    if not owner_contact_id:
+        return None
+
+    group_name = str(name or "").strip()
+    if not group_name:
+        return None
+
+    member_ids = list(dict.fromkeys(str(item).strip() for item in member_contact_ids if str(item).strip()))
+    embedding = _embed_group(group_name, None, [])
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT group_id
+            FROM contact_groups
+            WHERE owner_contact_id = %s AND group_id = %s
+            FOR UPDATE
+            """,
+            (owner_contact_id, group_id),
+        )
+        if not cur.fetchone():
+            return None
+
+        cur.execute(
+            """
+            UPDATE contact_groups
+            SET name = %s,
+                description = NULL,
+                source = 'manual',
+                confirmed = TRUE,
+                group_embed = %s,
+                status = 'active',
+                updated_at = NOW()
+            WHERE owner_contact_id = %s
+              AND group_id = %s
+            """,
+            (group_name, embedding, owner_contact_id, group_id),
+        )
+        cur.execute("DELETE FROM group_aliases WHERE group_id = %s", (group_id,))
+        cur.execute("DELETE FROM contact_group_members WHERE group_id = %s", (group_id,))
+        for contact_id in member_ids:
+            cur.execute(
+                """
+                INSERT INTO contact_group_members (group_id, contact_id, added_via, confidence)
+                VALUES (%s, %s, 'manual', 1.0)
+                """,
+                (group_id, contact_id),
+            )
+        conn.commit()
+    return get_contact_group(user_email, group_id)
+
+
+def delete_contact_group(user_email: str, group_id: str) -> bool:
     owner_contact_id = contacts.get_self_contact_id(user_email)
     if not owner_contact_id:
         return False
@@ -427,16 +470,14 @@ def archive_contact_group(user_email: str, group_id: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE contact_groups
-            SET status = 'archived', updated_at = NOW()
-            WHERE owner_contact_id = %s
-              AND group_id = %s
+            DELETE FROM contact_groups
+            WHERE owner_contact_id = %s AND group_id = %s
             """,
             (owner_contact_id, group_id),
         )
-        updated = cur.rowcount > 0
+        deleted = cur.rowcount > 0
         conn.commit()
-    return updated
+    return deleted
 
 
 def create_contact_group(

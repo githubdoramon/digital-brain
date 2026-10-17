@@ -1197,7 +1197,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             description=(
                 "Selector-based contact resolution and reusable contact-group management. "
                 "Use this when the user refers to collections of people (for example domain/company/team/group) "
-                "or when creating/listing/contact-group records."
+                "or when creating, listing, or deleting contact groups."
                 "Do not use this for pure relationship grouping (for example someone's family members), as that comes from 'resolve_contacts'."
             ),
             parameters=[
@@ -1206,7 +1206,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="string",
                     description=(
                         "Operation to perform: `select`, `list_groups`, `get_group`, "
-                        "`create_group`, or `archive_group`."
+                        "`create_group`, or `delete_group`."
                     ),
                     required=False,
                     default="select",
@@ -1215,7 +1215,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                         "list_groups",
                         "get_group",
                         "create_group",
-                        "archive_group",
+                        "delete_group",
                     ],
                 ),
                 ToolParameter(
@@ -1245,7 +1245,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="group_id",
                     type="string",
-                    description="Group id for `get_group` or `archive_group`.",
+                    description="Group id for `get_group` or `delete_group`.",
                     required=False,
                 ),
                 ToolParameter(
@@ -1275,13 +1275,6 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                 ),
                 ToolParameter(
-                    name="include_archived",
-                    type="boolean",
-                    description="Include archived groups for `list_groups`.",
-                    required=False,
-                    default=False,
-                ),
-                ToolParameter(
                     name="limit",
                     type="integer",
                     description="Maximum contacts returned for `select`.",
@@ -1291,7 +1284,6 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     validator=validate_positive_int,
                 ),
             ],
-            constraints=["read_only"],
         )
     )
 

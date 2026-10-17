@@ -378,10 +378,7 @@ def handle_select_contacts(
         }
 
     if action is SelectContactsAction.LIST_GROUPS:
-        include_archived = bool(args.get("include_archived", False))
-        groups = contact_groups.list_contact_groups(
-            runtime_email, include_archived=include_archived
-        )
+        groups = contact_groups.list_contact_groups(runtime_email)
         return {
             "action": SelectContactsAction.LIST_GROUPS.value,
             "count": len(groups),
@@ -426,14 +423,14 @@ def handle_select_contacts(
             "group": created,
         }
 
-    if action is SelectContactsAction.ARCHIVE_GROUP:
+    if action is SelectContactsAction.DELETE_GROUP:
         group_id = str(args.get("group_id") or "").strip()
         if not group_id:
-            return {"error": "group_id is required for archive_group"}
-        archived = contact_groups.archive_contact_group(runtime_email, group_id)
+            return {"error": "group_id is required for delete_group"}
+        deleted = contact_groups.delete_contact_group(runtime_email, group_id)
         return {
-            "action": SelectContactsAction.ARCHIVE_GROUP.value,
-            "archived": archived,
+            "action": SelectContactsAction.DELETE_GROUP.value,
+            "deleted": deleted,
             "group_id": group_id,
         }
 
