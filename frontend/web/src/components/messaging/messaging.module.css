@@ -1,0 +1,210 @@
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px 16px 80px;
+  color: #17202c;
+}
+.header,
+.row,
+.messageHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.header {
+  margin-bottom: 28px;
+}
+.page h1 {
+  font-size: 2.2rem;
+  margin: 6px 0 12px;
+}
+.page h2 {
+  font-size: 1.3rem;
+  margin: 0 0 12px;
+}
+.page h3 {
+  font-size: 1.05rem;
+}
+.eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  color: #526773;
+}
+.muted {
+  color: #596874;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.status {
+  border: 1px solid #c7dfd4;
+  border-radius: 24px;
+  padding: 8px 16px;
+  background: #edf7f1;
+  color: #245a41;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #dce2e5;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+}
+.page button,
+.page select,
+.page input {
+  font: inherit;
+  border: 1px solid #c5cfd5;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: white;
+  color: #17202c;
+  max-width: 100%;
+}
+.page button {
+  cursor: pointer;
+}
+.page button:hover {
+  background: #eef5f2;
+}
+.page button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.page button[aria-current="page"] {
+  color: white;
+  background: #235c4b;
+  border-color: #235c4b;
+}
+.page :is(input, select, button):focus-visible {
+  outline: 3px solid #83b9a5;
+  outline-offset: 2px;
+}
+.page input {
+  min-width: 220px;
+  flex: 1;
+}
+.page select {
+  min-width: 160px;
+}
+.panel {
+  background: white;
+  border: 1px solid #dce2e5;
+  border-radius: 12px;
+  padding: 24px;
+}
+.page hr {
+  border: 0;
+  border-top: 1px solid #e3e8eb;
+  margin: 28px 0;
+}
+.pairing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 32px;
+  margin-top: 24px;
+}
+.pairing > div {
+  flex: 1;
+  min-width: 220px;
+}
+.pairing img {
+  max-width: 100%;
+  height: auto;
+  background: white;
+}
+.person {
+  border-top: 1px solid #e3e8eb;
+  padding: 20px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.person:first-of-type {
+  margin-top: 24px;
+}
+.picker {
+  border: 1px solid #9bb8aa;
+  background: #f7faf8;
+  border-radius: 10px;
+  padding: 20px;
+  margin-top: 24px;
+}
+.contactList {
+  max-height: 260px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+}
+.contactList button {
+  text-align: left;
+}
+.picker form,
+.picker label {
+  display: grid;
+  gap: 12px;
+}
+.message {
+  border-top: 1px solid #e3e8eb;
+  padding: 20px 0;
+}
+.messageHeading time {
+  color: #596874;
+  font-size: 0.8rem;
+}
+.body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.error {
+  color: #9b2929;
+  background: #fff1f0;
+  padding: 16px;
+  border-radius: 8px;
+}
+@media (max-width: 600px) {
+  .panel {
+    padding: 16px;
+  }
+  .row > input,
+  .row > select {
+    width: 100%;
+  }
+}
+
+.passwordForm,
+.passwordForm label {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.providers a {
+  padding: 10px 18px;
+  border: 1px solid #c5cfd5;
+  border-radius: 8px;
+  background: white;
+  color: #17202c;
+  text-decoration: none;
+}
+.providers a[aria-current="page"] {
+  color: white;
+  background: #235c4b;
+  border-color: #235c4b;
+}
+.providers a:focus-visible {
+  outline: 3px solid #83b9a5;
+  outline-offset: 2px;
+}

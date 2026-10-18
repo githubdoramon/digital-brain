@@ -32,6 +32,7 @@ const secondaryItems: NavItem[] = [
   { href: "/evals", label: "Evals" },
   { href: "/system", label: "System Status" },
   { href: "/system/calendars", label: "Calendar Sync" },
+  { href: "/system/messengers", label: "Messengers" },
   { href: "/tools", label: "Tools" },
   { href: "/robots", label: "Robots" },
 ];

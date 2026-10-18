@@ -6,6 +6,22 @@
 
 The LLM suggests actions, but the runtime enforces contracts, validates tool usage, and decides whether to continue, escalate, clarify, or stop.
 
+## Messaging Memory
+
+[MESSAGING_MEMORY.md](MESSAGING_MEMORY.md) records the agreed direction for a
+personal messaging archive, external identity/contact links, projects, temporal
+knowledge, and proactive proposed items. [WHATSAPP_INGESTION.md](WHATSAPP_INGESTION.md)
+defines the first-connector plan: Tryx Python bindings over `whatsapp-rust` in the
+existing orchestrator container, with live capture and a separate background
+history worker feeding the same durable archive pipeline. Native/history capture
+guarantees remain to be verified during implementation.
+The first archive milestone is implemented with a managed Tryx Python child in
+the existing container, authenticated pairing/status, identity linking, durable
+post-callback staging, lexical search, and bounded message inspection. Before-ACK
+capture, live account coverage, and the later knowledge/project/intelligence
+extensions are not established by this milestone; see the implementation boundary
+in the connector document.
+
 ## Runtime Layers
 
 ```mermaid
@@ -168,3 +184,7 @@ The mobile proposed-event review screen exposes editable title, summary, local s
   battery and awake counters plus this process's CPU at existing work opportunities;
   device-wide battery counters are not app-attributed energy. See
   `mobile/BACKGROUND_RUNTIME.md` for protocol and system bug-report collection.
+
+Telegram shares the messaging archive and memory-tool path, using official
+MTProto access through Telethon in the existing container. Manage it on web
+System → Messengers → Telegram. See [TELEGRAM_INGESTION.md](TELEGRAM_INGESTION.md).

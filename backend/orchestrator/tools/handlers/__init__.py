@@ -11,6 +11,7 @@ from .memory import (
     handle_get_conversation,
     handle_get_document,
     handle_get_events,
+    handle_get_message,
     handle_search_memories,
     handle_summarize_memories,
 )
@@ -33,6 +34,7 @@ from .web import handle_fetch_web_page, handle_web_search
 HANDLERS = {
     "search_memories": handle_search_memories,
     "get_conversation": handle_get_conversation,
+    "get_message": handle_get_message,
     "get_events": handle_get_events,
     "get_document": handle_get_document,
     "summarize_memories": handle_summarize_memories,

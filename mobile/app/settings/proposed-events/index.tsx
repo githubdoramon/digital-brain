@@ -19,6 +19,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import { ContactPicker } from '@/components/ContactPicker';
 import { EventMediaSuggestionCard } from '@/components/event-draft/EventMediaSuggestionCard';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
@@ -35,8 +36,8 @@ import type {
   EventPhoto,
   EventPlaceOption,
 } from '@/components/event-draft/types';
-import { matchesContactSearch } from '@/utils/contactSearch';
 import { normalizeSearch } from '@/utils/text';
+import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
 
 type ProposedEvent = {
   proposal_id: string;
@@ -173,6 +174,7 @@ export default function ProposedEventsScreen() {
     {},
   );
   const [availableContacts, setAvailableContacts] = React.useState<EventContactOption[]>([]);
+  const [contactGroups, setContactGroups] = React.useState<ContactGroup[]>([]);
   const [availablePlaces, setAvailablePlaces] = React.useState<EventPlaceOption[]>([]);
   const [activePicker, setActivePicker] = React.useState<{
     proposalId: string;
@@ -308,8 +310,9 @@ export default function ProposedEventsScreen() {
     void Promise.all([
       apiFetch('/mobile/contacts', { token }),
       apiFetch('/mobile/places?limit=500', { token }),
+      fetchContactGroups().catch(() => []),
     ])
-      .then(([contactsResponse, placesResponse]) => {
+      .then(([contactsResponse, placesResponse, groupResponse]) => {
         if (!mounted) return;
         setAvailableContacts(
           ((contactsResponse as { contacts?: EventContactOption[] }).contacts || []).filter(
@@ -317,17 +320,27 @@ export default function ProposedEventsScreen() {
           ),
         );
         setAvailablePlaces((placesResponse as { places?: EventPlaceOption[] }).places || []);
+        setContactGroups(groupResponse);
       })
       .catch(() => {
         if (mounted) {
           setAvailableContacts([]);
           setAvailablePlaces([]);
+          setContactGroups([]);
         }
       });
     return () => {
       mounted = false;
     };
   }, [token]);
+
+  const addProposalContacts = React.useCallback((proposalId: string, contactIds: string[]) => {
+    setDraftContactIdsById((current) => ({
+      ...current,
+      [proposalId]: Array.from(new Set([...(current[proposalId] || []), ...contactIds])),
+    }));
+    setParticipantQueryById((current) => ({ ...current, [proposalId]: '' }));
+  }, []);
 
   const refresh = React.useCallback(async () => {
     setRefreshing(true);
@@ -735,18 +748,6 @@ export default function ProposedEventsScreen() {
                     ) : null}
 
                     <Text style={styles.fieldLabel}>People</Text>
-                    <TextInput
-                      value={participantQueryById[proposal.proposal_id] || ''}
-                      onChangeText={(value) =>
-                        setParticipantQueryById((current) => ({
-                          ...current,
-                          [proposal.proposal_id]: value,
-                        }))
-                      }
-                      style={styles.input}
-                      placeholder="Search contacts"
-                      placeholderTextColor={theme.colors.mutedInk}
-                    />
                     {(draftContactIdsById[proposal.proposal_id] || []).length ? (
                       <View style={styles.chipRow}>
                         {(draftContactIdsById[proposal.proposal_id] || []).map((contactId) => {
@@ -777,44 +778,30 @@ export default function ProposedEventsScreen() {
                     ) : (
                       <Text style={styles.helperText}>No people selected.</Text>
                     )}
-                    {participantQueryById[proposal.proposal_id]?.trim() ? (
-                      <View style={styles.suggestionList}>
-                        {availableContacts
-                          .filter(
-                            (contact) =>
-                              !(draftContactIdsById[proposal.proposal_id] || []).includes(
-                                contact.contact_id,
-                              ) &&
-                              matchesContactSearch(
-                                contact,
-                                participantQueryById[proposal.proposal_id] || '',
-                              ),
-                          )
-                          .slice(0, 5)
-                          .map((contact) => (
-                            <Pressable
-                              key={contact.contact_id}
-                              onPress={() => {
-                                setDraftContactIdsById((current) => ({
-                                  ...current,
-                                  [proposal.proposal_id]: [
-                                    ...(current[proposal.proposal_id] || []),
-                                    contact.contact_id,
-                                  ],
-                                }));
-                                setParticipantQueryById((current) => ({
-                                  ...current,
-                                  [proposal.proposal_id]: '',
-                                }));
-                              }}
-                              style={styles.suggestionRow}
-                            >
-                              <Text style={styles.suggestionText}>{contact.display_name}</Text>
-                              <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
-                            </Pressable>
-                          ))}
-                      </View>
-                    ) : null}
+                    <ContactPicker
+                      query={participantQueryById[proposal.proposal_id] || ''}
+                      onQueryChange={(value) =>
+                        setParticipantQueryById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: value,
+                        }))
+                      }
+                      contacts={availableContacts}
+                      groups={contactGroups}
+                      selectedContactIds={new Set(draftContactIdsById[proposal.proposal_id] || [])}
+                      includeGroups
+                      maxResults={5}
+                      inputStyle={styles.input}
+                      onSelectContact={(contact) =>
+                        addProposalContacts(proposal.proposal_id, [contact.contact_id])
+                      }
+                      onSelectGroup={(group) =>
+                        addProposalContacts(
+                          proposal.proposal_id,
+                          group.members.map((member) => member.contact_id),
+                        )
+                      }
+                    />
                     <Text style={styles.fieldLabel}>Title</Text>
                     <TextInput
                       value={draftTitleById[proposal.proposal_id] ?? proposal.suggested_title ?? ''}

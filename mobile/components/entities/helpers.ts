@@ -1,4 +1,10 @@
-import type { DocumentListItem, EntityFilterOption, EntityFilters, EventListItem, PlaceListItem } from './types';
+import type {
+  DocumentListItem,
+  EntityFilterOption,
+  EntityFilters,
+  EventListItem,
+  PlaceListItem,
+} from './types';
 
 export function formatEventDate(value?: string | null): string {
   if (!value) return 'Date TBD';
@@ -59,7 +65,9 @@ export function formatDocumentSubtitle(document: DocumentListItem): string {
   return 'No description yet';
 }
 
-export function buildFilterOptionMaps(options: EntityFilterOption[]): Map<string, EntityFilterOption> {
+export function buildFilterOptionMaps(
+  options: EntityFilterOption[],
+): Map<string, EntityFilterOption> {
   return new Map(options.map((option) => [`${option.kind}:${option.id}`, option]));
 }
 
@@ -84,5 +92,10 @@ export function buildActiveFilterChips(
 }
 
 export function countActiveFilters(filters: EntityFilters): number {
-  return filters.contactIds.length + filters.placeIds.length + filters.eventIds.length;
+  return (
+    filters.contactIds.length +
+    filters.placeIds.length +
+    filters.eventIds.length +
+    Number(filters.groupsOnly)
+  );
 }

@@ -56,3 +56,8 @@ backend/orchestrator/storage/glasses-media/
 
 # Private at-most-once glasses command receipts
 backend/orchestrator/storage/glasses-commands/
+
+# Private WhatsApp linked-device keys (archive remains in PostgreSQL)
+backend/orchestrator/storage/whatsapp/
+
+backend/orchestrator/storage/telegram/

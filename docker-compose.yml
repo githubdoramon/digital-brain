@@ -16,6 +16,7 @@ services:
       retries: 30
 
   orchestrator:
+    init: true
     image: appcalipse/digital-brain-orchestrator
     build:
       context: ./backend/orchestrator
@@ -40,6 +41,8 @@ services:
       - ./backend/orchestrator/storage/glasses-media:/app/storage/glasses-media
       - ./backend/orchestrator/storage/glasses-commands:/app/storage/glasses-commands
       - ./backend/orchestrator/storage/whisper-models:/app/storage/whisper-models
+      - ./backend/orchestrator/storage/whatsapp:/app/storage/whatsapp
+      - ./backend/orchestrator/storage/telegram:/app/storage/telegram
 
   frontend:
     build:

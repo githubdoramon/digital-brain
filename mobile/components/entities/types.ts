@@ -5,6 +5,7 @@ export type EntityFilters = {
   placeIds: string[];
   eventIds: string[];
   includeFutureEvents: boolean;
+  groupsOnly: boolean;
 };
 
 export type EntityFilterOption = {
@@ -86,6 +87,7 @@ export const EMPTY_ENTITY_FILTERS: EntityFilters = {
   placeIds: [],
   eventIds: [],
   includeFutureEvents: false,
+  groupsOnly: false,
 };
 
 export const ENTITY_META: Record<

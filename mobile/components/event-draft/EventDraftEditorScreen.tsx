@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card } from '@/components/Card';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
-import { ContactSearchSuggestions } from '@/components/ContactSearchSuggestions';
+import { ContactPicker } from '@/components/ContactPicker';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -461,7 +461,7 @@ export function EventDetailsForm({
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
         style={styles.screen}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
       >
         <Animated.ScrollView
@@ -470,7 +470,9 @@ export function EventDetailsForm({
           })}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="none"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           contentContainerStyle={[
             styles.content,
             {
@@ -817,14 +819,6 @@ export function EventDetailsForm({
             <Text style={styles.label}>Participants</Text>
             {editable ? (
               <>
-                <TextInput
-                  value={participantQuery}
-                  onChangeText={setParticipantQuery}
-                  placeholder="Search contacts"
-                  placeholderTextColor={theme.colors.mutedInk}
-                  style={styles.input}
-                />
-
                 {selectedParticipants.length > 0 ? (
                   <View style={styles.chipRow}>
                     {selectedParticipants.map((participant) => (
@@ -844,13 +838,16 @@ export function EventDetailsForm({
                   <Text style={styles.helperText}>No participants selected.</Text>
                 )}
 
-                <ContactSearchSuggestions
+                <ContactPicker
                   query={participantQuery}
+                  onQueryChange={setParticipantQuery}
                   contacts={availableContacts}
                   groups={contactGroups}
                   selectedContactIds={selectedParticipantIdSet}
                   includeGroups
                   maxResults={5}
+                  placeholder="Search contacts"
+                  inputStyle={styles.input}
                   onSelectContact={(contact) => toggleParticipant(contact.contact_id)}
                   onSelectGroup={addParticipantGroup}
                 />

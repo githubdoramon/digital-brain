@@ -22,6 +22,7 @@ import google_calendar_sync_jobs
 import meeting_transcript_jobs
 import microsoft_calendar_sync_jobs
 import proposed_event_jobs
+import whatsapp_runtime
 from db import get_conn
 from db_migrations import run_pending_migrations
 from llm_helpers import warm_configured_chat_models
@@ -44,6 +45,7 @@ from routes.glasses_commands import create_glasses_commands_router
 from routes.glasses_media import create_glasses_media_router
 from routes.glasses_speech_eval import create_glasses_speech_eval_router
 from routes.google_calendar import create_google_calendar_router
+from routes.messaging import create_messaging_router
 from routes.microsoft_calendar import create_microsoft_calendar_router
 from routes.news import create_news_router
 from routes.places import create_places_router
@@ -166,9 +168,11 @@ async def lifespan(_app: FastAPI):
     proposed_event_jobs.start_worker()
     google_calendar_sync_jobs.start_worker()
     microsoft_calendar_sync_jobs.start_worker()
+    whatsapp_runtime.start_worker()
     try:
         yield
     finally:
+        whatsapp_runtime.stop_worker()
         google_calendar_sync_jobs.stop_worker()
         microsoft_calendar_sync_jobs.stop_worker()
         proposed_event_jobs.stop_worker()
@@ -192,6 +196,7 @@ api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())
 api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
+api.include_router(create_messaging_router())
 api.include_router(create_places_router())
 api.include_router(create_proposed_events_router())
 api.include_router(create_proposals_router())

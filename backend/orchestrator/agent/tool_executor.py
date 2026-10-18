@@ -20,6 +20,7 @@ from .state import AgentState, ToolCallRecord
 logger = get_runtime_logger(__name__)
 
 PARALLEL_SAFE_TOOLS = {
+    "get_message",
     "get_conversation",
     "search_memories",
     "get_events",
@@ -30,6 +31,7 @@ PARALLEL_SAFE_TOOLS = {
 }
 
 DEDUPLICATION_SAFE_TOOLS = {
+    "get_message",
     "get_conversation",
     "search_memories",
     "get_events",
@@ -1024,6 +1026,10 @@ class ToolExecutionCoordinator:
             if row.get("kind") == "conversation":
                 for key in ("thread_id", "message_id", "role", "created_at", "source_items"):
                     compact_row[key] = row.get(key)
+            if row.get("kind") == "message":
+                for key in ("message_id", "conversation_id", "sender_name", "sender_external_id", "provider",
+                            "created_at", "outgoing", "deleted", "context", "attachments"):
+                    compact_row[key] = row.get(key)
             snippet = self._truncate_text(row.get("snippet"), snippet_limit)
             summary = self._truncate_text(row.get("summary"), summary_limit)
             if snippet:
@@ -1266,6 +1272,14 @@ class ToolExecutionCoordinator:
             payload = self._compact_get_document_result(result, aggressive=aggressive)
         elif tool_name == "get_conversation":
             payload = self._compact_get_conversation_result(result, aggressive=aggressive)
+        elif tool_name == "get_message" and isinstance(result.get("conversation"), dict):
+            conversation = result["conversation"]
+            target = conversation.get("message_id")
+            rows = []
+            for row in conversation.get("messages", []):
+                cap = (6000 if aggressive else 12000) if row.get("message_id") == target else 1200
+                rows.append({**row, "body": self._truncate_text(row.get("body"), cap)})
+            payload = {"conversation": {**conversation, "messages": rows}}
         elif tool_name == "get_events":
             payload = self._compact_get_events_result(result, args=args, aggressive=aggressive)
         elif tool_name == "summarize_memories":
@@ -1299,7 +1313,7 @@ class ToolExecutionCoordinator:
         args: dict[str, Any],
         result: dict[str, Any],
     ) -> str:
-        if tool_name in {"get_document", "get_conversation"}:
+        if tool_name in {"get_document", "get_conversation", "get_message"}:
             return "high"
         if tool_name == "get_events" and str(args.get("action") or "").strip().lower() == "by_ids":
             return "high"
@@ -1350,6 +1364,8 @@ class ToolExecutionCoordinator:
         labels: list[str] = []
         for item in items:
             if not isinstance(item, dict):
+                continue
+            if item.get("kind") == "message":
                 continue
             label = str(item.get("title") or item.get("name") or "").strip()
             if not label:

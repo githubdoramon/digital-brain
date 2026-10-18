@@ -69,7 +69,7 @@ def handle_search_memories(
                             "Removed self contact from document-oriented search scope to avoid over-constraining legacy documents"
                         )
 
-    sources = set(args.get("sources") or ["event", "document", "conversation"])
+    sources = set(args.get("sources") or ["event", "document", "conversation", "message"])
     search_result = (
         retrieval.search_memories(
             query,
@@ -110,6 +110,23 @@ def handle_search_memories(
                 results, matches, limit=limit, sort_order=sort_order
             )
 
+    if "message" in sources and kwargs.get("user_email") and not tags:
+        import conversation_search
+        import messaging_archive
+
+        matches = messaging_archive.search(
+            kwargs["user_email"], query, contact_ids=contact_ids,
+            limit=min(limit or 100, 100), time_start=time_start, time_end=time_end,
+        )
+        message_results = [{
+            **row, "id": row["message_id"], "kind": "message",
+            "title": row["conversation_title"] or f"{row['provider'].title()} conversation",
+            "snippet": row["body"][:1200], "created_at": row["sent_at"].isoformat(),
+        } for row in matches]
+        results = conversation_search.merge_memory_results(
+            results, message_results, limit=limit, sort_order=sort_order,
+        )
+
     results = results if limit is None else results[:limit]
     # Update state if provided
     if state is not None and results:
@@ -119,6 +136,25 @@ def handle_search_memories(
     if conversation_scope_note:
         output["conversation_scope_note"] = conversation_scope_note
     return output
+
+
+def handle_get_message(args: dict[str, Any], state=None, **kwargs) -> dict[str, Any]:
+    """Read attributed external message evidence with bounded neighboring context."""
+    import messaging_archive
+
+    owner = str(kwargs.get("user_email") or "")
+    if not owner:
+        return {"conversation": None}
+    try:
+        result = messaging_archive.message_context(owner, args["message_id"])
+    except LookupError:
+        return {"conversation": None}
+    if state is not None:
+        state.remember_information_candidate(
+            kind="message", candidate_id=args["message_id"], inspected=True,
+            source_tool="get_message", metadata={"conversation_id": result["conversation_id"]},
+        )
+    return {"conversation": result}
 
 
 def handle_get_conversation(args: dict[str, Any], state=None, **kwargs) -> dict[str, Any]:

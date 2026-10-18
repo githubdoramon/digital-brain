@@ -708,6 +708,8 @@ export default function ContactsPage() {
         </p>
       </div>
 
+      <Link href="/system/messengers?view=people">Link messenger identities to contacts →</Link>
+
       {/* Status Messages */}
       {status.kind === "error" && (
         <div
@@ -1137,6 +1139,7 @@ export default function ContactsPage() {
                         justifyContent: "flex-end",
                       }}
                     >
+                      <Link href={`/system/messengers?view=people&contact_id=${encodeURIComponent(contact.contact_id)}`}>Messenger links</Link>
                       <button
                         onClick={() => openEditModal(contact)}
                         style={{

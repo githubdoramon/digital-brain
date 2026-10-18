@@ -3,10 +3,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,17 +17,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
-import {
-  CollapsingTopBar,
-  COLLAPSING_CONTENT_TOP_PADDING,
-  COLLAPSING_TOP_BAR_HEIGHT,
-} from '@/components/CollapsingTopBar';
+import { ContactPicker, type ContactPickerEntry } from '@/components/ContactPicker';
 import { type ContactGroup, type ContactGroupMember } from '@/utils/contactGroups';
-import { matchesContactSearch } from '@/utils/contactSearch';
 import { theme } from '@/theme';
-import { type ContactSearchEntry } from '@/components/ContactSearchSuggestions';
 
-type Contact = ContactSearchEntry & { emails?: string[]; phones?: string[] };
+type Contact = ContactPickerEntry & { emails?: string[]; phones?: string[] };
 
 function normalizeRouteParam(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value)?.trim() ?? '';
@@ -39,7 +33,6 @@ export default function ContactGroupEditorScreen() {
   const isCreating = !groupId || groupId === 'new';
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const scrollY = React.useRef(new Animated.Value(0)).current;
   const [name, setName] = React.useState('');
   const [query, setQuery] = React.useState('');
   const [contacts, setContacts] = React.useState<Contact[]>([]);
@@ -82,15 +75,6 @@ export default function ContactGroupEditorScreen() {
     () => new Set(members.map((member) => member.contact_id)),
     [members],
   );
-  const matchingContacts = React.useMemo(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return [];
-    return contacts
-      .filter((contact) => !memberIds.has(contact.contact_id))
-      .filter((contact) => matchesContactSearch(contact, trimmed))
-      .slice(0, 8);
-  }, [contacts, memberIds, query]);
-
   const handleAddMember = React.useCallback((contact: Contact) => {
     setMembers((previous) => {
       if (previous.some((member) => member.contact_id === contact.contact_id)) return previous;
@@ -159,32 +143,39 @@ export default function ContactGroupEditorScreen() {
 
   return (
     <View style={styles.screen}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+        >
+          <Ionicons name="arrow-back" size={22} color={theme.colors.ink} />
+        </Pressable>
+        <Text style={styles.headerTitle}>{isCreating ? 'Create a group' : 'Edit group'}</Text>
+        <View style={styles.headerSpacer} />
+      </View>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <Animated.ScrollView
+        <ScrollView
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
+              paddingTop: 12,
               paddingBottom: insets.bottom + 116,
             },
           ]}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="none"
           automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
-          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-            useNativeDriver: false,
-          })}
-          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.intro}>
             <View style={styles.groupMark}>
               <Ionicons name="people" size={22} color={theme.colors.accentDeep} />
             </View>
-            <Text style={styles.title}>{isCreating ? 'Create a group' : 'Edit group'}</Text>
             <Text style={styles.subtitle}>Keep the people you often choose together.</Text>
           </View>
 
@@ -253,57 +244,20 @@ export default function ContactGroupEditorScreen() {
             )}
 
             <Text style={[styles.label, styles.searchLabel]}>Add people</Text>
-            <View style={styles.searchWrap}>
-              <Ionicons name="search-outline" size={18} color={theme.colors.mutedInk} />
-              <TextInput
-                value={query}
-                onChangeText={(value) => {
-                  setQuery(value);
-                  setError(null);
-                }}
-                placeholder="Search contacts"
-                placeholderTextColor={theme.colors.mutedInk}
-                style={styles.searchInput}
-                returnKeyType="search"
-              />
-              {query ? (
-                <Pressable
-                  onPress={() => setQuery('')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Clear search"
-                >
-                  <Ionicons name="close-circle" size={18} color={theme.colors.mutedInk} />
-                </Pressable>
-              ) : null}
-            </View>
-            {matchingContacts.length > 0 ? (
-              <View style={styles.suggestions}>
-                {matchingContacts.map((contact) => (
-                  <Pressable
-                    key={contact.contact_id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Add ${contact.display_name}`}
-                    onPress={() => handleAddMember(contact)}
-                    style={({ pressed }) => [styles.suggestion, pressed && styles.pressed]}
-                  >
-                    <View style={styles.memberAvatar}>
-                      <Text style={styles.memberInitial}>
-                        {contact.display_name.trim().slice(0, 1).toUpperCase() || '?'}
-                      </Text>
-                    </View>
-                    <View style={styles.suggestionCopy}>
-                      <Text style={styles.memberName}>{contact.display_name}</Text>
-                      <Text style={styles.helper}>
-                        {contact.emails?.[0] || contact.phones?.[0] || 'Contact'}
-                      </Text>
-                    </View>
-                    <Ionicons name="add-circle-outline" size={22} color={theme.colors.accentDeep} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : query.trim() ? (
-              <Text style={styles.noResults}>No matching contacts.</Text>
-            ) : null}
+            <ContactPicker
+              query={query}
+              onQueryChange={(value) => {
+                setQuery(value);
+                setError(null);
+              }}
+              contacts={contacts.filter((contact) => !memberIds.has(contact.contact_id))}
+              selectedContactIds={memberIds}
+              placeholder="Search contacts"
+              leadingIcon
+              inputContainerStyle={styles.searchWrap}
+              inputStyle={styles.searchInput}
+              onSelectContact={handleAddMember}
+            />
           </Card>
 
           {!loading ? (
@@ -341,14 +295,8 @@ export default function ContactGroupEditorScreen() {
               <Text style={styles.deleteText}>Delete group</Text>
             </Pressable>
           ) : null}
-        </Animated.ScrollView>
+        </ScrollView>
       </KeyboardAvoidingView>
-      <CollapsingTopBar
-        title={isCreating ? 'New group' : 'Group'}
-        secondaryTitle={isCreating ? 'Create a group' : 'Edit group'}
-        scrollY={scrollY}
-        onPressBack={() => router.back()}
-      />
     </View>
   );
 }
@@ -356,6 +304,22 @@ export default function ContactGroupEditorScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.background },
   flex: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingBottom: 8,
+    gap: 12,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 20,
+  },
+  headerTitle: { color: theme.colors.ink, fontSize: 21, fontWeight: '700', letterSpacing: -0.3 },
+  headerSpacer: { flex: 1 },
   content: { paddingHorizontal: 20, gap: 14 },
   intro: { alignItems: 'center', paddingBottom: 6 },
   groupMark: {
@@ -367,14 +331,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 12,
   },
-  title: {
-    color: theme.colors.ink,
-    fontSize: 25,
-    lineHeight: 31,
-    fontWeight: '700',
-    letterSpacing: -0.5,
-  },
-  subtitle: { color: theme.colors.mutedInk, fontSize: 14, marginTop: 5 },
+  subtitle: { color: theme.colors.mutedInk, fontSize: 14, marginTop: 2, textAlign: 'center' },
   loader: { marginVertical: 16 },
   error: { color: theme.colors.accent, fontSize: 13, fontWeight: '600' },
   card: { padding: 18, gap: 10 },
@@ -462,13 +419,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.line,
-  },
-  suggestionCopy: { flex: 1, gap: 2 },
-  noResults: {
-    color: theme.colors.mutedInk,
-    fontSize: 13,
-    paddingHorizontal: 2,
-    paddingVertical: 8,
   },
   saveButton: {
     minHeight: 54,

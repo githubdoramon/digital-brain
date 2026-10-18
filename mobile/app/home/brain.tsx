@@ -1477,7 +1477,8 @@ export function ChatConversationScreen({
     const pendingRun = await loadPendingRun();
     if (!pendingRun?.runId) return;
     const activeThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
-    if (!activeThreadId || pendingRun.threadId !== activeThreadId) {
+    const belongsToMainSession = isMainChat && pendingRun.threadId === null;
+    if (!belongsToMainSession && (!activeThreadId || pendingRun.threadId !== activeThreadId)) {
       return;
     }
 
@@ -1603,8 +1604,8 @@ export function ChatConversationScreen({
     const activeScreenThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
     const relevantPendingRun =
       pendingRun &&
-      activeScreenThreadId &&
-      pendingRun.threadId === activeScreenThreadId
+      ((isMainChat && pendingRun.threadId === null) ||
+        (activeScreenThreadId && pendingRun.threadId === activeScreenThreadId))
         ? pendingRun
         : null;
     if (restored.messages.length > 0 || relevantPendingRun) {
@@ -1630,8 +1631,6 @@ export function ChatConversationScreen({
             )
           : restored.messages;
       });
-    } else {
-      setMessages(starterMessages);
     }
   }, [
     allowed,
@@ -1640,7 +1639,6 @@ export function ChatConversationScreen({
     isBootstrapping,
     isMainChat,
     pendingEventId,
-    starterMessages,
     threadId,
     token,
   ]);
@@ -1854,6 +1852,8 @@ export function ChatConversationScreen({
       )
         return;
       Keyboard.dismiss();
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
       setInput('');
       setComposerMediaAttachments([]);
       setForceScrollNext(true);
@@ -1925,6 +1925,7 @@ export function ChatConversationScreen({
 
       setIsSending(true);
       let activeRunId: string | null = null;
+      let activeRunThreadId = isMainChat ? threadId : threadId ?? initialThreadId;
       try {
         let streamedContent = '';
         let lastStatus = 'Thinking...';
@@ -1940,18 +1941,19 @@ export function ChatConversationScreen({
           uiSubmission,
           mediaAttachments: outboundMediaAttachments.map(toChatMediaAttachmentPayload),
           callbacks: {
-            onSessionInfo: (threadIdFromStream) => {
-              setThreadId((prev) => threadIdFromStream ?? prev);
+            onSessionInfo: async (threadIdFromStream) => {
+              activeRunThreadId = threadIdFromStream ?? activeRunThreadId;
               if (activeRunId) {
-                void savePendingRun({
+                await savePendingRun({
                   runId: activeRunId,
                   pendingMessageId: pendingId,
                   userMessageId,
-                  threadId: threadIdFromStream ?? null,
+                  threadId: activeRunThreadId,
                   question: outboundText,
                   startedAt: Date.now(),
                 });
               }
+              setThreadId((prev) => threadIdFromStream ?? prev);
             },
             onRunId: (runIdFromStream) => {
               activeRunId = runIdFromStream;
@@ -1959,7 +1961,7 @@ export function ChatConversationScreen({
                 runId: runIdFromStream,
                 pendingMessageId: pendingId,
                 userMessageId,
-                threadId: isMainChat ? threadId : (threadId ?? initialThreadId),
+                threadId: activeRunThreadId,
                 question: outboundText,
                 startedAt: Date.now(),
               });

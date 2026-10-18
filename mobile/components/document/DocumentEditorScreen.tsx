@@ -21,10 +21,10 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import { ContactPicker } from '@/components/ContactPicker';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
-import { matchesContactSearch } from '@/utils/contactSearch';
 
 type LinkedContact = {
   contact_id: string;
@@ -102,7 +102,8 @@ function inferMimeTypeFromName(name: string): string {
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.heic')) return 'image/heic';
-  if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (lower.endsWith('.docx'))
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   return 'application/octet-stream';
 }
 
@@ -138,51 +139,6 @@ function buildSnapshot({
     documentDateText: documentDateText.trim(),
     contactIds: selectedContacts.map((contact) => contact.contact_id).sort(),
   };
-}
-
-function ContactSuggestions({
-  contacts,
-  query,
-  selectedIds,
-  onSelect,
-}: {
-  contacts: ContactOption[];
-  query: string;
-  selectedIds: Set<string>;
-  onSelect: (contact: ContactOption) => void;
-}) {
-  const suggestions = React.useMemo(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return [];
-    return contacts
-      .filter((contact) => !selectedIds.has(contact.contact_id))
-      .filter((contact) => matchesContactSearch(contact, trimmed))
-      .slice(0, 6);
-  }, [contacts, query, selectedIds]);
-
-  if (suggestions.length === 0) return null;
-
-  return (
-    <View style={styles.suggestionList}>
-      {suggestions.map((contact) => (
-        <Pressable
-          key={contact.contact_id}
-          accessibilityRole="button"
-          accessibilityLabel={`Add ${contact.display_name}`}
-          onPress={() => onSelect(contact)}
-          style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
-        >
-          <View style={styles.suggestionBody}>
-            <Text style={styles.suggestionTitle}>{contact.display_name}</Text>
-            {contact.aliases?.length ? (
-              <Text style={styles.suggestionMeta}>{contact.aliases.join(', ')}</Text>
-            ) : null}
-          </View>
-          <Ionicons name="person-add-outline" size={18} color={theme.colors.accentDeep} />
-        </Pressable>
-      ))}
-    </View>
-  );
 }
 
 export function DocumentEditorScreen({ mode, documentId }: Props) {
@@ -233,7 +189,9 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
     let active = true;
     (async () => {
       try {
-        const response = (await apiFetch('/mobile/contacts', { token })) as { contacts: ContactOption[] };
+        const response = (await apiFetch('/mobile/contacts', { token })) as {
+          contacts: ContactOption[];
+        };
         if (active) {
           setContacts(response.contacts || []);
         }
@@ -307,11 +265,11 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
     if (isCreate) {
       return Boolean(
         selectedFile ||
-          title.trim() ||
-          description.trim() ||
-          tagsText.trim() ||
-          documentDateText.trim() ||
-          selectedContacts.length,
+        title.trim() ||
+        description.trim() ||
+        tagsText.trim() ||
+        documentDateText.trim() ||
+        selectedContacts.length,
       );
     }
     if (error) {
@@ -445,7 +403,9 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
     } catch (saveError) {
       console.warn('[document-editor] save failed', saveError);
       showError(
-        isCreate ? 'Unable to upload this document right now.' : 'Unable to save document metadata right now.',
+        isCreate
+          ? 'Unable to upload this document right now.'
+          : 'Unable to save document metadata right now.',
       );
     } finally {
       setIsSaving(false);
@@ -466,9 +426,11 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
 
   if (isLoading) {
     return (
-      <View style={[styles.centerState, { paddingTop: insets.top + 96 }]}> 
+      <View style={[styles.centerState, { paddingTop: insets.top + 96 }]}>
         <ActivityIndicator color={theme.colors.accentDeep} />
-        <Text style={styles.stateText}>{isCreate ? 'Preparing editor...' : 'Loading document...'}</Text>
+        <Text style={styles.stateText}>
+          {isCreate ? 'Preparing editor...' : 'Loading document...'}
+        </Text>
       </View>
     );
   }
@@ -499,7 +461,11 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           <Text style={styles.sectionTitle}>{isCreate ? 'File' : 'Document'}</Text>
           {isCreate ? (
             <>
-              <Button label={selectedFile ? 'Choose another file' : 'Choose file'} variant="secondary" onPress={() => void handlePickFile()} />
+              <Button
+                label={selectedFile ? 'Choose another file' : 'Choose file'}
+                variant="secondary"
+                onPress={() => void handlePickFile()}
+              />
               {selectedFile ? (
                 <View style={styles.fileInfoBlock}>
                   <Text style={styles.fileMetaStrong}>{selectedFile.name}</Text>
@@ -511,21 +477,54 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
             </>
           ) : (
             <View style={styles.fileInfoBlock}>
-              <Text style={styles.fileMetaStrong}>{existingDocument?.file_name || 'Document file'}</Text>
-              <Text style={styles.fileMeta}>
-                {[existingDocument?.file_mime || null, formatFileSize(existingDocument?.file_size)].filter(Boolean).join(' - ')}
+              <Text style={styles.fileMetaStrong}>
+                {existingDocument?.file_name || 'Document file'}
               </Text>
-              <Text style={styles.helperText}>Update the metadata and linked contacts for this document.</Text>
+              <Text style={styles.fileMeta}>
+                {[existingDocument?.file_mime || null, formatFileSize(existingDocument?.file_size)]
+                  .filter(Boolean)
+                  .join(' - ')}
+              </Text>
+              <Text style={styles.helperText}>
+                Update the metadata and linked contacts for this document.
+              </Text>
             </View>
           )}
         </Card>
 
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Metadata</Text>
-          <TextInput value={title} onChangeText={setTitle} placeholder="Title" placeholderTextColor={theme.colors.mutedInk} style={styles.input} />
-          <TextInput value={description} onChangeText={setDescription} placeholder="Description" placeholderTextColor={theme.colors.mutedInk} style={[styles.input, styles.multilineInput]} multiline textAlignVertical="top" />
-          <TextInput value={tagsText} onChangeText={setTagsText} placeholder="Tags, comma separated" placeholderTextColor={theme.colors.mutedInk} style={styles.input} />
-          <TextInput value={documentDateText} onChangeText={setDocumentDateText} placeholder="Document date (ISO or parseable date)" placeholderTextColor={theme.colors.mutedInk} style={styles.input} autoCapitalize="none" />
+          <TextInput
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Title"
+            placeholderTextColor={theme.colors.mutedInk}
+            style={styles.input}
+          />
+          <TextInput
+            value={description}
+            onChangeText={setDescription}
+            placeholder="Description"
+            placeholderTextColor={theme.colors.mutedInk}
+            style={[styles.input, styles.multilineInput]}
+            multiline
+            textAlignVertical="top"
+          />
+          <TextInput
+            value={tagsText}
+            onChangeText={setTagsText}
+            placeholder="Tags, comma separated"
+            placeholderTextColor={theme.colors.mutedInk}
+            style={styles.input}
+          />
+          <TextInput
+            value={documentDateText}
+            onChangeText={setDocumentDateText}
+            placeholder="Document date (ISO or parseable date)"
+            placeholderTextColor={theme.colors.mutedInk}
+            style={styles.input}
+            autoCapitalize="none"
+          />
         </Card>
 
         <Card style={styles.sectionCard}>
@@ -551,10 +550,19 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           {selectedContacts.length > 0 ? (
             <Button label="Clear contacts" variant="clear" onPress={handleClearContacts} />
           ) : null}
-          <TextInput value={contactQuery} onChangeText={setContactQuery} placeholder="Search contacts to link" placeholderTextColor={theme.colors.mutedInk} style={styles.input} />
-          <ContactSuggestions contacts={contacts} query={contactQuery} selectedIds={selectedContactIds} onSelect={handleAddContact} />
+          <ContactPicker
+            query={contactQuery}
+            onQueryChange={setContactQuery}
+            contacts={contacts}
+            selectedContactIds={selectedContactIds}
+            placeholder="Search contacts to link"
+            inputStyle={styles.input}
+            onSelectContact={handleAddContact}
+          />
           {!isCreate && selectedContacts.length > 0 ? (
-            <Text style={styles.helperText}>Current links: {formatLinkedContactNames(selectedContacts)}</Text>
+            <Text style={styles.helperText}>
+              Current links: {formatLinkedContactNames(selectedContacts)}
+            </Text>
           ) : null}
         </Card>
       </ScrollView>

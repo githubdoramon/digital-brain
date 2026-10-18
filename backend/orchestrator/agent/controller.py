@@ -2000,7 +2000,7 @@ class AgentController:
         time_start = str(args.get("time_start") or "")
         time_end = str(args.get("time_end") or "")
         sort_order = str(args.get("sort_order") or "relevance").lower()
-        sources = tuple(sorted(args.get("sources") or ["event", "document", "conversation"]))
+        sources = tuple(sorted(args.get("sources") or ["event", "document", "conversation", "message"]))
         return (query, contact_ids, tags, time_start, time_end, sort_order, sources)
 
     def _coerce_limit(self, value: Any) -> int:

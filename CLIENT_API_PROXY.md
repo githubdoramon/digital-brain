@@ -33,3 +33,10 @@ If a web screen calls an endpoint that also supports bearer-token clients, add t
 `/api/orchestrator/...` path to the middleware hybrid auth prefixes so the
 NextAuth session can pass middleware and the proxy route can attach the backend
 authorization header.
+
+WhatsApp and Telegram management live on web System → Messengers and use `/messaging/*`
+through the authenticated frontend proxy (hybrid session/bearer authentication).
+The `provider=whatsapp|telegram` query parameter scopes management calls; requests
+without it default to WhatsApp. `POST /messaging/telegram/password` accepts only an
+authenticated, transient two-step-verification challenge/password.
+Mobile consumes message knowledge through normal search and contact flows.

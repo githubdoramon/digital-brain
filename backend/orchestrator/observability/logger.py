@@ -531,6 +531,9 @@ class AgentLogger:
                 return ""
             formatted = []
             for row in top:
+                if row.get("kind") == "message":
+                    formatted.append("archived message")
+                    continue
                 row_id = str(row.get("id") or "").strip()
                 kind = str(row.get("kind") or "").strip()
                 title = str(row.get("title") or "").strip()

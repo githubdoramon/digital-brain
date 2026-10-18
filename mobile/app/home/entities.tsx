@@ -53,13 +53,22 @@ import {
   type PlaceListItem,
 } from '@/components/entities/types';
 import { RelationshipChips } from '@/components/RelationshipChips';
-import { fetchContactGroups, matchesContactGroupSearch, type ContactGroup } from '@/utils/contactGroups';
+import {
+  fetchContactGroups,
+  matchesContactGroupSearch,
+  type ContactGroup,
+} from '@/utils/contactGroups';
 import { normalizeSearch } from '@/utils/text';
 import { theme } from '@/theme';
 
 const EVENT_PAGE_SIZE = 30;
 type ContactGroupRow = { isContactGroupRow: true; group: ContactGroup };
-type EntityListRow = ContactListItem | ContactGroupRow | PlaceListItem | EventListItem | DocumentListItem;
+type EntityListRow =
+  | ContactListItem
+  | ContactGroupRow
+  | PlaceListItem
+  | EventListItem
+  | DocumentListItem;
 
 function getEventSortTime(event: EventListItem): number {
   if (!event.start_date) return Number.NEGATIVE_INFINITY;
@@ -81,14 +90,32 @@ function appendIds(searchParams: URLSearchParams, key: string, values: string[])
   }
 }
 
-function EntityChip({ kind, selected, onPress }: { kind: EntityKind; selected: boolean; onPress: () => void }) {
+function EntityChip({
+  kind,
+  selected,
+  onPress,
+}: {
+  kind: EntityKind;
+  selected: boolean;
+  onPress: () => void;
+}) {
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.entityChip, selected && styles.entityChipSelected, pressed && styles.entityChipPressed]}
+      style={({ pressed }) => [
+        styles.entityChip,
+        selected && styles.entityChipSelected,
+        pressed && styles.entityChipPressed,
+      ]}
     >
-      <Ionicons name={ENTITY_META[kind].icon} size={16} color={selected ? '#fff' : theme.colors.mutedInk} />
-      <Text style={[styles.entityChipText, selected && styles.entityChipTextSelected]}>{ENTITY_META[kind].label}</Text>
+      <Ionicons
+        name={ENTITY_META[kind].icon}
+        size={16}
+        color={selected ? '#fff' : theme.colors.mutedInk}
+      />
+      <Text style={[styles.entityChipText, selected && styles.entityChipTextSelected]}>
+        {ENTITY_META[kind].label}
+      </Text>
     </Pressable>
   );
 }
@@ -127,8 +154,14 @@ function ContactCard({
         <Pressable
           onPress={onToggleFilter}
           accessibilityRole="button"
-          accessibilityLabel={filterSelected ? 'Remove contact from filter' : 'Add contact to filter'}
-          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+          accessibilityLabel={
+            filterSelected ? 'Remove contact from filter' : 'Add contact to filter'
+          }
+          style={({ pressed }) => [
+            styles.filterToggleButton,
+            filterSelected && styles.filterToggleButtonActive,
+            pressed && styles.filterToggleButtonPressed,
+          ]}
         >
           <Ionicons
             name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
@@ -154,8 +187,12 @@ function ContactGroupCard({ group, onPress }: { group: ContactGroup; onPress: ()
           <Ionicons name="people" size={20} color={theme.colors.teal} />
         </View>
         <View style={styles.cardBody}>
-          <Text numberOfLines={1} style={styles.cardTitle}>{group.name}</Text>
-          <Text style={styles.cardSubtitle}>{group.member_count} {group.member_count === 1 ? 'person' : 'people'}</Text>
+          <Text numberOfLines={1} style={styles.cardTitle}>
+            {group.name}
+          </Text>
+          <Text style={styles.cardSubtitle}>
+            {group.member_count} {group.member_count === 1 ? 'person' : 'people'}
+          </Text>
         </View>
         <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
       </Pressable>
@@ -187,7 +224,11 @@ function PlaceCard({
           onPress={onToggleFilter}
           accessibilityRole="button"
           accessibilityLabel={filterSelected ? 'Remove place from filter' : 'Add place to filter'}
-          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+          style={({ pressed }) => [
+            styles.filterToggleButton,
+            filterSelected && styles.filterToggleButtonActive,
+            pressed && styles.filterToggleButtonPressed,
+          ]}
         >
           <Ionicons
             name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
@@ -216,7 +257,9 @@ function EventCard({
       <View style={styles.rowShell}>
         <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitle}>{String(event.title || '').trim() || 'Untitled event'}</Text>
+            <Text style={styles.cardTitle}>
+              {String(event.title || '').trim() || 'Untitled event'}
+            </Text>
             {event.is_cancelled ? <Text style={styles.cardCancelled}>Canceled</Text> : null}
             <Text style={styles.cardSubtitle}>{formatEventDate(event.start_date)}</Text>
             {event.summary ? (
@@ -230,7 +273,11 @@ function EventCard({
           onPress={onToggleFilter}
           accessibilityRole="button"
           accessibilityLabel={filterSelected ? 'Remove event from filter' : 'Add event to filter'}
-          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+          style={({ pressed }) => [
+            styles.filterToggleButton,
+            filterSelected && styles.filterToggleButtonActive,
+            pressed && styles.filterToggleButtonPressed,
+          ]}
         >
           <Ionicons
             name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
@@ -260,13 +307,17 @@ function DocumentCard({
       <View style={styles.rowShell}>
         <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitle}>{document.title?.trim() || document.file_name || 'Untitled document'}</Text>
+            <Text style={styles.cardTitle}>
+              {document.title?.trim() || document.file_name || 'Untitled document'}
+            </Text>
             <Text style={styles.cardSubtitle}>{formatDocumentDate(document.document_date)}</Text>
             <Text style={styles.cardMeta} numberOfLines={2}>
               {formatDocumentSubtitle(document)}
             </Text>
             {linkedCount > 0 ? (
-              <Text style={styles.cardMeta}>{linkedCount} linked contact{linkedCount === 1 ? '' : 's'}</Text>
+              <Text style={styles.cardMeta}>
+                {linkedCount} linked contact{linkedCount === 1 ? '' : 's'}
+              </Text>
             ) : null}
           </View>
         </Pressable>
@@ -289,7 +340,13 @@ function DocumentCard({
           <Ionicons
             name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
             size={20}
-            color={filterSelected ? theme.colors.teal : linkedCount === 0 ? theme.colors.line : theme.colors.mutedInk}
+            color={
+              filterSelected
+                ? theme.colors.teal
+                : linkedCount === 0
+                  ? theme.colors.line
+                  : theme.colors.mutedInk
+            }
           />
         </Pressable>
       </View>
@@ -304,7 +361,9 @@ export default function EntitiesScreen() {
   const tabBarHeight = useBottomTabBarHeight();
   const scrollY = React.useRef(new Animated.Value(0)).current;
   const chipScrollRef = React.useRef<ScrollView | null>(null);
-  const chipLayoutsRef = React.useRef<Partial<Record<EntityKind, { x: number; width: number }>>>({});
+  const chipLayoutsRef = React.useRef<Partial<Record<EntityKind, { x: number; width: number }>>>(
+    {},
+  );
   const chipScrollXRef = React.useRef(0);
   const chipViewportWidthRef = React.useRef(0);
   const hasLoadedOnceRef = React.useRef<Record<EntityKind, boolean>>({
@@ -355,7 +414,10 @@ export default function EntitiesScreen() {
         kind: 'contacts',
         label: contact.display_name,
         description:
-          contact.emails?.[0] || contact.phones?.[0] || contact.tags?.slice(0, 2).join(' • ') || null,
+          contact.emails?.[0] ||
+          contact.phones?.[0] ||
+          contact.tags?.slice(0, 2).join(' • ') ||
+          null,
       });
     }
     for (const place of places) {
@@ -393,15 +455,22 @@ export default function EntitiesScreen() {
     });
     return map;
   }, [combinedFilterOptions]);
-  const optionMap = React.useMemo(() => buildFilterOptionMaps(combinedFilterOptions), [combinedFilterOptions]);
-  const activeFilterChips = React.useMemo(() => buildActiveFilterChips(filters, optionMap), [filters, optionMap]);
+  const optionMap = React.useMemo(
+    () => buildFilterOptionMaps(combinedFilterOptions),
+    [combinedFilterOptions],
+  );
+  const activeFilterChips = React.useMemo(
+    () => buildActiveFilterChips(filters, optionMap),
+    [filters, optionMap],
+  );
   const activeFilterCount = React.useMemo(() => countActiveFilters(filters), [filters]);
   const listData = React.useMemo<EntityListRow[]>(() => {
     if (selectedEntity === 'contacts') {
       const matchingGroups = contactGroups
         .filter((group) => matchesContactGroupSearch(group, query))
         .map((group): ContactGroupRow => ({ isContactGroupRow: true, group }));
-      return [...contacts, ...matchingGroups].sort((left, right) => {
+      const visibleContacts = filters.groupsOnly ? [] : contacts;
+      return [...visibleContacts, ...matchingGroups].sort((left, right) => {
         const leftName = 'isContactGroupRow' in left ? left.group.name : left.display_name;
         const rightName = 'isContactGroupRow' in right ? right.group.name : right.display_name;
         return normalizeSearch(leftName).localeCompare(normalizeSearch(rightName));
@@ -410,7 +479,16 @@ export default function EntitiesScreen() {
     if (selectedEntity === 'places') return places;
     if (selectedEntity === 'documents') return documents;
     return events;
-  }, [contactGroups, contacts, documents, events, places, query, selectedEntity]);
+  }, [
+    contactGroups,
+    contacts,
+    documents,
+    events,
+    filters.groupsOnly,
+    places,
+    query,
+    selectedEntity,
+  ]);
 
   const loadFilterOptions = React.useCallback(async () => {
     try {
@@ -420,16 +498,24 @@ export default function EntitiesScreen() {
         apiFetch('/mobile/events/search?limit=50'),
       ]);
       const nextOptions: EntityFilterOption[] = [];
-      const contactItems = ((contactsResult as { contacts?: ContactListItem[] }).contacts || []) as ContactListItem[];
-      const placeItems = ((placesResult as { places?: PlaceListItem[] }).places || []) as PlaceListItem[];
-      const eventItems = sortEventsByStartDateDesc(((eventsResult as EventSearchResponse).events || []) as EventListItem[]);
+      const contactItems = ((contactsResult as { contacts?: ContactListItem[] }).contacts ||
+        []) as ContactListItem[];
+      const placeItems = ((placesResult as { places?: PlaceListItem[] }).places ||
+        []) as PlaceListItem[];
+      const eventItems = sortEventsByStartDateDesc(
+        ((eventsResult as EventSearchResponse).events || []) as EventListItem[],
+      );
 
       contactItems.forEach((contact) => {
         nextOptions.push({
           id: contact.contact_id,
           kind: 'contacts',
           label: contact.display_name,
-          description: contact.emails?.[0] || contact.phones?.[0] || contact.tags?.slice(0, 2).join(' • ') || null,
+          description:
+            contact.emails?.[0] ||
+            contact.phones?.[0] ||
+            contact.tags?.slice(0, 2).join(' • ') ||
+            null,
         });
       });
       placeItems.forEach((place) => {
@@ -469,43 +555,54 @@ export default function EntitiesScreen() {
       if (kind === 'places') return filters.placeIds.includes(id);
       if (kind === 'documents') {
         const document = documents.find((item) => item.document_id === id);
-        const linkedContactIds = (document?.linked_contacts || []).map((contact) => contact.contact_id);
-        return linkedContactIds.length > 0 && linkedContactIds.every((contactId) => filters.contactIds.includes(contactId));
+        const linkedContactIds = (document?.linked_contacts || []).map(
+          (contact) => contact.contact_id,
+        );
+        return (
+          linkedContactIds.length > 0 &&
+          linkedContactIds.every((contactId) => filters.contactIds.includes(contactId))
+        );
       }
       return filters.eventIds.includes(id);
     },
     [documents, filters.contactIds, filters.eventIds, filters.placeIds],
   );
 
-  const toggleFilter = React.useCallback((kind: EntityKind, id: string) => {
-    setFilters((current) => {
-      if (kind === 'documents') {
-        const document = documents.find((item) => item.document_id === id);
-        const linkedContactIds = (document?.linked_contacts || [])
-          .map((contact) => contact.contact_id)
-          .filter(Boolean);
-        if (linkedContactIds.length === 0) {
-          return current;
+  const toggleFilter = React.useCallback(
+    (kind: EntityKind, id: string) => {
+      setFilters((current) => {
+        if (kind === 'documents') {
+          const document = documents.find((item) => item.document_id === id);
+          const linkedContactIds = (document?.linked_contacts || [])
+            .map((contact) => contact.contact_id)
+            .filter(Boolean);
+          if (linkedContactIds.length === 0) {
+            return current;
+          }
+          const allSelected = linkedContactIds.every((contactId) =>
+            current.contactIds.includes(contactId),
+          );
+          const nextContactIds = allSelected
+            ? current.contactIds.filter((contactId) => !linkedContactIds.includes(contactId))
+            : Array.from(new Set([...current.contactIds, ...linkedContactIds]));
+          return {
+            ...current,
+            contactIds: nextContactIds,
+          };
         }
-        const allSelected = linkedContactIds.every((contactId) => current.contactIds.includes(contactId));
-        const nextContactIds = allSelected
-          ? current.contactIds.filter((contactId) => !linkedContactIds.includes(contactId))
-          : Array.from(new Set([...current.contactIds, ...linkedContactIds]));
+        const key =
+          kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
+        const nextValues = current[key].includes(id)
+          ? current[key].filter((value) => value !== id)
+          : current[key].concat(id);
         return {
           ...current,
-          contactIds: nextContactIds,
+          [key]: nextValues,
         };
-      }
-      const key = kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
-      const nextValues = current[key].includes(id)
-        ? current[key].filter((value) => value !== id)
-        : current[key].concat(id);
-      return {
-        ...current,
-        [key]: nextValues,
-      };
-    });
-  }, [documents]);
+      });
+    },
+    [documents],
+  );
 
   const buildCommonSearchParams = React.useCallback(() => {
     const searchParams = new URLSearchParams();
@@ -533,7 +630,9 @@ export default function EntitiesScreen() {
       setLoadError(null);
       try {
         const searchParams = buildCommonSearchParams();
-        const path = searchParams.toString() ? `/mobile/contacts?${searchParams.toString()}` : '/mobile/contacts';
+        const path = searchParams.toString()
+          ? `/mobile/contacts?${searchParams.toString()}`
+          : '/mobile/contacts';
         const result = (await apiFetch(path)) as { contacts?: ContactListItem[] };
         if (requestId !== requestVersionRef.current) return;
         setContacts(result.contacts ?? []);
@@ -564,7 +663,9 @@ export default function EntitiesScreen() {
           searchParams.set('q', query.trim());
           searchParams.delete('query');
         }
-        const result = (await apiFetch(`/mobile/places?${searchParams.toString()}`)) as { places?: PlaceListItem[] };
+        const result = (await apiFetch(`/mobile/places?${searchParams.toString()}`)) as {
+          places?: PlaceListItem[];
+        };
         if (requestId !== requestVersionRef.current) return;
         setPlaces(result.places ?? []);
       } catch (error) {
@@ -607,15 +708,22 @@ export default function EntitiesScreen() {
         if (filters.includeFutureEvents) {
           searchParams.set('include_future', 'true');
         }
-        const result = (await apiFetch(`/mobile/events/search?${searchParams.toString()}`)) as EventSearchResponse;
+        const result = (await apiFetch(
+          `/mobile/events/search?${searchParams.toString()}`,
+        )) as EventSearchResponse;
         if (requestId !== requestVersionRef.current) return;
         const incomingEvents = sortEventsByStartDateDesc(result.events ?? []);
         setEvents((current) => {
           if (!append) return incomingEvents;
           const seen = new Set(current.map((event) => event.id));
-          return sortEventsByStartDateDesc(current.concat(incomingEvents.filter((event) => !seen.has(event.id))));
+          return sortEventsByStartDateDesc(
+            current.concat(incomingEvents.filter((event) => !seen.has(event.id))),
+          );
         });
-        eventNextOffsetRef.current = typeof result.next_offset === 'number' ? result.next_offset : offset + incomingEvents.length;
+        eventNextOffsetRef.current =
+          typeof result.next_offset === 'number'
+            ? result.next_offset
+            : offset + incomingEvents.length;
         eventHasMoreRef.current = Boolean(result.has_more);
       } catch (error) {
         if (requestId !== requestVersionRef.current) return;
@@ -723,9 +831,12 @@ export default function EntitiesScreen() {
     void loadCurrentEntity({ showRefreshSpinner: true });
   }, [loadCurrentEntity]);
 
-  const handleRemoveActiveFilter = React.useCallback((kind: EntityKind, id: string) => {
-    toggleFilter(kind, id);
-  }, [toggleFilter]);
+  const handleRemoveActiveFilter = React.useCallback(
+    (kind: EntityKind, id: string) => {
+      toggleFilter(kind, id);
+    },
+    [toggleFilter],
+  );
 
   const ensureChipVisible = React.useCallback((kind: EntityKind) => {
     const layout = chipLayoutsRef.current[kind];
@@ -757,11 +868,14 @@ export default function EntitiesScreen() {
     chipScrollRef.current.scrollTo({ x: targetX, animated: true });
   }, []);
 
-  const handleChipPress = React.useCallback((kind: EntityKind) => {
-    setAddMenuOpen(false);
-    setSelectedEntity(kind);
-    setTimeout(() => ensureChipVisible(kind), 0);
-  }, [ensureChipVisible]);
+  const handleChipPress = React.useCallback(
+    (kind: EntityKind) => {
+      setAddMenuOpen(false);
+      setSelectedEntity(kind);
+      setTimeout(() => ensureChipVisible(kind), 0);
+    },
+    [ensureChipVisible],
+  );
 
   const handleChipLayout = React.useCallback((kind: EntityKind, event: LayoutChangeEvent) => {
     const { x, width } = event.nativeEvent.layout;
@@ -785,7 +899,12 @@ export default function EntitiesScreen() {
       >
         {(['contacts', 'places', 'events', 'documents'] as const).map((kind) => (
           <View key={kind} onLayout={(event) => handleChipLayout(kind, event)}>
-            <EntityChip key={kind} kind={kind} selected={selectedEntity === kind} onPress={() => handleChipPress(kind)} />
+            <EntityChip
+              key={kind}
+              kind={kind}
+              selected={selectedEntity === kind}
+              onPress={() => handleChipPress(kind)}
+            />
           </View>
         ))}
       </ScrollView>
@@ -815,7 +934,10 @@ export default function EntitiesScreen() {
               }
               accessibilityRole="button"
               accessibilityLabel="Clear search"
-              style={({ pressed }) => [styles.clearSearchButton, pressed && styles.clearSearchButtonPressed]}
+              style={({ pressed }) => [
+                styles.clearSearchButton,
+                pressed && styles.clearSearchButtonPressed,
+              ]}
             >
               <Ionicons name="close-circle" size={18} color={theme.colors.mutedInk} />
             </Pressable>
@@ -825,9 +947,17 @@ export default function EntitiesScreen() {
           onPress={() => setShowFilterSheet(true)}
           accessibilityRole="button"
           accessibilityLabel="Open filters"
-          style={({ pressed }) => [styles.filterButton, activeFilterCount > 0 && styles.filterButtonActive, pressed && styles.filterButtonPressed]}
+          style={({ pressed }) => [
+            styles.filterButton,
+            activeFilterCount > 0 && styles.filterButtonActive,
+            pressed && styles.filterButtonPressed,
+          ]}
         >
-          <Ionicons name="options-outline" size={20} color={activeFilterCount > 0 ? theme.colors.teal : theme.colors.ink} />
+          <Ionicons
+            name="options-outline"
+            size={20}
+            color={activeFilterCount > 0 ? theme.colors.teal : theme.colors.ink}
+          />
           {activeFilterCount ? (
             <View style={styles.filterBadge}>
               <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
@@ -835,7 +965,6 @@ export default function EntitiesScreen() {
           ) : null}
         </Pressable>
       </View>
-
     </View>
   );
 
@@ -850,12 +979,16 @@ export default function EntitiesScreen() {
           if ('document_id' in item) return item.document_id;
           return item.id;
         }}
-        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
         scrollEventThrottle={16}
         refreshing={isRefreshing}
         onRefresh={handleRefresh}
         onEndReachedThreshold={selectedEntity === 'events' ? 0.35 : undefined}
-        onEndReached={selectedEntity === 'events' ? () => void loadEvents({ append: true }) : undefined}
+        onEndReached={
+          selectedEntity === 'events' ? () => void loadEvents({ append: true }) : undefined
+        }
         progressViewOffset={insets.top + COLLAPSING_TOP_BAR_HEIGHT + 16}
         contentContainerStyle={[
           styles.listContent,
@@ -871,11 +1004,19 @@ export default function EntitiesScreen() {
           ) : loadError ? (
             <Text style={[styles.empty, styles.errorText]}>{loadError}</Text>
           ) : (
-            <Text style={styles.empty}>No {ENTITY_META[selectedEntity].label.toLowerCase()} found.</Text>
+            <Text style={styles.empty}>
+              No{' '}
+              {selectedEntity === 'contacts' && filters.groupsOnly
+                ? 'groups'
+                : ENTITY_META[selectedEntity].label.toLowerCase()}{' '}
+              found.
+            </Text>
           )
         }
         ListFooterComponent={
-          isLoadingMore ? <ActivityIndicator size="small" color={theme.colors.accent} style={styles.loader} /> : null
+          isLoadingMore ? (
+            <ActivityIndicator size="small" color={theme.colors.accent} style={styles.loader} />
+          ) : null
         }
         renderItem={({ item }) => {
           if (selectedEntity === 'contacts') {
@@ -883,9 +1024,11 @@ export default function EntitiesScreen() {
               return (
                 <ContactGroupCard
                   group={item.group}
-                  onPress={() => router.push(
-                    `/contact-groups/${encodeURIComponent(item.group.group_id)}` as Href,
-                  )}
+                  onPress={() =>
+                    router.push(
+                      `/contact-groups/${encodeURIComponent(item.group.group_id)}` as Href,
+                    )
+                  }
                 />
               );
             }
@@ -972,9 +1115,17 @@ export default function EntitiesScreen() {
         <>
           <Animated.View
             pointerEvents={addMenuOpen ? 'auto' : 'none'}
-            style={[styles.addMenuScrim, { opacity: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) }]}
+            style={[
+              styles.addMenuScrim,
+              { opacity: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+            ]}
           >
-            <Pressable accessibilityRole="button" accessibilityLabel="Close add menu" style={StyleSheet.absoluteFill} onPress={() => setAddMenuOpen(false)} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close add menu"
+              style={StyleSheet.absoluteFill}
+              onPress={() => setAddMenuOpen(false)}
+            />
           </Animated.View>
           <Animated.View
             pointerEvents={addMenuOpen ? 'auto' : 'none'}
@@ -983,25 +1134,42 @@ export default function EntitiesScreen() {
               { bottom: insets.bottom + tabBarHeight + 92 },
               {
                 opacity: addMenuProgress,
-                transform: [{ translateY: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }, { scale: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
+                transform: [
+                  {
+                    translateY: addMenuProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [18, 0],
+                    }),
+                  },
+                ],
               },
             ]}
           >
             <Pressable
               accessibilityRole="button"
-              onPress={() => { setAddMenuOpen(false); router.push('/contacts/new'); }}
+              onPress={() => {
+                setAddMenuOpen(false);
+                router.push('/contacts/new');
+              }}
               style={({ pressed }) => [styles.addMenuItem, pressed && styles.addMenuItemPressed]}
             >
-              <View style={styles.addMenuIcon}><Ionicons name="person-add-outline" size={18} color={theme.colors.accentDeep} /></View>
               <Text style={styles.addMenuLabel}>Single contact</Text>
+              <View style={styles.addMenuIcon}>
+                <Ionicons name="person-add-outline" size={19} color="#fff" />
+              </View>
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              onPress={() => { setAddMenuOpen(false); router.push('/contact-groups/new' as Href); }}
+              onPress={() => {
+                setAddMenuOpen(false);
+                router.push('/contact-groups/new' as Href);
+              }}
               style={({ pressed }) => [styles.addMenuItem, pressed && styles.addMenuItemPressed]}
             >
-              <View style={styles.addMenuIcon}><Ionicons name="people-outline" size={18} color={theme.colors.accentDeep} /></View>
               <Text style={styles.addMenuLabel}>Group</Text>
+              <View style={styles.addMenuIcon}>
+                <Ionicons name="people-outline" size={19} color="#fff" />
+              </View>
             </Pressable>
           </Animated.View>
           <Pressable
@@ -1009,19 +1177,40 @@ export default function EntitiesScreen() {
             accessibilityRole="button"
             accessibilityLabel={addMenuOpen ? 'Close add menu' : 'Add contact or group'}
             accessibilityState={{ expanded: addMenuOpen }}
-            style={({ pressed }) => [styles.fab, { bottom: insets.bottom + tabBarHeight + 24 }, pressed && styles.fabPressed]}
+            style={({ pressed }) => [
+              styles.fab,
+              { bottom: insets.bottom + tabBarHeight + 24 },
+              pressed && styles.fabPressed,
+            ]}
           >
-            <Animated.View style={{ transform: [{ rotate: addMenuProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] }) }] }}>
+            <Animated.View
+              style={{
+                transform: [
+                  {
+                    rotate: addMenuProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '45deg'],
+                    }),
+                  },
+                ],
+              }}
+            >
               <Ionicons name="add" size={26} color="#fff" />
             </Animated.View>
           </Pressable>
         </>
       ) : selectedEntity === 'places' || selectedEntity === 'documents' ? (
         <Pressable
-          onPress={() => router.push(selectedEntity === 'documents' ? '/documents/new' : '/places/new')}
+          onPress={() =>
+            router.push(selectedEntity === 'documents' ? '/documents/new' : '/places/new')
+          }
           accessibilityRole="button"
           accessibilityLabel={selectedEntity === 'documents' ? 'Upload document' : 'Create place'}
-          style={({ pressed }) => [styles.fab, { bottom: insets.bottom + tabBarHeight + 24 }, pressed && styles.fabPressed]}
+          style={({ pressed }) => [
+            styles.fab,
+            { bottom: insets.bottom + tabBarHeight + 24 },
+            pressed && styles.fabPressed,
+          ]}
         >
           <Ionicons name="add" size={24} color="#fff" />
         </Pressable>
@@ -1246,46 +1435,53 @@ const styles = StyleSheet.create({
   },
   addMenuScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(20, 25, 24, 0.12)',
+    backgroundColor: 'rgba(247, 242, 236, 0.88)',
     zIndex: 8,
   },
   addMenu: {
     position: 'absolute',
     right: 22,
-    width: 176,
-    padding: 6,
-    borderRadius: 20,
-    backgroundColor: '#fff',
+    alignItems: 'flex-end',
+    gap: 10,
     zIndex: 9,
-    shadowColor: '#111',
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 12,
   },
   addMenuItem: {
-    minHeight: 52,
-    paddingHorizontal: 9,
+    minHeight: 48,
+    paddingLeft: 13,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
-    borderRadius: 15,
+    gap: 10,
   },
   addMenuItemPressed: {
-    backgroundColor: '#f5f8f6',
+    opacity: 0.75,
   },
   addMenuIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.paleTeal,
+    backgroundColor: theme.colors.accent,
+    shadowColor: '#111',
+    shadowOpacity: 0.2,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   addMenuLabel: {
     color: theme.colors.ink,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    shadowColor: '#111',
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   groupCard: {
     minHeight: 80,

@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { ContactPicker } from '@/components/ContactPicker';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -39,7 +40,6 @@ import type {
 } from '@/contact-draft/types';
 import type { EventContactOption, EventPlaceOption } from '@/components/event-draft/types';
 import { theme } from '@/theme';
-import { matchesContactSearch } from '@/utils/contactSearch';
 import { normalizeSearch } from '@/utils/text';
 
 type Props = {
@@ -169,44 +169,6 @@ function SectionHeader({
   );
 }
 
-function ContactSuggestions({
-  query,
-  contacts,
-  onSelect,
-}: {
-  query: string;
-  contacts: EventContactOption[];
-  onSelect: (contact: EventContactOption) => void;
-}) {
-  const filtered = React.useMemo(() => {
-    const needle = query.trim();
-    if (!needle) return [];
-    return contacts.filter((contact) => matchesContactSearch(contact, needle)).slice(0, 5);
-  }, [contacts, query]);
-  if (filtered.length === 0) return null;
-  return (
-    <View style={styles.suggestionList}>
-      {filtered.map((contact) => (
-        <Pressable
-          key={contact.contact_id}
-          accessibilityRole="button"
-          accessibilityLabel={`Use ${contact.display_name}`}
-          onPress={() => onSelect(contact)}
-          style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
-        >
-          <View style={styles.suggestionBody}>
-            <Text style={styles.suggestionText}>{contact.display_name}</Text>
-            {contact.aliases?.length ? (
-              <Text style={styles.suggestionMeta}>{contact.aliases.join(', ')}</Text>
-            ) : null}
-          </View>
-          <Ionicons name="person-add-outline" size={16} color={theme.colors.accentDeep} />
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 function ContactPickerField({
   value,
   meta,
@@ -252,23 +214,19 @@ function ContactPickerField({
 
   return (
     <>
-      <TextInput
-        value={query}
-        onChangeText={onChangeText}
+      <ContactPicker
+        query={query}
+        onQueryChange={onChangeText}
+        contacts={contacts}
+        placeholder={placeholder}
+        inputStyle={styles.input}
+        returnKeyType="done"
         onSubmitEditing={() => {
           if (query.trim()) {
             setIsEditing(false);
           }
         }}
-        placeholder={placeholder}
-        placeholderTextColor={theme.colors.mutedInk}
-        returnKeyType="done"
-        style={styles.input}
-      />
-      <ContactSuggestions
-        query={query}
-        contacts={contacts}
-        onSelect={(contact) => {
+        onSelectContact={(contact) => {
           onSelect(contact);
           setIsEditing(false);
         }}

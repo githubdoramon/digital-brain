@@ -253,6 +253,8 @@ class PostExecutionValidator:
                         suggested_next_tools.append("get_events")
                     elif candidate_kind == "conversation":
                         suggested_next_tools.append("get_conversation")
+                    elif candidate_kind == "message":
+                        suggested_next_tools.append("get_message")
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                     reason=(
@@ -267,7 +269,7 @@ class PostExecutionValidator:
                     suggested_next_tools=suggested_next_tools,
                 )
 
-        if tool_name == "get_conversation":
+        if tool_name in {"get_conversation", "get_message"}:
             if result.get("conversation"):
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
@@ -661,7 +663,9 @@ Rules:
                     title = str(top_candidate.get("title") or "untitled").strip()
                     candidate_id = str(top_candidate.get("id") or "").strip()
                     candidate_kind = str(top_candidate.get("kind") or "information").strip()
-                    if candidate_id:
+                    if candidate_kind == "message":
+                        facts.append("Found an archived message candidate")
+                    elif candidate_id:
                         facts.append(f"Top {candidate_kind} candidate: {title} ({candidate_id})")
                     else:
                         facts.append(f"Top {candidate_kind} candidate: {title}")
@@ -1096,6 +1100,7 @@ class GoalCompletionValidator:
                 "get_events",
                 "get_document",
                 "get_conversation",
+                "get_message",
                 "web_search",
                 "lookup_contact",
                 "resolve_contacts",
@@ -1113,6 +1118,13 @@ class GoalCompletionValidator:
             has_required_detail = any(
                 tc.tool_name == "get_conversation" and tc.success
                 and str(((tc.result or {}).get("conversation") or {}).get("message_id")) == str((best_search_candidate or {}).get("id"))
+                for tc in successful_query_calls
+            )
+        if required_detail_tool == "get_message":
+            has_required_detail = any(
+                tc.tool_name == "get_message" and tc.success
+                and str(((tc.result or {}).get("conversation") or {}).get("message_id"))
+                    == str((best_search_candidate or {}).get("id"))
                 for tc in successful_query_calls
             )
         if (
@@ -1363,6 +1375,8 @@ class GoalCompletionValidator:
             return "get_events"
         if kind == "conversation":
             return "get_conversation"
+        if kind == "message":
+            return "get_message"
         return None
 
     def _preferred_candidate_kinds(self, goal: str) -> list[str]:
@@ -1435,6 +1449,8 @@ class GoalCompletionValidator:
         candidate_label = f"'{candidate_title}'" if candidate_title else ""
         if required_detail_tool == "get_conversation" and candidate_id:
             return f"Call get_conversation with thread_id='{candidate.get('thread_id')}' and message_id={candidate_id} before responding"
+        if required_detail_tool == "get_message" and candidate_id:
+            return f"Call get_message with message_id='{candidate_id}' before responding"
 
         if required_detail_tool == "get_document" and candidate_id:
             return f"Call get_document with document_id='{candidate_id}' for {candidate_label} before responding"

@@ -35,6 +35,7 @@ const BEARER_AUTH_PREFIXES = [
 ];
 
 const HYBRID_AUTH_PREFIXES = [
+  "/api/orchestrator/messaging",
   "/api/orchestrator/ingest/contact",
   "/api/orchestrator/contacts",
 ];

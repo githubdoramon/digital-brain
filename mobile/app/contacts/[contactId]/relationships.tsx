@@ -18,10 +18,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { ContactPicker } from '@/components/ContactPicker';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
-import { matchesContactSearch } from '@/utils/contactSearch';
 
 type ContactRelationship = {
   relationship_id: string;
@@ -95,7 +95,9 @@ export default function RelationshipManagementScreen() {
       setIsLoading(true);
       setLoadError(null);
       try {
-        const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
+        const result = (await apiFetch(
+          `/mobile/contacts/${encodeURIComponent(contactParam)}`,
+        )) as Contact;
         if (mounted) {
           setContact(result);
           setRelationships(
@@ -154,25 +156,26 @@ export default function RelationshipManagementScreen() {
   const relationshipSnapshot = useMemo(
     () =>
       JSON.stringify(
-        relationships.map((rel) => [rel.to_contact_id, rel.relationship_type, rel.reciprocal_type ?? '']),
+        relationships.map((rel) => [
+          rel.to_contact_id,
+          rel.relationship_type,
+          rel.reciprocal_type ?? '',
+        ]),
       ),
     [relationships],
   );
 
   const originalSnapshot = useMemo(() => {
     if (!contact) return '';
-    const base = (contact.relationships || []).map((rel) => [rel.contact_id, rel.type, rel.other_type ?? '']);
+    const base = (contact.relationships || []).map((rel) => [
+      rel.contact_id,
+      rel.type,
+      rel.other_type ?? '',
+    ]);
     return JSON.stringify(base);
   }, [contact]);
 
   const isDirty = relationshipSnapshot !== originalSnapshot;
-
-  const availableContacts = useMemo(() => {
-    const query = search.trim();
-    return allContacts
-      .filter((item) => item.contact_id !== contactParam)
-      .filter((item) => matchesContactSearch(item, query));
-  }, [allContacts, contactParam, search]);
 
   const hasInvalidSelection = search.trim().length > 0 && !selectedContactId;
 
@@ -212,7 +215,8 @@ export default function RelationshipManagementScreen() {
       const encodedContact = encodeURIComponent(contact.contact_id);
       await Promise.all([
         ...deletedRelationshipIds.map((relationshipId) =>
-          apiFetch(`/mobile/contacts/${encodedContact}/relationships/${encodeURIComponent(relationshipId)}`,
+          apiFetch(
+            `/mobile/contacts/${encodedContact}/relationships/${encodeURIComponent(relationshipId)}`,
             {
               method: 'DELETE',
             },
@@ -288,7 +292,9 @@ export default function RelationshipManagementScreen() {
         keyboardDismissMode="none"
       >
         <Text style={styles.title}>Relationships</Text>
-        <Text style={styles.subtitle}>Keep the relationships for {contact.display_name} up to date.</Text>
+        <Text style={styles.subtitle}>
+          Keep the relationships for {contact.display_name} up to date.
+        </Text>
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Existing</Text>
@@ -296,7 +302,9 @@ export default function RelationshipManagementScreen() {
             <Text style={styles.muted}>No relationships yet.</Text>
           ) : (
             relationships.map((rel) => {
-              const name = allContacts.find((item) => item.contact_id === rel.to_contact_id)?.display_name;
+              const name = allContacts.find(
+                (item) => item.contact_id === rel.to_contact_id,
+              )?.display_name;
               return (
                 <View key={rel.relationship_id} style={styles.row}>
                   <View style={styles.rowHeader}>
@@ -357,32 +365,18 @@ export default function RelationshipManagementScreen() {
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Add new</Text>
-          <TextInput
-            style={styles.input}
-            value={search}
-            onChangeText={(value) => {
+          <ContactPicker
+            query={search}
+            onQueryChange={(value) => {
               setSearch(value);
               setSelectedContactId(null);
             }}
+            contacts={allContacts.filter((item) => item.contact_id !== contactParam)}
+            selectedContactIds={new Set(selectedContactId ? [selectedContactId] : [])}
             placeholder="Search contacts"
-            placeholderTextColor={theme.colors.mutedInk}
+            inputStyle={styles.input}
+            onSelectContact={(item) => setSelectedContactId(item.contact_id)}
           />
-          {search.length > 0 && (
-            <View style={styles.suggestions}>
-              {availableContacts.slice(0, 6).map((item) => (
-                <Pressable
-                  key={item.contact_id}
-                  style={[
-                    styles.suggestion,
-                    selectedContactId === item.contact_id && styles.suggestionActive,
-                  ]}
-                  onPress={() => setSelectedContactId(item.contact_id)}
-                >
-                  <Text style={styles.suggestionText}>{item.display_name}</Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
           <TextInput
             style={styles.input}
             value={newType}

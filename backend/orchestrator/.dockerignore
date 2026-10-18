@@ -8,3 +8,6 @@ __pycache__
 .coverage*
 .env*
 requirements-dev.txt
+storage/whatsapp/
+
+storage/telegram/

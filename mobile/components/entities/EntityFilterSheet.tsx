@@ -18,8 +18,14 @@ type EntityFilterSheetProps = {
   onClose: () => void;
 };
 
-export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, onClose }: EntityFilterSheetProps) {
-
+export function EntityFilterSheet({
+  visible,
+  filters,
+  chips,
+  onApply,
+  onRemove,
+  onClose,
+}: EntityFilterSheetProps) {
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <View style={styles.headerRow}>
@@ -40,7 +46,9 @@ export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, 
               <View style={styles.sectionHeader}>
                 <Ionicons name={ENTITY_META[kind].icon} size={16} color={theme.colors.teal} />
                 <Text style={styles.sectionTitle}>{ENTITY_META[kind].label}</Text>
-                {sectionChips.length ? <Text style={styles.sectionCount}>{sectionChips.length}</Text> : null}
+                {sectionChips.length ? (
+                  <Text style={styles.sectionCount}>{sectionChips.length}</Text>
+                ) : null}
               </View>
               {sectionChips.length ? (
                 <View style={styles.chipWrap}>
@@ -48,7 +56,10 @@ export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, 
                     <Pressable
                       key={`${chip.kind}:${chip.id}`}
                       onPress={() => onRemove(chip.kind, chip.id)}
-                      style={({ pressed }) => [styles.activeFilterChip, pressed && styles.activeFilterChipPressed]}
+                      style={({ pressed }) => [
+                        styles.activeFilterChip,
+                        pressed && styles.activeFilterChipPressed,
+                      ]}
                     >
                       <Text style={styles.activeFilterChipText}>{chip.label}</Text>
                       <Ionicons name="close" size={14} color={theme.colors.teal} />
@@ -56,13 +67,33 @@ export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, 
                   ))}
                 </View>
               ) : (
-                <Text style={styles.emptyText}>No selected {ENTITY_META[kind].label.toLowerCase()} yet.</Text>
+                <Text style={styles.emptyText}>
+                  No selected {ENTITY_META[kind].label.toLowerCase()} yet.
+                </Text>
               )}
+              {kind === 'contacts' ? (
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleCopy}>
+                    <Text style={styles.toggleTitle}>Only show groups</Text>
+                    <Text style={styles.toggleDescription}>
+                      Hide individual contacts from the contacts list.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={filters.groupsOnly}
+                    onValueChange={(value) => onApply({ ...filters, groupsOnly: value })}
+                    trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
+                    thumbColor={filters.groupsOnly ? theme.colors.accent : '#f2f2f2'}
+                  />
+                </View>
+              ) : null}
               {kind === 'events' ? (
                 <View style={styles.toggleRow}>
                   <View style={styles.toggleCopy}>
                     <Text style={styles.toggleTitle}>Include future events</Text>
-                    <Text style={styles.toggleDescription}>Show upcoming events in the main events list and event filters.</Text>
+                    <Text style={styles.toggleDescription}>
+                      Show upcoming events in the main events list and event filters.
+                    </Text>
                   </View>
                   <Switch
                     value={filters.includeFutureEvents}
@@ -87,6 +118,7 @@ export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, 
               placeIds: [...EMPTY_ENTITY_FILTERS.placeIds],
               eventIds: [...EMPTY_ENTITY_FILTERS.eventIds],
               includeFutureEvents: EMPTY_ENTITY_FILTERS.includeFutureEvents,
+              groupsOnly: EMPTY_ENTITY_FILTERS.groupsOnly,
             });
             onClose();
           }}

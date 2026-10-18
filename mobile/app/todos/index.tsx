@@ -19,7 +19,7 @@ import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Card } from '@/components/Card';
-import { ContactSearchSuggestions } from '@/components/ContactSearchSuggestions';
+import { ContactPicker } from '@/components/ContactPicker';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -143,7 +143,7 @@ function NewTodoContent() {
       status: 'pending',
       contactIds: [],
       eventIds: [],
-    })
+    }),
   );
 
   const trimmedDescription = description.trim();
@@ -151,11 +151,11 @@ function NewTodoContent() {
   const canSave = trimmedDescription.length > 0 && !saving && !loadingTodo;
   const selectedContactIds = React.useMemo(
     () => new Set(selectedContacts.map((contact) => contact.contact_id)),
-    [selectedContacts]
+    [selectedContacts],
   );
   const selectedEventIds = React.useMemo(
     () => new Set(selectedEvents.map((event) => event.id)),
-    [selectedEvents]
+    [selectedEvents],
   );
   const quickDates = React.useMemo(() => {
     const today = new Date();
@@ -184,11 +184,11 @@ function NewTodoContent() {
         contactIds: selectedContacts.map((contact) => contact.contact_id),
         eventIds: selectedEvents.map((event) => event.id),
       }),
-    [description, dueDate, todoStatus, selectedContacts, selectedEvents]
+    [description, dueDate, todoStatus, selectedContacts, selectedEvents],
   );
   const isDirty = React.useMemo(
     () => JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot),
-    [currentSnapshot, initialSnapshot]
+    [currentSnapshot, initialSnapshot],
   );
 
   React.useEffect(() => {
@@ -235,7 +235,7 @@ function NewTodoContent() {
           status: 'pending',
           contactIds: [],
           eventIds: [],
-        })
+        }),
       );
       return;
     }
@@ -243,21 +243,27 @@ function NewTodoContent() {
     (async () => {
       setLoadingTodo(true);
       try {
-        const result = (await apiFetch(`/mobile/todos/${encodeURIComponent(todoIdParam)}`)) as TodoDetail;
+        const result = (await apiFetch(
+          `/mobile/todos/${encodeURIComponent(todoIdParam)}`,
+        )) as TodoDetail;
         if (!mounted) return;
         setDescription(result.description?.trim() || '');
         setDueDate(result.due_date || '');
         setTodoStatus(result.status?.trim() || 'pending');
-        setSelectedContacts((result.contacts ?? []).map((contactId) => ({
-          contact_id: contactId,
-          display_name: contactId,
-        })));
-        setSelectedEvents((result.events ?? []).map((event) => ({
-          id: event.id,
-          title: event.title,
-          start_date: event.start_date,
-          end_date: event.end_date,
-        })));
+        setSelectedContacts(
+          (result.contacts ?? []).map((contactId) => ({
+            contact_id: contactId,
+            display_name: contactId,
+          })),
+        );
+        setSelectedEvents(
+          (result.events ?? []).map((event) => ({
+            id: event.id,
+            title: event.title,
+            start_date: event.start_date,
+            end_date: event.end_date,
+          })),
+        );
         setInitialSnapshot(
           buildTodoSnapshot({
             description: result.description?.trim() || '',
@@ -265,7 +271,7 @@ function NewTodoContent() {
             status: result.status?.trim() || 'pending',
             contactIds: (result.contacts ?? []).map((contactId) => contactId),
             eventIds: (result.events ?? []).map((event) => event.id),
-          })
+          }),
         );
       } catch {
         if (!mounted) return;
@@ -287,7 +293,7 @@ function NewTodoContent() {
       prev.map((contact) => {
         const match = contacts.find((item) => item.contact_id === contact.contact_id);
         return match ? { contact_id: match.contact_id, display_name: match.display_name } : contact;
-      })
+      }),
     );
   }, [contacts]);
 
@@ -302,7 +308,7 @@ function NewTodoContent() {
     const handle = setTimeout(async () => {
       try {
         const result = (await apiFetch(
-          `/mobile/events/search?query=${encodeURIComponent(trimmed)}`
+          `/mobile/events/search?query=${encodeURIComponent(trimmed)}`,
         )) as { events: EventResult[] };
         setEventResults((result.events ?? []).filter((event) => !selectedEventIds.has(event.id)));
       } catch {
@@ -325,22 +331,25 @@ function NewTodoContent() {
     setContactQuery('');
   }, []);
 
-  const handleAddContactGroup = React.useCallback((group: ContactGroup) => {
-    const contactsById = new Map(contacts.map((contact) => [contact.contact_id, contact]));
-    setSelectedContacts((previous) => {
-      const next = [...previous];
-      const seen = new Set(previous.map((contact) => contact.contact_id));
-      group.members.forEach((member) => {
-        const contact = contactsById.get(member.contact_id);
-        if (contact && !seen.has(contact.contact_id)) {
-          seen.add(contact.contact_id);
-          next.push(contact);
-        }
+  const handleAddContactGroup = React.useCallback(
+    (group: ContactGroup) => {
+      const contactsById = new Map(contacts.map((contact) => [contact.contact_id, contact]));
+      setSelectedContacts((previous) => {
+        const next = [...previous];
+        const seen = new Set(previous.map((contact) => contact.contact_id));
+        group.members.forEach((member) => {
+          const contact = contactsById.get(member.contact_id);
+          if (contact && !seen.has(contact.contact_id)) {
+            seen.add(contact.contact_id);
+            next.push(contact);
+          }
+        });
+        return next;
       });
-      return next;
-    });
-    setContactQuery('');
-  }, [contacts]);
+      setContactQuery('');
+    },
+    [contacts],
+  );
 
   const handleRemoveContact = React.useCallback((contactId: string) => {
     setSelectedContacts((prev) => prev.filter((contact) => contact.contact_id !== contactId));
@@ -484,10 +493,7 @@ function NewTodoContent() {
             <Text style={styles.label}>Due date</Text>
             <Pressable
               onPress={handleOpenDatePicker}
-              style={({ pressed }) => [
-                styles.dateField,
-                pressed && styles.dateFieldPressed,
-              ]}
+              style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
             >
               <Text style={dueDate ? styles.dateFieldText : styles.dateFieldPlaceholder}>
                 {dueDate || 'YYYY-MM-DD (optional)'}
@@ -499,10 +505,7 @@ function NewTodoContent() {
                 <Pressable
                   key={option.label}
                   onPress={() => setDueDate(option.value)}
-                  style={({ pressed }) => [
-                    styles.quickPick,
-                    pressed && styles.quickPickPressed,
-                  ]}
+                  style={({ pressed }) => [styles.quickPick, pressed && styles.quickPickPressed]}
                 >
                   <Text style={styles.quickPickText}>{option.label}</Text>
                 </Pressable>
@@ -525,21 +528,17 @@ function NewTodoContent() {
             <View style={styles.sectionDivider} />
 
             <Text style={styles.label}>Link contacts</Text>
-            <TextInput
-              style={styles.input}
-              value={contactQuery}
-              onChangeText={setContactQuery}
-              placeholder="Search contacts"
-              placeholderTextColor={theme.colors.mutedInk}
-            />
-            <ContactSearchSuggestions
+            <ContactPicker
               query={contactQuery}
+              onQueryChange={setContactQuery}
               contacts={contacts}
               groups={contactGroups}
               selectedContactIds={selectedContactIds}
               includeGroups
               onSelectContact={handleAddContact}
               onSelectGroup={handleAddContactGroup}
+              placeholder="Search contacts"
+              inputStyle={styles.input}
             />
             {selectedContacts.length > 0 ? (
               <View style={styles.chipRow}>
@@ -574,7 +573,10 @@ function NewTodoContent() {
                   <Pressable
                     key={event.id}
                     onPress={() => handleAddEvent(event)}
-                    style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
+                    style={({ pressed }) => [
+                      styles.suggestionRow,
+                      pressed && styles.suggestionPressed,
+                    ]}
                   >
                     <View style={styles.eventTextWrap}>
                       <Text style={styles.suggestionText}>{formatEventLabel(event)}</Text>
