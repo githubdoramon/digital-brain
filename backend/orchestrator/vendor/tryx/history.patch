@@ -1,0 +1,80 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 95bbe94..27a7a8b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2854,7 +2854,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "tryx"
+-version = "1.3.1"
++version = "1.5.0+digitalbrain.1"
+ dependencies = [
+  "async-channel",
+  "async-trait",
+diff --git a/Cargo.toml b/Cargo.toml
+index 34e74f9..dee29e4 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "tryx"
+-version = "1.5.0"
++version = "1.5.0+digitalbrain.1"
+ edition = "2024"
+ 
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+diff --git a/python/tryx/client.pyi b/python/tryx/client.pyi
+index 103c462..8b3a735 100644
+--- a/python/tryx/client.pyi
++++ b/python/tryx/client.pyi
+@@ -871,6 +871,13 @@ class VoipClient:
+ class AdvancedClient:
+     """Advanced diagnostics, lifecycle waits, and raw protocol escape hatches."""
+ 
++    async def fetch_message_history(
++        self, chat: JID, oldest_msg_id: str, oldest_msg_from_me: bool,
++        oldest_msg_timestamp_ms: int, count: int,
++    ) -> str:
++        """Request 1-100 older messages; history arrives through EvHistorySync."""
++        ...
++
+     def is_logged_in(self) -> bool:
+         """Return True if the session is authenticated."""
+         ...
+diff --git a/src/clients/advanced.rs b/src/clients/advanced.rs
+index 008fbd2..da98eff 100644
+--- a/src/clients/advanced.rs
++++ b/src/clients/advanced.rs
+@@ -42,6 +42,32 @@ impl AdvancedClient {
+ 
+ #[pymethods]
+ impl AdvancedClient {
++    /// Request older history from the primary phone. Delivery is asynchronous.
++    fn fetch_message_history<'py>(
++        &self,
++        py: Python<'py>,
++        chat: Py<JID>,
++        oldest_msg_id: String,
++        oldest_msg_from_me: bool,
++        oldest_msg_timestamp_ms: i64,
++        count: i32,
++    ) -> PyResult<Bound<'py, PyAny>> {
++        let jid = chat.bind(py).borrow().as_whatsapp_jid();
++        if !matches!(jid.server.as_str(), "s.whatsapp.net" | "lid" | "g.us")
++            || jid.user.is_empty() || oldest_msg_id.is_empty() || oldest_msg_id.len() > 256
++            || oldest_msg_timestamp_ms <= 0 || !(1..=100).contains(&count)
++        {
++            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid history request"));
++        }
++        let client = self.get_client()?;
++        let locals = get_current_locals(py)?;
++        future_into_py_with_locals::<_, String>(py, locals, async move {
++            client.fetch_message_history(&jid, &oldest_msg_id, oldest_msg_from_me,
++                oldest_msg_timestamp_ms, count).await
++                .map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("History request failed"))
++        })
++    }
++
+     fn is_logged_in(&self) -> PyResult<bool> {
+         Ok(self.get_client()?.is_logged_in())
+     }

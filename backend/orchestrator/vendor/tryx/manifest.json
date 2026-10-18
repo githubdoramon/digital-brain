@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/krypton-byte/tryx.git",
+  "commit": "fa649633165484910145a933fe14979f81fd3837",
+  "rust_repository": "https://github.com/oxidezap/whatsapp-rust.git",
+  "rust_commit": "539ed050817f351d080fb5092179b22cebaceffe",
+  "version": "1.5.0+digitalbrain.1",
+  "patch_sha256": "2445811bbc4ffb2dd650877004cbef3954d01413e72c348a7909e0520ee7e5d9"
+}

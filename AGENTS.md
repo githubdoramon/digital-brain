@@ -86,10 +86,13 @@ Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 
 ## Services & Runtime
 
-**Messaging archive**: `whatsapp_runtime.py` supervises Tryx 1.5.0 and Telethon
+**Messaging archive**: `whatsapp_runtime.py` supervises patched Tryx 1.5.0+digitalbrain.1 and Telethon
 1.45.0 Python children inside the orchestrator container and an independent
 sanitized-inbox worker. Telegram setup uses `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`;
 see `backend/orchestrator/docs/architecture/TELEGRAM_INGESTION.md`.
+WhatsApp older-history requests use `whatsapp_history.py` with persisted anchors,
+a six-month import cutoff, bounded retries, and a patched native wheel built by
+`vendor/tryx` in the Docker build stage.
 Enable/pair explicitly through `/messaging/*` (frontend proxy required).
 Keep session keys private under `storage/whatsapp` and `storage/telegram`, excluded from Git/build contexts.
 Messages and revisions live in owner-scoped PostgreSQL tables; attachment files

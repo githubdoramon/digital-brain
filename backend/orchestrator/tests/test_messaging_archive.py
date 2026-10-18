@@ -30,6 +30,17 @@ OWNER = "reader@example.com"
 OTHER = "other@example.com"
 
 
+@pytest.fixture(autouse=True)
+def historical_fixture_clock(monkeypatch):
+    # Existing source fixtures are dated January 2026. Keep their import window
+    # deterministic; cutoff-specific cases override or pass their own clock.
+    import messaging_history
+
+    monkeypatch.setattr(
+        messaging_history, "_utc_now", lambda: datetime(2026, 1, 15, tzinfo=timezone.utc)
+    )
+
+
 def record(
     *,
     kind="message",
@@ -190,10 +201,14 @@ def database(monkeypatch):
         migration = Path(__file__).resolve().parents[1] / "db_migrations/0073_messaging_archive.sql"
         conn.execute(migration.read_text())
         conn.execute(migration.with_name("0074_telegram_archive.sql").read_text())
+        conn.execute(migration.with_name("0075_whatsapp_history_requests.sql").read_text())
     monkeypatch.setattr(archive, "get_conn", connect)
     import telegram_sync
 
     monkeypatch.setattr(telegram_sync, "get_conn", connect)
+    import whatsapp_history
+
+    monkeypatch.setattr(whatsapp_history, "get_conn", connect)
     yield connect
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
@@ -899,3 +914,371 @@ def test_telegram_channel_and_megagroup_kinds_and_disappearing_content(telegram_
     assert message_record(message, 99, group)["conversation_kind"] == "group"
     message.ttl_period = 30
     assert message_record(message, 99, group) is None
+
+
+def test_history_cutoff_uses_calendar_months_and_utc():
+    from datetime import timedelta
+
+    from messaging_history import history_cutoff
+
+    assert history_cutoff(datetime(2026, 10, 31, 12, tzinfo=timezone.utc)) == datetime(
+        2026, 4, 30, 12, tzinfo=timezone.utc
+    )
+    assert history_cutoff(datetime(2024, 8, 31, tzinfo=timezone.utc)) == datetime(
+        2024, 2, 29, tzinfo=timezone.utc
+    )
+    assert history_cutoff(
+        datetime(2026, 10, 18, 14, tzinfo=timezone(timedelta(hours=2)))
+    ) == datetime(2026, 4, 18, 12, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="missing_timezone"):
+        history_cutoff(datetime(2026, 10, 18))
+
+
+def test_whatsapp_history_cutoff_filters_unsorted_messages_and_keeps_boundary(proto):
+    cutoff = datetime(2026, 4, 18, tzinfo=timezone.utc)
+    history = proto.HistorySync()
+    conversation = history.conversations.add(id="15550000001@s.whatsapp.net")
+    for id, time in [
+        ("older", cutoff.timestamp() - 1),
+        ("boundary", cutoff.timestamp()),
+        ("newer", cutoff.timestamp() + 1),
+    ]:
+        message = conversation.messages.add().message
+        message.key.id = id
+        message.messageTimestamp = int(time)
+        message.message.conversation = id
+    records = list(history_records(history, "15550000000@s.whatsapp.net", cutoff=cutoff))
+    assert [record["id"] for record in records] == ["boundary", "newer"]
+
+
+@pytest.mark.parametrize("provider", ["whatsapp", "telegram"])
+def test_shared_staging_cutoff_uses_original_date_preserves_live_and_existing_archive(
+    database, telegram_types, monkeypatch, provider
+):
+    import messaging_history
+    from messaging_normalization import Provider
+
+    monkeypatch.setattr(
+        messaging_history, "_utc_now", lambda: datetime(2026, 10, 18, tzinfo=timezone.utc)
+    )
+    selected = Provider(provider)
+    account = archive.set_connection(OWNER, True, selected)
+    template = record() if selected == Provider.WHATSAPP else telegram_record(telegram_types)
+    historical = {
+        **template,
+        "origin": "history",
+        "id": "100",
+        "sent_at": "2026-04-18T00:00:00+00:00",
+        "effective_at": "2026-04-18T00:00:00+00:00",
+    }
+    old_edit = {
+        **historical,
+        "kind": "edit",
+        "id": "101",
+        "sent_at": "2026-04-17T23:59:59+00:00",
+        "effective_at": "2026-10-18T00:00:00+00:00",
+    }
+    assert (
+        archive.stage_records(account["account_id"], account["generation"], [historical, old_edit])
+        == 1
+    )
+    archive.drain_once()
+    assert len(archive.search(OWNER, provider=selected)) == 1
+    old_live = {
+        **old_edit,
+        "kind": "message",
+        "origin": "live",
+        "body": "Already captured evidence",
+    }
+    assert archive.stage_records(account["account_id"], account["generation"], [old_live]) == 1
+    archive.drain_once()
+    assert archive.stage_records(account["account_id"], account["generation"], [old_edit]) == 0
+    assert len(archive.search(OWNER, provider=selected)) == 2
+    assert (
+        archive.search(OWNER, "captured", provider=selected)[0]["body"]
+        == "Already captured evidence"
+    )
+
+
+def test_pending_history_outside_cutoff_is_acknowledged_without_archive_insert(
+    database, monkeypatch
+):
+    from psycopg.types.json import Jsonb
+
+    import messaging_history
+
+    account = archive.set_connection(OWNER, True)
+    pending = record(origin="history", time="2026-01-01T00:00:00+00:00")
+    # Simulate accepted history already queued before this cutoff was deployed.
+    with database() as conn:
+        conn.execute(
+            "INSERT INTO messaging_inbox(account_id, generation, record_hash, payload) VALUES (%s, %s, %s, %s)",
+            (account["account_id"], account["generation"], "pre-cutoff", Jsonb(pending)),
+        )
+    monkeypatch.setattr(
+        messaging_history, "_utc_now", lambda: datetime(2026, 10, 18, tzinfo=timezone.utc)
+    )
+    assert archive.drain_once() == 1
+    assert archive.search(OWNER) == []
+    assert archive.counts(OWNER)["pending"] == 0
+    with database() as conn:
+        row = conn.execute("SELECT payload, attempts, processed_at FROM messaging_inbox").fetchone()
+        assert row["payload"] == {} and row["attempts"] == 0 and row["processed_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_cursor", [False, True])
+async def test_telegram_history_stops_at_six_month_boundary(
+    database, telegram_types, monkeypatch, existing_cursor
+):
+    from unittest.mock import AsyncMock
+
+    import messaging_history
+    from messaging_normalization import Provider
+    from telegram_native import sync_dialog
+    from telegram_sync import checkpoint, cursor
+
+    monkeypatch.setattr(
+        messaging_history, "_utc_now", lambda: datetime(2026, 10, 18, tzinfo=timezone.utc)
+    )
+    t = telegram_types
+    account = archive.set_connection(OWNER, True, Provider.TELEGRAM)
+    cutoff = messaging_history.history_cutoff()
+    old = t.Message(
+        id=8,
+        peer_id=t.PeerUser(12),
+        from_id=t.PeerUser(12),
+        date=cutoff.replace(day=17),
+        message="Too old",
+    )
+    boundary = t.Message(
+        id=9, peer_id=t.PeerUser(12), from_id=t.PeerUser(12), date=cutoff, message="At boundary"
+    )
+    newer = t.Message(
+        id=10,
+        peer_id=t.PeerUser(12),
+        from_id=t.PeerUser(12),
+        date=cutoff.replace(day=19),
+        message="Newer",
+    )
+    old.get_sender = AsyncMock(
+        side_effect=AssertionError("old history must be skipped before sender lookup")
+    )
+    dialog = SimpleNamespace(entity=t.User(id=12, first_name="Person"))
+    if existing_cursor:
+        checkpoint(
+            account["account_id"], account["generation"], "12@telegram.user", oldest=10, newest=10
+        )
+
+    async def no_new_messages(*_args, **_kwargs):
+        if False:
+            yield None
+
+    client = SimpleNamespace(
+        get_messages=AsyncMock(
+            side_effect=[[newer], [boundary, old]] if existing_cursor else [[newer, boundary, old]]
+        ),
+        iter_messages=no_new_messages,
+    )
+    await sync_dialog(client, dialog, 99, account["account_id"], account["generation"])
+    archive.drain_once()
+    saved = cursor(account["account_id"], "12@telegram.user")
+    assert saved["backfill_done"] is True
+    assert len(archive.search(OWNER, provider=Provider.TELEGRAM)) == 2
+    assert client.get_messages.await_count == (2 if existing_cursor else 1)
+    # A subsequent pass may reconcile recent messages, but must not fetch an older page.
+    client.get_messages.reset_mock(side_effect=True)
+    client.get_messages.return_value = [newer]
+    await sync_dialog(client, dialog, 99, account["account_id"], account["generation"])
+    assert client.get_messages.await_count == 1
+    assert "offset_id" not in client.get_messages.call_args.kwargs
+
+
+def whatsapp_history_proto(proto, entries, *, chat="15550000001@s.whatsapp.net", terminal=None):
+    history = proto.HistorySync(syncType=6)
+    conversation = history.conversations.add(id=chat)
+    if terminal is not None:
+        conversation.endOfHistoryTransferType = terminal
+    for id, time in entries:
+        message = conversation.messages.add().message
+        message.key.id = id
+        message.messageTimestamp = int(datetime.fromisoformat(time).timestamp())
+        message.message.conversation = f"History {id}"
+    return history
+
+
+def history_due(database, account_id):
+    with database() as conn:
+        conn.execute(
+            "UPDATE whatsapp_history_cursors SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE account_id = %s",
+            (account_id,),
+        )
+
+
+@pytest.mark.parametrize("initial_kind", ["message", "edit"])
+def test_whatsapp_history_claim_seeds_existing_archive_and_bounds_retries(database, initial_kind):
+    import whatsapp_history as history
+
+    account = ingest(kind=initial_kind)
+    first = history.claim_request(account["account_id"], account["generation"])
+    assert first["oldest_message_id"] == "ABC"
+    assert first["oldest_timestamp_ms"] == 1767268800000
+    history.finish_send(account["account_id"], account["generation"], first, "request-one")
+    assert history.claim_request(account["account_id"], account["generation"]) is None
+    for _ in range(2):
+        history_due(database, account["account_id"])
+        assert history.claim_request(account["account_id"], account["generation"])
+    history_due(database, account["account_id"])
+    assert history.claim_request(account["account_id"], account["generation"]) is None
+    assert history.counts(OWNER) == {"history_pending": 0, "history_stalled": 1}
+    assert history.counts(OTHER) == {"history_pending": 0, "history_stalled": 0}
+    history.retry(OTHER)
+    assert history.counts(OWNER)["history_stalled"] == 1
+    app = FastAPI()
+    app.include_router(create_messaging_router())
+    app.dependency_overrides[get_current_user] = lambda: {"email": OWNER}
+    client = TestClient(app)
+    assert client.get("/messaging/status").json()["history_stalled"] == 1
+    assert client.post("/messaging/retry").status_code == 200
+    assert client.get("/messaging/status").json()["history_stalled"] == 0
+    assert history.claim_request(account["account_id"], account["generation"])
+
+
+def test_whatsapp_history_advances_only_after_capture_and_deduplicates_pages(
+    database, proto, monkeypatch
+):
+    import whatsapp_history as history
+
+    account = ingest()
+    first = history.claim_request(account["account_id"], account["generation"])
+    chunk = whatsapp_history_proto(proto, [("older", "2025-12-01T00:00:00+00:00")])
+    original_stage = archive.stage_records
+
+    def fail(*_args):
+        raise RuntimeError("database_unavailable")
+
+    monkeypatch.setattr(archive, "stage_records", fail)
+    with pytest.raises(RuntimeError):
+        history.capture_history(
+            account["account_id"], account["generation"], chunk, "15550000000@s.whatsapp.net"
+        )
+    with database() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_history_cursors").fetchone()
+        assert row["oldest_message_id"] == "ABC" and row["state"] == "waiting"
+    monkeypatch.setattr(archive, "stage_records", original_stage)
+    history.capture_history(
+        account["account_id"], account["generation"], chunk, "15550000000@s.whatsapp.net"
+    )
+    history_due(database, account["account_id"])
+    second = history.claim_request(account["account_id"], account["generation"])
+    assert second["oldest_message_id"] == "older"
+    # A late sender completion from the previous request cannot overwrite progress.
+    history.finish_send(account["account_id"], account["generation"], first, None)
+    history.capture_history(
+        account["account_id"], account["generation"], chunk, "15550000000@s.whatsapp.net"
+    )
+    with database() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_history_cursors").fetchone()
+        assert row["state"] == "waiting" and row["request_token"] == second["request_token"]
+        assert row["attempts"] == 1
+    archive.drain_once()
+    assert len(archive.search(OWNER)) == 2
+
+
+def test_whatsapp_history_same_second_cursor_progress_and_cutoff(database, proto):
+    import whatsapp_history as history
+
+    account = ingest()
+    history.claim_request(account["account_id"], account["generation"])
+    chunk = whatsapp_history_proto(
+        proto, [("ABC", "2026-01-01T12:00:00+00:00"), ("same-second", "2026-01-01T12:00:00+00:00")]
+    )
+    history.capture_history(
+        account["account_id"], account["generation"], chunk, "15550000000@s.whatsapp.net"
+    )
+    with database() as conn:
+        assert (
+            conn.execute("SELECT oldest_message_id FROM whatsapp_history_cursors").fetchone()[
+                "oldest_message_id"
+            ]
+            == "same-second"
+        )
+    boundary = whatsapp_history_proto(proto, [("at-cutoff", "2025-07-15T00:00:00+00:00")])
+    history.capture_history(
+        account["account_id"], account["generation"], boundary, "15550000000@s.whatsapp.net"
+    )
+    assert history.counts(OWNER)["history_pending"] == 1
+    old = whatsapp_history_proto(proto, [("too-old", "2025-07-14T23:59:59+00:00")])
+    history.capture_history(
+        account["account_id"], account["generation"], old, "15550000000@s.whatsapp.net"
+    )
+    archive.drain_once()
+    assert history.claim_request(account["account_id"], account["generation"]) is None
+    with database() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_history_cursors").fetchone()
+        assert row["state"] == "complete" and row["reason"] == "cutoff_reached"
+    assert not any(row["body"] == "History too-old" for row in archive.search(OWNER))
+
+
+@pytest.mark.parametrize("terminal, expected", [(1, "complete"), (2, "waiting"), (3, "stalled")])
+def test_whatsapp_history_empty_response_distinguishes_source_end_and_no_access(
+    database, proto, terminal, expected
+):
+    import whatsapp_history as history
+
+    account = ingest()
+    history.claim_request(account["account_id"], account["generation"])
+    chunk = whatsapp_history_proto(proto, [], terminal=terminal)
+    history.capture_history(
+        account["account_id"], account["generation"], chunk, "15550000000@s.whatsapp.net"
+    )
+    with database() as conn:
+        assert (
+            conn.execute("SELECT state FROM whatsapp_history_cursors").fetchone()["state"]
+            == expected
+        )
+
+
+def test_whatsapp_history_rejects_stale_callbacks_and_telegram_accounts(database, proto):
+    import whatsapp_history as history
+    from messaging_normalization import Provider
+
+    account = ingest()
+    first = history.claim_request(account["account_id"], account["generation"])
+    stopped = archive.set_connection(OWNER, False)
+    history.finish_send(account["account_id"], account["generation"], first, "late")
+    chunk = whatsapp_history_proto(proto, [("older", "2025-12-01T00:00:00+00:00")])
+    history.observe_history(account["account_id"], account["generation"], chunk)
+    assert history.claim_request(stopped["account_id"], stopped["generation"]) is None
+    with database() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_history_cursors").fetchone()
+        assert row["oldest_message_id"] == "ABC" and row["request_id"] is None
+    telegram = archive.set_connection(OWNER, True, Provider.TELEGRAM)
+    assert history.claim_request(telegram["account_id"], telegram["generation"]) is None
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_requester_invokes_bound_method_with_cursor_and_safe_failure_retry(
+    database, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    pytest.importorskip("tryx")
+    import whatsapp_history as history
+
+    account = ingest()
+    method = AsyncMock(return_value="request-id")
+    client = SimpleNamespace(advanced=SimpleNamespace(fetch_message_history=method))
+    assert await history.request_once(client, account["account_id"], account["generation"])
+    args = method.call_args.args
+    assert str(args[0].user) == "15550000001" and str(args[0].server) == "s.whatsapp.net"
+    assert args[1:] == ("ABC", False, 1767268800000, 100)
+    history_due(database, account["account_id"])
+    method.side_effect = RuntimeError("private protocol error")
+    with pytest.raises(RuntimeError):
+        await history.request_once(client, account["account_id"], account["generation"])
+    with database() as conn:
+        row = conn.execute("SELECT * FROM whatsapp_history_cursors").fetchone()
+        assert row["state"] == "ready" and row["reason"] == "request_failed"
+        assert "private" not in json.dumps(row, default=str)
+    assert history.claim_request(account["account_id"], account["generation"]) is None

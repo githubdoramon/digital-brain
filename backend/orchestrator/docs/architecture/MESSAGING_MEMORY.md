@@ -23,6 +23,13 @@ markers. A deletion in the source app does not erase the archived content. Expli
 deletion within Digital Brain controls archive removal and invalidates dependent
 indexes/knowledge. Never imply that unobserved history has been archived.
 
+Historical imports for both providers are limited to the preceding six calendar
+months, inclusive of the cutoff instant in UTC. The boundary is recalculated as
+imports run and applies to the original message timestamp, including historical
+edits. This limits new historical ingestion; it does not delete previously
+archived evidence or interrupt live capture. Telegram stops older-page traversal
+at the boundary; WhatsApp filters supplied history before archival projection.
+
 Attachment files remain in the original app. Store references and useful metadata,
 not files, thumbnails, audio, transcripts, OCR, or copies in document/Immich storage.
 Meaning can be extracted from the surrounding message, caption, or filename without

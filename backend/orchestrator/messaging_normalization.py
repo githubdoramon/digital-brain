@@ -228,7 +228,7 @@ def live_record(event: Any, self_jid: str) -> dict | None:
     )
 
 
-def history_records(proto: Any, self_jid: str, on_error=None):
+def history_records(proto: Any, self_jid: str, on_error=None, *, cutoff: datetime | None = None):
     """Stream projections; never persist SerializeToString()/raw HistorySync."""
     for conversation in proto.conversations:
         try:
@@ -238,6 +238,12 @@ def history_records(proto: Any, self_jid: str, on_error=None):
             continue
         for item in conversation.messages:
             message = item.message
+            if (
+                cutoff is not None
+                and message.messageTimestamp
+                and message.messageTimestamp < cutoff.timestamp()
+            ):
+                continue
             key = message.key
             sender = key.participant or message.participant
             if not sender:

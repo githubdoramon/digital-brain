@@ -71,16 +71,23 @@ async def sync_dialog(client, dialog, self_id, account_id, generation):
     from telethon import utils
 
     from messaging_archive import stage_records
+    from messaging_history import history_cutoff
     from messaging_normalization import Origin
     from telegram_normalization import message_record, peer_id
     from telegram_sync import checkpoint, cursor
 
     chat = peer_id(utils.get_peer(dialog.entity))
     saved = await asyncio.to_thread(cursor, account_id, chat)
+    cutoff = history_cutoff()
+
+    def boundary_reached(messages):
+        return any(message.date and message.date < cutoff for message in messages)
 
     async def stage(messages):
         records = []
         for message in messages:
+            if message.date and message.date < cutoff:
+                continue
             sender = await message.get_sender()
             record = message_record(message, self_id, dialog.entity, sender, Origin.HISTORY)
             if record:
@@ -99,6 +106,7 @@ async def sync_dialog(client, dialog, self_id, account_id, generation):
                 chat,
                 oldest=min(m.id for m in recent),
                 newest=max(m.id for m in recent),
+                done=boundary_reached(recent),
             )
     else:
         # Catch up in ascending order. Never jump over uncommitted pages.
@@ -125,7 +133,7 @@ async def sync_dialog(client, dialog, self_id, account_id, generation):
             generation,
             chat,
             oldest=min((m.id for m in older), default=0),
-            done=not older,
+            done=not older or boundary_reached(older),
         )
 
 

@@ -23,7 +23,7 @@ intelligence builds on the same evidence rather than bypassing archive storage.
   preserves the last known text and revision evidence; stale history cannot
   resurrect deleted state or overwrite an edit. Inbox commits are processing
   checkpoints; poisoned entries retry up to five times and can be retried manually.
-- `whatsapp_native.py` and `whatsapp_runtime.py`: pinned `tryx==1.5.0` in a managed
+- `whatsapp_native.py` and `whatsapp_runtime.py`: pinned `tryx==1.5.0+digitalbrain.1` in a managed
   Python child process inside the existing orchestrator container. Tryx's Python
   surface lacks explicit shutdown and durable upstream capture registration, so
   the child boundary permits termination/reaping and suppresses native raw logs.
@@ -46,28 +46,74 @@ intelligence builds on the same evidence rather than bypassing archive storage.
   exchange. Dates/sender attribution survive tool compaction, and the verifier
   requires inspection of the actual matching message before final synthesis.
 
+### Historical import window and explicit requests
+
+Historical imports are limited to six calendar months before the current UTC
+instant, inclusive. `whatsapp_native.py` passes this boundary to `history_records`
+so older messages are skipped before normalizing bodies/attachment metadata.
+Shared staging and inbox draining enforce the same rule, including history
+already queued before the limit was introduced. Live callbacks continue normally;
+existing archived messages are not purged.
+
+Upstream whatsapp-rust **does** expose
+[`Client::fetch_message_history`](https://github.com/oxidezap/whatsapp-rust/blob/main/src/pdo.rs).
+It asks the primary phone for older messages using chat JID, oldest known message
+ID, whether that message was outgoing, its timestamp in milliseconds, and a batch
+count. The method returns a request ID; history is delivered asynchronously.
+This is an explicit protocol request, not a guarantee that all requested history
+will be returned.
+
+Digital Brain now builds `tryx==1.5.0+digitalbrain.1` from the immutable upstream
+revisions in `vendor/tryx/manifest.json`. The checksum-verified patch exposes
+`AdvancedClient.fetch_message_history` and fixes the upstream Cargo.lock root
+version without changing dependency resolutions. The orchestrator Dockerfile
+builds the wheel in a Rust/Python build stage, installs it in the existing runtime
+image, and asserts the method exists. The CI Python-test job builds/caches the
+same wheel before installing requirements. See [the patch build instructions](../../vendor/tryx/README.md)
+for host development; an ordinary PyPI 1.5.0 wheel no longer satisfies the pinned
+runtime requirement. No extra deployed service is introduced.
+
+The requester starts after a successful self-identity check and initial sync.
+It seeds cursors from initial history or existing archived, non-deleted messages,
+then requests batches of 100 older messages, paced at ten seconds with only one
+outstanding application request per account. `0075_whatsapp_history_requests.sql`
+persists per-chat anchors, pending request tokens, attempt counts, and outcomes.
+Anchors advance only after sanitized callback staging commits; a failed chunk
+leaves the previous cursor available for retry. Duplicate chunks do not reset the
+retry count or extend the deadline. Distinct older cursors at the same timestamp
+can advance without looping over a previously seen anchor.
+
+Each pending request has a two-minute response deadline. Send failures back off
+by one minute per attempt; at most three attempts are made per unchanged anchor.
+An unavailable or repeatedly unanswered page becomes stalled and can be retried
+from web System → Messengers → WhatsApp. Retry is owner-scoped. A source-exhausted
+flag or crossing the six-month cutoff ends traversal; a completed transfer with
+more messages on the phone does not mean source exhaustion. The requester never
+marks an unanswered page as complete. Late generation/send completions cannot
+rewind a newer cursor. The phone must be reachable and willing to provide history;
+missing response correlation in Tryx means progress is matched per account/chat.
+
 ### Capture guarantee and remaining work
 
 Durability begins after a sanitized callback projection reaches PostgreSQL staging.
-Tryx 1.5.0's observer path does not expose upstream before-ACK hooks, so a process
+Tryx's observer path does not expose upstream before-ACK hooks, so a process
 crash or observer overflow before staging can lose an observation. The separate
 history worker cannot recover history the provider never supplies. Status records
 observed-only coverage and bounded capture-failure counts; never label this a
 complete or lossless archive. Stronger before-ACK capture requires a targeted
 Tryx/upstream extension and is not implemented by the Python staging queue.
 
-The inspected Tryx repository was `fa649633165484910145a933fe14979f81fd3837`, with
-submodule `539ed050817f351d080fb5092179b22cebaceffe`; installed artifacts are the
-published 1.5.0 wheels, not a build claimed from that repository commit. Native
-imports, SQLite initialization, and callback registration were checked locally;
-Linux amd64/Python 3.11 native SQLite initialization also passed in a disposable
-container with network disabled. No WhatsApp connection was started by these checks.
+The base Tryx revision is `fa649633165484910145a933fe14979f81fd3837`, with
+whatsapp-rust submodule `539ed050817f351d080fb5092179b22cebaceffe`. The local
+history patch does not add before-ACK durability hooks or broaden attachment
+storage. Build/import checks and deterministic requester/database tests do not
+establish complete history delivery from a real account.
 
 Only one WhatsApp account binding per Digital Brain owner is supported initially.
 A changed self phone identity is rejected instead of silently merging another
 account into the archive. LID/phone cross-alias consolidation, authoritative
-membership updates, additional protocol variants, archive purge UI, and broader
-history acquisition remain follow-up work. Different wire sender aliases are not
+membership updates, additional protocol variants, archive purge UI, and live
+history coverage validation remain follow-up work. Different wire sender aliases are not
 currently deduplicated into one canonical message; each can be linked to the same
 contact manually. Search is lexical; semantic passages are not implemented yet.
 Projects, temporal knowledge/contact enrichment, generalized proposed items, and
@@ -75,7 +121,8 @@ daily cross-source reasoning remain the later product milestones.
 
 ### Running and checking the milestone
 
-Rebuild the existing orchestrator image to install pinned Tryx and QR dependencies.
+Rebuild the existing orchestrator image to build/install the pinned history-enabled
+Tryx wheel and QR dependencies. A restart alone does not replace the native wheel.
 Normal backend startup applies migration 0073 and starts the dormant supervisor and
 archive worker. No extra service or manual migration/index command is required.
 The Compose service has init enabled and mounts `/app/storage/whatsapp` persistently;
@@ -386,3 +433,15 @@ contact correction propagation, dismissed proposal suppression, and manual edits
 A successful fixture suite/build proves the bridge contract, not account reliability
 or complete history. Live acceptance requires observed text delivery across restart
 and Python outage, measured history coverage, and verified absence of media download.
+
+### Explicit-history validation
+
+The patched native wheel builds and imports on macOS arm64/Python 3.12. The real
+native binding rejects invalid batch counts and requires a running authenticated
+client for valid arguments, without connecting an account in the test. A final
+226-test selection passes with this patched wheel, including the archive/API,
+backfill state machine, six-month cutoff, native binding, memory-tool and adjacent
+controller regression tests. Web typechecking/focused lint and changed-Python
+Ruff checks also pass. The Linux amd64/Python 3.11 release wheel builds and imports in the
+Docker build stage. An isolated network-disabled container also validates the
+real method, argument guards, and SQLite initialization. None of this is evidence of live primary-phone history delivery.

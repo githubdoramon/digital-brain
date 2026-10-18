@@ -8,7 +8,8 @@ pydantic==2.9.2
 requests==2.31.0
 boto3>=1.35,<2
 httpx==0.27.0
-tryx==1.5.0
+# Build this local wheel with scripts/build_tryx_history.py; Docker/CI do so automatically.
+tryx==1.5.0+digitalbrain.1
 qrcode==8.2
 ollama==0.3.3
 google-auth==2.35.0

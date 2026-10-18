@@ -96,7 +96,10 @@ identities, and cursors are scoped to the account/provider.
   IDs, and allow-listed attachment filename/type/size enter PostgreSQL staging.
   Files, thumbnails, media references/access hashes and downloads are excluded.
 - History loads the newest 100 messages per dialog, then progressively fetches
-  older 100-message pages. Separate oldest/newest cursors persist in
+  older 100-message pages within a rolling six-calendar-month window (UTC,
+  inclusive cutoff). Older messages are skipped before sender lookup/projection;
+  reaching the boundary marks backfill complete and stops older-page requests.
+  Separate oldest/newest cursors persist in
   `messaging_sync_cursors`. Cursors advance only after staging commits, so a crash
   may replay a page without skipping uncommitted data. One older page per dialog
   per pass prevents history from owning the live lane.
@@ -115,6 +118,11 @@ identities, and cursors are scoped to the account/provider.
   exchange under the same owner boundary. The attachment remains in Telegram;
   no attachment interpretation, automatic contact facts, projects, or daily
   intelligence jobs were introduced by this connector milestone.
+
+The shared `messaging_history.py` policy also filters historical records at
+staging and when draining an already queued inbox. Out-of-window queued history
+is acknowledged and cleared without creating archive messages. Existing archive
+rows and live messages are retained; this is not a six-month deletion policy.
 
 ## Verification
 
@@ -136,3 +144,7 @@ connect to Telegram or send a message.
 
 Validation recorded: 209 targeted backend checks, web TypeScript checking and
 focused ESLint pass. These are local/offline checks, not live account proof.
+
+The six-month cutoff change passes 41 messaging tests, including calendar/month-end
+boundaries, both-provider staging, old edits, queued history, and Telegram stopping
+on the initial or a resumed page.

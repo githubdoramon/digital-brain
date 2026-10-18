@@ -9,6 +9,7 @@ from enum import Enum
 from psycopg.types.json import Jsonb
 
 from db import get_conn
+from messaging_history import history_cutoff, within_history_window
 from messaging_normalization import (
     MAX_BATCH,
     MAX_TEXT,
@@ -181,7 +182,9 @@ def stage_records(account_id: str, generation: int, records: list[dict]) -> int:
         row = cur.fetchone()
         if not row or not row["enabled"] or row["generation"] != generation:
             return 0  # Late native callbacks cannot repopulate a stopped connection.
+        cutoff = history_cutoff()
         records = [validate_record(record) for record in records]
+        records = [record for record in records if within_history_window(record, cutoff)]
         for record in records:
             for key in ("chat", "sender", "self_jid"):
                 if record[key] and ("@telegram." in record[key]) != (
@@ -364,7 +367,8 @@ def drain_once() -> int:
             # A savepoint permits one malformed item to fail without losing peers.
             try:
                 with conn.transaction():
-                    _apply(cur, row["account_id"], row["payload"])
+                    if within_history_window(row["payload"]):
+                        _apply(cur, row["account_id"], row["payload"])
                     cur.execute(
                         """UPDATE messaging_inbox SET processed_at = NOW(),
                         payload = '{}'::jsonb WHERE inbox_id = %s""",

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, SecretStr
 
 import messaging_archive as archive
+import whatsapp_history
 import whatsapp_runtime
 from auth import get_current_user
 from messaging_normalization import Provider
@@ -56,6 +57,11 @@ def create_messaging_router() -> APIRouter:
             "error_code": row.get("error_code"),
             "last_capture_at": row.get("last_capture_at"),
             **archive.counts(owner, provider),
+            **(
+                whatsapp_history.counts(owner)
+                if provider == Provider.WHATSAPP
+                else {"history_pending": 0, "history_stalled": 0}
+            ),
             "provider": provider.value,
             "configured": provider == Provider.WHATSAPP or configured(),
             "password_challenge": whatsapp_runtime.password_challenge(row.get("account_id", "")),
@@ -156,6 +162,8 @@ def create_messaging_router() -> APIRouter:
     @router.post("/retry")
     def retry(provider: Provider = Provider.WHATSAPP, user: dict = Depends(get_current_user)):
         archive.retry_pending(_owner(user), provider)
+        if provider == Provider.WHATSAPP:
+            whatsapp_history.retry(_owner(user))
         return {"ok": True}
 
     @router.get("/messages")

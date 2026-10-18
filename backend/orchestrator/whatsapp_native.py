@@ -27,14 +27,14 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
     threading.Thread(target=watch_parent, daemon=True).start()
     session_lock = os.open(session_path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
 
-    from messaging_archive import runtime_state, stage_records
+    from messaging_archive import bind_self, runtime_state, stage_records
     from messaging_normalization import (
-        MAX_BATCH,
         ConnectionState,
-        history_records,
+        Provider,
         jid,
         live_record,
     )
+    from whatsapp_history import capture_history, request_once
 
     async def main():
         from tryx.backend import SqliteStore
@@ -52,6 +52,9 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
         # Bound concurrent database work. No idle media download/processing APIs.
         lane = asyncio.Semaphore(1)
         history_lane = asyncio.Semaphore(1)
+        connected_event = asyncio.Event()
+        client_holder = []
+        connection_epoch = 0
 
         def own_jid(client):
             return jid(client.advanced.get_pn())
@@ -66,16 +69,31 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
 
         @app.on(EvConnected)
         async def connected(_client, _event):
+            nonlocal connection_epoch
+            try:
+                own = own_jid(_client)
+                if not own:
+                    raise ValueError("missing_self_identity")
+                await asyncio.to_thread(bind_self, account_id, generation, Provider.WHATSAPP, own)
+            except Exception:
+                connected_event.clear()
+                await state(ConnectionState.ATTENTION, "account_mismatch")
+                return
+            connection_epoch += 1
+            client_holder[:] = [_client]
+            connected_event.set()
             pipe.send({"kind": "clear_qr"})
             await state(ConnectionState.CONNECTED)
 
         @app.on(EvDisconnected)
         async def disconnected(_client, _event):
+            connected_event.clear()
             pipe.send({"kind": "clear_qr"})
             await state(ConnectionState.CONNECTING)
 
         @app.on(EvLoggedOut)
         async def logged_out(_client, _event):
+            connected_event.clear()
             pipe.send({"kind": "clear_qr"})
             await state(ConnectionState.NEEDS_PAIRING, "session_expired")
 
@@ -90,26 +108,6 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     # Do not leak raw protobuf, callback exception, or message text.
                     await state(ConnectionState.ATTENTION, "capture_incomplete")
 
-        def stage_history(proto, self_jid):
-            batch = []
-            errors = 0
-
-            def rejected():
-                nonlocal errors
-                errors += 1
-
-            for record in history_records(proto, self_jid, on_error=rejected):
-                batch.append(record)
-                if len(batch) == MAX_BATCH:
-                    stage_records(account_id, generation, batch)
-                    batch = []
-            if batch:
-                stage_records(account_id, generation, batch)
-            if errors:
-                runtime_state(
-                    account_id, generation, ConnectionState.ATTENTION, "history_incomplete"
-                )
-
         @app.on(EvHistorySync)
         async def history(client, event):
             # Normalize in a blocking worker, never serialize the raw chunk.
@@ -119,11 +117,37 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     proto = event.proto
                     if proto.ByteSize() > 32 * 1024 * 1024:
                         raise ValueError("history_chunk_too_large")
-                    await asyncio.to_thread(stage_history, proto, own_jid(client))
+                    await asyncio.to_thread(
+                        capture_history, account_id, generation, proto, own_jid(client)
+                    )
                 except Exception:
                     await state(ConnectionState.ATTENTION, "history_incomplete")
 
-        await app.run()
+        async def request_history():
+            synced_epoch = -1
+            while True:
+                await connected_event.wait()
+                epoch = connection_epoch
+                client = client_holder[0]
+                try:
+                    if synced_epoch != epoch:
+                        await asyncio.wait_for(
+                            client.advanced.wait_for_startup_sync(90), timeout=95
+                        )
+                        synced_epoch = epoch
+                    if connected_event.is_set() and epoch == connection_epoch:
+                        await request_once(client, account_id, generation)
+                except Exception:
+                    await state(ConnectionState.ATTENTION, "history_incomplete")
+                await asyncio.sleep(10)
+
+        requester = asyncio.create_task(request_history())
+        try:
+            await app.run()
+        finally:
+            requester.cancel()
+            with suppress(asyncio.CancelledError):
+                await requester
 
     try:
         fcntl.flock(session_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

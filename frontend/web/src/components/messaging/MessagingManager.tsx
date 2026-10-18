@@ -12,6 +12,8 @@ type Status = {
   context: Context;
   messages: number;
   pending: number;
+  history_pending: number;
+  history_stalled: number;
   failed: number;
   configured: boolean;
   password_challenge: string | null;
@@ -390,6 +392,15 @@ export default function MessagingManager({
             {status?.messages ?? 0} archived messages
             {status?.pending ? ` · ${status.pending} waiting to be added` : ""}
           </p>
+          {!!(status?.enabled && status.history_pending) && (
+            <p className={styles.muted}>Importing older conversations…</p>
+          )}
+          {!!status?.history_stalled && (
+            <p className={styles.muted}>
+              Some conversations are waiting for history. Keep WhatsApp online
+              on your phone, then retry.
+            </p>
+          )}
           <div className={styles.row}>
             <button
               disabled={
@@ -413,7 +424,7 @@ export default function MessagingManager({
             >
               {status?.enabled ? "Disconnect" : `Connect ${providerName}`}
             </button>
-            {!!status?.failed && (
+            {!!(status?.failed || status?.history_stalled) && (
               <button
                 disabled={busy}
                 onClick={() =>
@@ -422,7 +433,7 @@ export default function MessagingManager({
                   })
                 }
               >
-                Retry pending messages
+                Retry import
               </button>
             )}
           </div>
