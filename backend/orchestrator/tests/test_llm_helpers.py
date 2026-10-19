@@ -2,9 +2,70 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 import requests
 
 import llm_helpers
+
+
+@pytest.mark.parametrize("native_status", [404, 405])
+def test_warmup_falls_back_to_configured_chat_api(monkeypatch, native_status):
+    monkeypatch.setenv("LLM_BASE_URL", "https://models.example/v1")
+    monkeypatch.setattr(llm_helpers, "is_ollama_base_url", lambda _: True)
+    calls = []
+    responses = iter(
+        [
+            MagicMock(status_code=native_status),
+            MagicMock(status_code=200, json=lambda: {"choices": [{"message": {"content": "OK"}}]}),
+        ]
+    )
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(llm_helpers.requests, "post", post)
+    assert llm_helpers.warm_chat_model("test-model", timeout=9)
+    assert calls[1][0] == "https://models.example/v1/chat/completions"
+    assert calls[1][1]["json"]["max_tokens"] == 1
+    assert "keep_alive" not in calls[1][1]["json"]
+
+
+def test_warmup_fallback_preserves_provider_failures(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://models.example/v1")
+    monkeypatch.setattr(llm_helpers, "is_ollama_base_url", lambda _: True)
+    failed = MagicMock(status_code=500)
+    failed.raise_for_status.side_effect = requests.HTTPError("upstream unavailable")
+    responses = iter([MagicMock(status_code=404), failed])
+    monkeypatch.setattr(llm_helpers.requests, "post", lambda *a, **k: next(responses))
+    with pytest.raises(requests.HTTPError):
+        llm_helpers.warm_chat_model("test-model")
+
+
+def test_sensitive_json_request_redacts_input_output_and_reasoning(monkeypatch, caplog):
+    import logging
+
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"answer":"PRIVATE_OUTPUT"}',
+                    "reasoning_content": "PRIVATE_REASONING",
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(llm_helpers.requests, "post", lambda *a, **k: response)
+    caplog.set_level(logging.INFO)
+    result = llm_helpers.call_llm_json("PRIVATE_INPUT", sensitive_payload=True)
+    assert result == {"answer": "PRIVATE_OUTPUT"}
+    assert "Sensitive LLM" in caplog.text
+    assert all(
+        secret not in caplog.text
+        for secret in ("PRIVATE_INPUT", "PRIVATE_OUTPUT", "PRIVATE_REASONING")
+    )
 
 
 def test_build_chat_payload_merges_system_messages_at_the_start(monkeypatch):

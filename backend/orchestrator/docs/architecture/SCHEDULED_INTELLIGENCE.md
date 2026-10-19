@@ -48,6 +48,17 @@ derived knowledge is retained when a group is subsequently excluded.
 - A source/part receipt commits in the same transaction as its findings. Failed
   inference or a lost lease advances no receipts. Receipts, rather than a sequence
   high-water mark, also cover transactions that commit out of order.
+- Model output is schema-checked (including knowledge status and ASCII predicate)
+  and controller-checked. A rejection gets one fresh extraction/reconciliation
+  attempt with safe validation feedback. Exact quote matching remains mandatory;
+  evidence is never fuzzily matched or invented to pass validation.
+- Persistently rejected batches are retained in `intelligence_failures`, without
+  successful receipts, so other source parts can proceed. Retry after five minutes;
+  after three failed attempts pause those parts. `/mobile/intelligence/status`
+  reports retrying/paused part counts even if a run has drained all eligible work.
+  Authenticated POST `/mobile/intelligence/retry-failures` resets only that owner's
+  failure budget; the worker reopens the matching run, including final reviews.
+  Transport/provider errors still retry the run without advancing receipts.
 - Scheduled runs finish with a bounded review of the previous two days' evidence
   and related open work, even if that evidence was already processed. Semantic
   reconciliation and controller replay keys suppress duplicate suggestions.
@@ -110,6 +121,15 @@ becoming new work after it has already been accomplished.
 All LLM calls use the configured smart model through `llm_helpers`, with a static
 `intelligence.run` parent span. Worker errors and telemetry never include source
 text, model output, identities, task descriptions or raw exception strings.
+Extraction, reconciliation, repair and completion-review calls set
+`sensitive_payload=True`; runtime logs retain request metadata and bounded failure
+codes, never prompts, responses or reasoning. This protects future log entries;
+previously exported logs are unaffected.
+
+Model warmup falls back to the configured `/chat/completions` API with a one-token
+request when the Ollama-native endpoint returns 404/405 (for example, a reverse
+proxy exposing only `/v1`). Provider/auth failures remain errors. A completion
+request does not guarantee Ollama-native keep-alive behavior.
 
 ## Verification boundary
 
@@ -127,3 +147,11 @@ passed Ruff; mobile/web passed TypeScript, focused ESLint and formatting checks;
 the CI workflow YAML parsed successfully and `git diff --check` passed. No
 production migration/deployment, live-model archive run, or device/visual UI
 acceptance was performed.
+
+Recovery follow-up on 2026-10-19: the full backend suite passed with 1,122 tests
+and eight existing integration skips, including regression cases for non-exact
+quotes, invalid/null statuses, non-ASCII predicates, bounded repairs, lease-safe
+deferral, continued archive progress, paused retries, owner-scoped retry/status,
+private LLM logging, and warmup API fallback. The new migration was exercised on
+disposable PostgreSQL. Model responses and provider HTTP responses were mocked;
+this is not a deployed or live-model verification.

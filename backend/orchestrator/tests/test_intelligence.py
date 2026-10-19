@@ -57,6 +57,7 @@ def database(monkeypatch):
                 "0074_telegram_archive.sql",
                 "0075_whatsapp_history_requests.sql",
                 "0076_scheduled_intelligence.sql",
+                "0077_intelligence_failures.sql",
             ):
                 conn.execute((root / name).read_text())
         for module in (store, jobs, archive):
@@ -418,6 +419,192 @@ def test_structured_model_reconciles_candidates_and_separately_reviews_completio
     ctx, fs = model.analyze(OWNER, batch)
     assert fs[0]["verified_completion"] is True
     assert ctx["tasks"][0]["todo_id"] == "task1"
+
+
+@pytest.mark.parametrize("defect", ["quote", "status", "null_status", "predicate"])
+def test_model_repairs_rejected_facts_with_bounded_private_feedback(database, monkeypatch, defect):
+    import copy
+    import json
+
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    valid = finding(batch[0])
+    bad = copy.deepcopy(valid)
+    if defect == "quote":
+        bad["evidence"][0]["quote"] = "I sent the complete quote to Alex today."
+    elif defect == "predicate":
+        bad["predicate"] = "café.delivery"
+    else:
+        bad["status"] = "open" if defect == "status" else None
+    # Bad quotes pass the shape check but fail final evidence validation.
+    replies = iter(
+        [{"findings": [bad]}] * (2 if defect == "quote" else 1)
+        + [{"findings": [valid]}, {"findings": [valid]}]
+    )
+    calls = []
+
+    def ask(prompt, **kwargs):
+        calls.append((json.loads(prompt), kwargs))
+        return next(replies)
+
+    monkeypatch.setattr(model, "call_llm_json", ask)
+    ctx, fs = model.analyze(OWNER, batch)
+    assert len(fs) == 1
+    assert fs[0]["evidence"][0]["quote"] == batch[0]["text"]
+    assert all(kwargs["sensitive_payload"] for _, kwargs in calls)
+    assert calls[-1][0]["validation_feedback"]["code"] in {"invalid_schema", "invalid_evidence"}
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert len(store.knowledge_for(OWNER)) == 1
+
+
+def test_invalid_model_output_stops_after_one_repair_without_leaking_validation_input(
+    database, monkeypatch
+):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    calls = []
+
+    def ask(*args, **kwargs):
+        calls.append(kwargs)
+        return {"findings": [{"statement": "PRIVATE_INVALID_MODEL_TEXT"}]}
+
+    monkeypatch.setattr(model, "call_llm_json", ask)
+    with pytest.raises(model.InvalidModelOutput, match=r"^invalid_schema$") as error:
+        model.analyze(OWNER, batch)
+    assert len(calls) == 2
+    assert "PRIVATE_INVALID_MODEL_TEXT" not in str(error.value)
+
+
+def test_rejected_batches_defer_without_receipts_then_pause_and_allow_other_sources(
+    database, monkeypatch
+):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET knowledge_only=FALSE, cutoff=%s", (FUTURE,))
+    claimed = jobs.claim_run({OWNER})
+    for attempt in range(1, 4):
+        assert store.next_batch(OWNER, FUTURE)
+        store.defer_batch(OWNER, claimed, batch, "invalid_evidence")
+        assert store.next_batch(OWNER, FUTURE) == []
+        with database() as conn:
+            failed = conn.execute("SELECT * FROM intelligence_failures").fetchone()
+            assert failed["attempts"] == attempt
+            assert (failed["next_attempt_at"] is None) == (attempt == 3)
+            assert not conn.execute("SELECT 1 FROM intelligence_processed").fetchone()
+            if attempt < 3:
+                conn.execute("UPDATE intelligence_failures SET next_attempt_at=NOW()")
+    ingest(database, ident="healthy", body="I have moved to Lisbon permanently.")
+    assert [r["payload"]["text"] for r in store.next_batch(OWNER, FUTURE)] == [
+        "I have moved to Lisbon permanently."
+    ]
+    monkeypatch.setattr(model, "analyze", lambda *a, **k: ({}, []))
+    jobs._process_run(claimed)
+    with database() as conn:
+        assert conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 1
+        assert (
+            conn.execute("SELECT status FROM intelligence_runs").fetchone()["status"] == "succeeded"
+        )
+        conn.execute("UPDATE intelligence_failures SET next_attempt_at=NOW()")
+    jobs.requeue_deferred(OWNER)
+    recovered = jobs.claim_run({OWNER})
+    assert recovered
+    retry_batch = store.next_batch(OWNER, FUTURE)
+    assert [r["ref"] for r in retry_batch] == [batch[0]["ref"]]
+    store.apply_batch(OWNER, recovered, retry_batch, {}, [])
+    with database() as conn:
+        assert not conn.execute("SELECT 1 FROM intelligence_failures").fetchone()
+
+
+def test_worker_continues_past_invalid_batch_without_saving_it(database, monkeypatch, caplog):
+    setup_owner(database)
+    ingest(database)
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET knowledge_only=FALSE, cutoff=%s", (FUTURE,))
+    calls = []
+
+    def reject(*args, **kwargs):
+        calls.append(1)
+        raise model.InvalidModelOutput("invalid_evidence")
+
+    monkeypatch.setattr(model, "analyze", reject)
+    assert jobs.process_once({OWNER})
+    assert len(calls) == 1
+    with database() as conn:
+        assert not conn.execute("SELECT 1 FROM intelligence_processed").fetchone()
+        assert (
+            conn.execute("SELECT attempts FROM intelligence_failures").fetchone()["attempts"] == 1
+        )
+        assert (
+            conn.execute("SELECT status FROM intelligence_runs").fetchone()["status"] == "succeeded"
+        )
+    assert "reason=invalid_evidence" in caplog.text
+
+
+def test_failed_history_waits_without_reopening_and_retries_when_due(database):
+    setup_owner(database)
+    ingest(database, sent="2025-12-01T12:00:00+00:00")
+    claimed = jobs.claim_run({OWNER})
+    batch = store.next_batch(OWNER, FUTURE, knowledge_only=True)
+    store.defer_batch(OWNER, claimed, batch, "invalid_evidence")
+    jobs.finish_run(claimed)
+    jobs.refresh_backlog(OWNER)
+    assert jobs.claim_run({OWNER}) is None
+    with database() as conn:
+        conn.execute("UPDATE intelligence_failures SET next_attempt_at=NOW()")
+    jobs.refresh_backlog(OWNER)
+    reclaimed = jobs.claim_run({OWNER})
+    assert reclaimed["knowledge_only"]
+    with pytest.raises(ValueError, match="lease_expired"):
+        store.defer_batch(OWNER, claimed, batch, "invalid_evidence")
+    store.apply_batch(OWNER, reclaimed, batch, context(batch), [])
+    jobs.finish_run(reclaimed)
+    jobs.refresh_backlog(OWNER)
+    assert jobs.claim_run({OWNER}) is None
+
+
+def test_failure_status_and_explicit_retry_are_private_and_owner_scoped(database, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from routes import intelligence as routes
+
+    setup_owner(database)
+    setup_owner(database, OTHER)
+    ingest(database)
+    with database() as conn:
+        conn.execute(
+            """INSERT INTO intelligence_failures
+            (user_email,source_id,part,knowledge_only,attempts,error_code)
+            SELECT %s,source_id,0,FALSE,3,'invalid_evidence' FROM intelligence_sources""",
+            (OWNER,),
+        )
+    monkeypatch.setattr(routes, "get_conn", database)
+    app = FastAPI()
+    app.include_router(routes.create_intelligence_router())
+    app.dependency_overrides[routes.get_current_user] = lambda: {"email": OTHER}
+    with TestClient(app) as client:
+        assert client.get("/mobile/intelligence/status").json()["failures"] == {
+            "paused": 0,
+            "retrying": 0,
+        }
+        assert client.post("/mobile/intelligence/retry-failures").json() == {"retrying": 0}
+        app.dependency_overrides[routes.get_current_user] = lambda: {"email": OWNER}
+        status = client.get("/mobile/intelligence/status")
+        assert status.headers["cache-control"] == "no-store"
+        assert status.json()["failures"] == {"paused": 1, "retrying": 0}
+        assert client.post("/mobile/intelligence/retry-failures").json() == {"retrying": 1}
+        assert client.get("/mobile/intelligence/status").json()["failures"] == {
+            "paused": 0,
+            "retrying": 1,
+        }
+    with database() as conn:
+        assert (
+            conn.execute("SELECT attempts FROM intelligence_failures").fetchone()["attempts"] == 0
+        )
 
 
 def test_transactions_committed_out_of_sequence_still_get_processed(database):

@@ -309,6 +309,21 @@ def _post_chat_model_warmup(
         json=payload,
         timeout=timeout,
     )
+    if response.status_code in {404, 405}:
+        # A reverse proxy may expose only the configured OpenAI-compatible API.
+        logger.info("[llm_helpers] Native warmup unavailable; using chat completions")
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            headers=get_llm_headers(),
+            json={
+                "model": payload["model"],
+                "messages": payload["messages"],
+                "stream": False,
+                "max_tokens": 1,
+                "reasoning_effort": "none",
+            },
+            timeout=timeout,
+        )
     response.raise_for_status()
     data = response.json()
     _raise_for_llm_error(data)
@@ -1084,6 +1099,7 @@ def call_llm_json(
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
+    sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     """
     Make an LLM request and parse the response as JSON.
@@ -1120,6 +1136,7 @@ def call_llm_json(
         reasoning_effort=reasoning_effort,
         response_format=response_format,
         extra_body=extra_body,
+        sensitive_payload=sensitive_payload,
     )
 
     return parse_llm_json_content(content)

@@ -37,6 +37,7 @@ def enqueue_due(owner, *, now=None):
     now = now or intelligence.utcnow()
     intelligence.initialize(owner)
     refresh_backlog(owner)
+    requeue_deferred(owner)
     slot = latest_slot(now)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT started_at FROM intelligence_state WHERE user_email = %s", (owner,))
@@ -63,12 +64,17 @@ def refresh_backlog(owner):
             WHERE r.user_email=%s AND slot='knowledge-backlog' AND status <> 'running'
             AND EXISTS (SELECT 1 FROM intelligence_sources s
                 JOIN intelligence_state st ON st.user_email=r.user_email
+                CROSS JOIN LATERAL generate_series(0, GREATEST(0,
+                    (length(COALESCE(s.payload->>'text','')) - 1) / %s)) part(part)
                 WHERE (s.owner_email IS NULL OR s.owner_email=r.user_email)
                 AND (s.historical OR s.observed_at < st.started_at
                     OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE))
                 AND NOT EXISTS (SELECT 1 FROM intelligence_processed p WHERE p.user_email=r.user_email
-                    AND p.source_id=s.source_id AND p.part=GREATEST(0,
-                        (length(COALESCE(s.payload->>'text','')) - 1) / %s)))""",
+                    AND p.source_id=s.source_id AND p.part=part.part)
+                AND NOT EXISTS (SELECT 1 FROM intelligence_failures f
+                    WHERE f.user_email=r.user_email AND f.source_id=s.source_id AND NOT f.review
+                    AND f.part=part.part
+                    AND (f.next_attempt_at IS NULL OR f.next_attempt_at > NOW())))""",
             (owner, intelligence.CHUNK_SIZE),
         )
         conn.commit()
@@ -108,6 +114,20 @@ def claim_run(owners):
         )
         conn.commit()
         return {**run, "lease_token": token}
+
+
+def requeue_deferred(owner):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE intelligence_runs r SET status='pending', next_attempt_at=NOW(), reviewed=FALSE
+            WHERE r.user_email=%s AND r.status='succeeded'
+            AND EXISTS (SELECT 1 FROM intelligence_failures f
+                JOIN intelligence_sources s USING(source_id)
+                WHERE f.user_email=r.user_email AND f.knowledge_only=r.knowledge_only
+                AND s.observed_at <= r.cutoff AND f.next_attempt_at <= NOW())""",
+            (owner,),
+        )
+        conn.commit()
 
 
 def finish_run(run, *, more=False, failed=False):
@@ -187,19 +207,31 @@ def _process_run(run):
                 review_batch = intelligence.next_batch(
                     run["user_email"], run["cutoff"], review=True
                 )
-                context, findings = (
-                    intelligence_model.analyze(run["user_email"], review_batch)
-                    if review_batch
-                    else ({}, [])
-                )
+                try:
+                    context, findings = (
+                        intelligence_model.analyze(run["user_email"], review_batch)
+                        if review_batch
+                        else ({}, [])
+                    )
+                except intelligence_model.InvalidModelOutput as exc:
+                    intelligence.defer_batch(
+                        run["user_email"], run, review_batch, exc.code, review=True
+                    )
+                    logger.warning("[intelligence] review deferred reason=%s", exc.code)
+                    continue
                 intelligence.apply_batch(
                     run["user_email"], run, review_batch, context, findings, review=True
                 )
             finish_run(run)
             return True
-        context, findings = intelligence_model.analyze(
-            run["user_email"], batch, knowledge_only=run["knowledge_only"]
-        )
+        try:
+            context, findings = intelligence_model.analyze(
+                run["user_email"], batch, knowledge_only=run["knowledge_only"]
+            )
+        except intelligence_model.InvalidModelOutput as exc:
+            intelligence.defer_batch(run["user_email"], run, batch, exc.code)
+            logger.warning("[intelligence] batch deferred reason=%s", exc.code)
+            continue
         if _STOP.is_set():
             finish_run(run, more=True)
             return True

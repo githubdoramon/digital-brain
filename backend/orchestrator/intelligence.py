@@ -104,6 +104,10 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
                   AND NOT s.historical AND p.part = 0))
               AND (%s OR NOT EXISTS (SELECT 1 FROM intelligence_processed done
                   WHERE done.user_email = %s AND done.source_id = s.source_id AND done.part = p.part))
+              AND NOT EXISTS (SELECT 1 FROM intelligence_failures failed
+                  WHERE failed.user_email = st.user_email AND failed.source_id = s.source_id
+                    AND failed.part = p.part AND failed.review = %s
+                    AND (failed.next_attempt_at IS NULL OR failed.next_attempt_at > NOW()))
             ORDER BY s.historical, s.source_id, p.part LIMIT %s
         """,
             (
@@ -118,6 +122,7 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
                 cutoff,
                 review,
                 owner,
+                review,
                 BATCH_SIZE,
             ),
         )
@@ -431,6 +436,11 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
                 _save_proposal(cur, owner, f)
         for r in batch:
             cur.execute(
+                """DELETE FROM intelligence_failures WHERE user_email=%s AND source_id=%s
+                AND part=%s AND review=%s""",
+                (owner, r["source_id"], r["part"], review),
+            )
+            cur.execute(
                 """INSERT INTO intelligence_processed(user_email, source_id, part)
                 VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
                 (owner, r["source_id"], r["part"]),
@@ -440,6 +450,31 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
             lease_until = NOW() + INTERVAL '15 minutes', reviewed=reviewed OR %s WHERE run_id = %s""",
             (review, run["run_id"]),
         )
+        conn.commit()
+
+
+def defer_batch(owner, run, batch, code, *, review=False):
+    """Retain rejected evidence, retry three times, then pause for explicit retry."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT 1 FROM intelligence_runs WHERE run_id=%s AND user_email=%s
+            AND lease_token=%s AND lease_until > NOW() FOR UPDATE""",
+            (run["run_id"], owner, run["lease_token"]),
+        )
+        if not cur.fetchone():
+            raise ValueError("lease_expired")
+        for row in batch:
+            cur.execute(
+                """INSERT INTO intelligence_failures
+                (user_email, source_id, part, review, knowledge_only, error_code, next_attempt_at)
+                VALUES (%s,%s,%s,%s,%s,%s,NOW() + INTERVAL '5 minutes')
+                ON CONFLICT (user_email,source_id,part,review) DO UPDATE SET
+                    attempts=LEAST(3,intelligence_failures.attempts+1),
+                    error_code=EXCLUDED.error_code,
+                    next_attempt_at=CASE WHEN intelligence_failures.attempts >= 2 THEN NULL
+                        ELSE NOW() + INTERVAL '5 minutes' END""",
+                (owner, row["source_id"], row["part"], review, run["knowledge_only"], code),
+            )
         conn.commit()
 
 

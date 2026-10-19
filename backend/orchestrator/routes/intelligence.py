@@ -116,11 +116,31 @@ def create_intelligence_router():
                 (user["email"],),
             )
             runs = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                """SELECT COUNT(*) FILTER (WHERE next_attempt_at IS NOT NULL) AS retrying,
+                COUNT(*) FILTER (WHERE next_attempt_at IS NULL) AS paused
+                FROM intelligence_failures WHERE user_email=%s""",
+                (user["email"],),
+            )
+            failures = dict(cur.fetchone())
         return {
             "schedule": ["05:00", "19:00"],
             "timezone": "Europe/Lisbon",
             "state": state,
             "runs": runs,
+            "failures": failures,
         }
+
+    @router.post("/retry-failures")
+    def retry_failures(user=Depends(get_current_user)):
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE intelligence_failures SET attempts=0, next_attempt_at=NOW()
+                WHERE user_email=%s""",
+                (user["email"],),
+            )
+            count = cur.rowcount
+            conn.commit()
+        return {"retrying": count}
 
     return router
