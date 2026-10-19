@@ -126,6 +126,24 @@ Extraction, reconciliation, repair and completion-review calls set
 codes, never prompts, responses or reasoning. This protects future log entries;
 previously exported logs are unaffected.
 
+Progress logs distinguish `model_stage_completed` (candidate counts and elapsed
+time) from `batch_committed` (durable effects after the database commit). Batch
+summaries count new processed-part receipts, messages seen, facts created/updated,
+older evidence added, protected facts, proposals created, tasks completed,
+proposals expired and skipped findings. Duplicate proposals are not creations;
+repeated receipts are not newly processed parts. Fact updates include revisions
+and evidence changes, not just a changed statement. `repair_requested` records
+only the static rejection code.
+
+After each worker turn, `run_yielded`, `run_failed` or `run_drained` reports a
+snapshot through that run's cutoff: total/processed/remaining source parts and
+ready/retrying/paused counts, with separate failed final-review counts.
+`run_drained` means no currently eligible work; nonzero remaining or paused counts
+still need retry or attention. Counts cover captured snapshots/parts, not unique
+messages or a claim of complete messenger history. No owner, run/source IDs,
+predicates, fact statements, quotes or model reasoning enter these summaries.
+Snapshot failure emits `progress_snapshot_unavailable` and never fails the work.
+
 Model warmup falls back to the configured `/chat/completions` API with a one-token
 request when the Ollama-native endpoint returns 404/405 (for example, a reverse
 proxy exposing only `/v1`). Provider/auth failures remain errors. A completion

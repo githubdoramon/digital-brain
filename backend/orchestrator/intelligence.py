@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from psycopg.types.json import Jsonb
 
 from db import get_conn
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 CHUNK_SIZE = 5000
 BATCH_SIZE = 12
@@ -144,6 +147,43 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
                 or not _current(cur, r, owner)
             )
     return rows
+
+
+def progress(owner, cutoff, *, knowledge_only=False):
+    """Snapshot source-part coverage, including deferred work, without exposing evidence."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT COUNT(*) AS total_parts,
+            COUNT(*) FILTER (WHERE done.source_id IS NOT NULL) AS processed_parts,
+            COUNT(*) FILTER (WHERE done.source_id IS NULL) AS remaining_parts,
+            COUNT(*) FILTER (WHERE done.source_id IS NULL AND
+                (f.source_id IS NULL OR f.next_attempt_at <= NOW())) AS ready_parts,
+            COUNT(*) FILTER (WHERE done.source_id IS NULL AND
+                f.next_attempt_at > NOW()) AS retrying_parts,
+            COUNT(*) FILTER (WHERE done.source_id IS NULL AND
+                f.source_id IS NOT NULL AND f.next_attempt_at IS NULL) AS paused_parts
+            FROM intelligence_sources s JOIN intelligence_state st ON st.user_email=%s
+            CROSS JOIN LATERAL generate_series(0, GREATEST(0,
+                (length(COALESCE(s.payload->>'text','')) - 1) / %s)) p(part)
+            LEFT JOIN intelligence_processed done ON done.user_email=st.user_email
+                AND done.source_id=s.source_id AND done.part=p.part
+            LEFT JOIN intelligence_failures f ON f.user_email=st.user_email
+                AND f.source_id=s.source_id AND f.part=p.part AND NOT f.review
+            WHERE (s.owner_email IS NULL OR s.owner_email=st.user_email)
+                AND s.observed_at <= %s
+                AND (%s = (s.historical OR s.observed_at < st.started_at
+                    OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE)))""",
+            (owner, CHUNK_SIZE, cutoff, knowledge_only),
+        )
+        counts = dict(cur.fetchone())
+        cur.execute(
+            """SELECT COUNT(*) FILTER (WHERE f.next_attempt_at IS NOT NULL) AS review_retrying,
+            COUNT(*) FILTER (WHERE f.next_attempt_at IS NULL) AS review_paused
+            FROM intelligence_failures f JOIN intelligence_sources s USING(source_id)
+            WHERE f.user_email=%s AND f.knowledge_only=%s AND f.review AND s.observed_at <= %s""",
+            (owner, knowledge_only, cutoff),
+        )
+        return {**counts, **dict(cur.fetchone())}
 
 
 def _query(text):
@@ -414,6 +454,20 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
 
 def apply_batch(owner, run, batch, context, findings, *, review=False):
     """Commit findings and receipts together, guarded by the claimed run lease."""
+    counts = dict.fromkeys(
+        (
+            "parts_processed",
+            "facts_created",
+            "facts_updated",
+            "facts_supported",
+            "facts_protected",
+            "proposals_created",
+            "tasks_completed",
+            "proposals_expired",
+            "findings_skipped",
+        ),
+        0,
+    )
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT 1 FROM intelligence_runs WHERE run_id = %s AND user_email = %s
@@ -427,13 +481,15 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
         tasks = {t["todo_id"]: t for t in context.get("tasks", [])}
         for f in findings:
             if any(e["source_id"] not in current for e in f["evidence"]):
+                counts["findings_skipped"] += 1
                 continue
             if f["kind"] == "knowledge":
-                _save_knowledge(cur, owner, f)
+                outcome = _save_knowledge(cur, owner, f)
             elif f["kind"] == "complete":
-                _complete_task(cur, owner, f, tasks[f["existing_id"]], batch, context)
+                outcome = _complete_task(cur, owner, f, tasks[f["existing_id"]], batch, context)
             else:
-                _save_proposal(cur, owner, f)
+                outcome = _save_proposal(cur, owner, f)
+            counts[outcome or "findings_skipped"] += 1
         for r in batch:
             cur.execute(
                 """DELETE FROM intelligence_failures WHERE user_email=%s AND source_id=%s
@@ -445,12 +501,24 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
                 VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
                 (owner, r["source_id"], r["part"]),
             )
+            counts["parts_processed"] += cur.rowcount
         cur.execute(
             """UPDATE intelligence_runs SET batches = batches + 1,
             lease_until = NOW() + INTERVAL '15 minutes', reviewed=reviewed OR %s WHERE run_id = %s""",
             (review, run["run_id"]),
         )
         conn.commit()
+    # Emit success only after commit; no owner, source IDs, predicates or content.
+    logger.info(
+        "[intelligence] batch_committed mode=%s review=%s source_parts=%d messages_seen=%d findings=%d %s",
+        "history" if run.get("knowledge_only") else "scheduled",
+        review,
+        len(batch),
+        len({r["source_id"] for r in batch if r["kind"] == "message"}),
+        len(findings),
+        " ".join(f"{name}={value}" for name, value in counts.items()),
+    )
+    return counts
 
 
 def defer_batch(owner, run, batch, code, *, review=False):
@@ -487,16 +555,15 @@ def _save_knowledge(cur, owner, f):
     )
     old = cur.fetchone()
     if old and (old["manual"] or old["subject_ref"] != f["subject_ref"]):
-        return
+        return "facts_protected"
     if old and old["status"] == "current" and f["status"] in {"uncertain", "historical"}:
         # A possible future change or a historical statement cannot replace a
         # settled current fact, even when it was mentioned more recently.
-        _save_knowledge(
+        return _save_knowledge(
             cur,
             owner,
             {**f, "existing_id": None, "predicate": f["predicate"][:85] + "." + f["status"]},
         )
-        return
     if old:
         ident = old["knowledge_id"]
         cur.execute(
@@ -525,7 +592,7 @@ def _save_knowledge(cur, owner, f):
                 "UPDATE intelligence_knowledge SET evidence=%s WHERE knowledge_id=%s",
                 (Jsonb(evidence), ident),
             )
-            return
+            return "facts_supported"
         cur.execute(
             """UPDATE intelligence_knowledge SET statement = %s, status = %s,
             applicable_at = %s, valid_from=%s, valid_until=%s, evidence = %s, updated_at = NOW() WHERE knowledge_id = %s""",
@@ -539,6 +606,7 @@ def _save_knowledge(cur, owner, f):
                 ident,
             ),
         )
+        return "facts_updated"
     else:
         cur.execute(
             """INSERT INTO intelligence_knowledge(knowledge_id, user_email, subject_ref,
@@ -558,6 +626,7 @@ def _save_knowledge(cur, owner, f):
                 Jsonb(f["evidence"]),
             ),
         )
+        return "facts_created"
 
 
 def _save_proposal(cur, owner, f):
@@ -588,6 +657,7 @@ def _save_proposal(cur, owner, f):
             f.get("reason", ""),
         ),
     )
+    return "proposals_created" if cur.rowcount else None
 
 
 def _complete_task(cur, owner, f, task, batch, context):
@@ -632,7 +702,7 @@ def _complete_task(cur, owner, f, task, batch, context):
             AND status='pending' AND created_at=%s""",
             (Jsonb(matching), owner, task["todo_id"], task["created_at"]),
         )
-        return
+        return "proposals_expired" if cur.rowcount else None
     cur.execute(
         """UPDATE todos SET status = 'completed', updated_at = NOW()
         WHERE todo_id = %s AND status = 'pending' AND updated_at = %s
@@ -646,6 +716,7 @@ def _complete_task(cur, owner, f, task, batch, context):
             VALUES (%s,%s,'completed',%s)""",
             (task["todo_id"], owner, Jsonb(matching)),
         )
+        return "tasks_completed"
 
 
 def list_proposals(owner):

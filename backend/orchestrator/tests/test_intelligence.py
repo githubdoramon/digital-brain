@@ -544,6 +544,106 @@ def test_worker_continues_past_invalid_batch_without_saving_it(database, monkeyp
     assert "reason=invalid_evidence" in caplog.text
 
 
+def test_committed_progress_counts_actual_effects_and_redacts_content(database, caplog):
+    import logging
+
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0])]}, batch, ctx)
+    active = run(database)
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    created = store.apply_batch(OWNER, active, batch, ctx, fs)
+    assert created["facts_created"] == 1
+    assert created["facts_updated"] == 0
+    assert created["parts_processed"] == 1
+    repeated = store.apply_batch(OWNER, active, batch, ctx, fs)
+    assert repeated["facts_created"] == 0
+    assert repeated["facts_updated"] == 1
+    assert repeated["parts_processed"] == 0
+    with database() as conn:
+        conn.execute("UPDATE intelligence_knowledge SET manual=TRUE")
+    protected = store.apply_batch(OWNER, active, batch, ctx, fs)
+    assert protected["facts_protected"] == 1
+    assert protected["facts_updated"] == 0
+    assert "batch_committed" in caplog.text
+    assert "facts_created=1" in caplog.text
+    for private in (OWNER, fs[0]["statement"], batch[0]["text"], batch[0]["entity_id"]):
+        assert private not in caplog.text
+
+
+def test_rolled_back_effects_never_log_a_successful_commit(database, monkeypatch, caplog):
+    import logging
+
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0])]}, batch, ctx)
+    save = store._save_knowledge
+
+    def abort(cur, owner, f):
+        save(cur, owner, f)
+        raise RuntimeError("simulated transaction failure")
+
+    monkeypatch.setattr(store, "_save_knowledge", abort)
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    with pytest.raises(RuntimeError, match="simulated transaction failure"):
+        store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert "batch_committed" not in caplog.text
+    with database() as conn:
+        assert not conn.execute("SELECT 1 FROM intelligence_knowledge").fetchone()
+        assert not conn.execute("SELECT 1 FROM intelligence_processed").fetchone()
+
+
+def test_progress_counts_parts_by_owner_mode_and_deferred_state(database, caplog):
+    import logging
+
+    setup_owner(database)
+    setup_owner(database, OTHER)
+    ingest(database, body="A" * 6000)
+    ingest(database, ident="old", sent="2025-12-01T12:00:00+00:00")
+    ingest(database, owner=OTHER, ident="private")
+    batch = store.next_batch(OWNER, FUTURE)
+    assert len(batch) == 2
+    active = {**run(database), "knowledge_only": False}
+    store.defer_batch(OWNER, active, batch[:1], "invalid_evidence")
+    counts = store.progress(OWNER, FUTURE)
+    assert counts["total_parts"] == 2
+    assert counts["remaining_parts"] == 2
+    assert counts["ready_parts"] == counts["retrying_parts"] == 1
+    with database() as conn:
+        conn.execute("UPDATE intelligence_failures SET attempts=3,next_attempt_at=NULL")
+    store.apply_batch(OWNER, active, batch[1:], {}, [])
+    counts = store.progress(OWNER, FUTURE)
+    assert counts["processed_parts"] == counts["remaining_parts"] == counts["paused_parts"] == 1
+    assert counts["ready_parts"] == counts["retrying_parts"] == 0
+    assert store.progress(OWNER, FUTURE, knowledge_only=True)["total_parts"] == 1
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    jobs.finish_run(active)
+    assert "run_drained mode=scheduled" in caplog.text
+    assert "remaining_parts=1" in caplog.text
+    assert "paused_parts=1" in caplog.text
+    assert OWNER not in caplog.text
+
+
+def test_duplicate_proposals_are_not_counted_as_creations(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0], kind="task")]}, batch, ctx)
+    active = run(database)
+    assert store.apply_batch(OWNER, active, batch, ctx, fs)["proposals_created"] == 1
+    duplicate = store.apply_batch(OWNER, active, batch, ctx, fs)
+    assert duplicate["proposals_created"] == 0
+    assert duplicate["findings_skipped"] == 1
+
+
 def test_failed_history_waits_without_reopening_and_retries_when_due(database):
     setup_owner(database)
     ingest(database, sent="2025-12-01T12:00:00+00:00")

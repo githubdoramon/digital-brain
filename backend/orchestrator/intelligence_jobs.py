@@ -144,12 +144,27 @@ def finish_run(run, *, more=False, failed=False):
                 run["lease_token"],
             ),
         )
-        if cur.rowcount and not more and not failed and not run["knowledge_only"]:
+        changed = bool(cur.rowcount)
+        if changed and not more and not failed and not run["knowledge_only"]:
             cur.execute(
                 "UPDATE intelligence_state SET last_success_at=NOW() WHERE user_email=%s",
                 (run["user_email"],),
             )
         conn.commit()
+    if changed:
+        try:
+            counts = intelligence.progress(
+                run["user_email"], run["cutoff"], knowledge_only=run["knowledge_only"]
+            )
+            logger.info(
+                "[intelligence] run_%s mode=%s %s",
+                "failed" if failed else "yielded" if more else "drained",
+                "history" if run["knowledge_only"] else "scheduled",
+                " ".join(f"{name}={value}" for name, value in counts.items()),
+            )
+        except Exception:
+            # Reporting must never turn a committed run into a failure.
+            logger.warning("[intelligence] progress_snapshot_unavailable")
 
 
 def process_once(owners):
@@ -195,6 +210,10 @@ def _heartbeat(run):
 
 @traced_intelligence_run()
 def _process_run(run):
+    logger.info(
+        "[intelligence] run_started mode=%s",
+        "history" if run["knowledge_only"] else "scheduled",
+    )
     for _ in range(4):
         if _STOP.is_set():
             finish_run(run, more=True)

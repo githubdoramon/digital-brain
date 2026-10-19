@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 import intelligence
 from llm_helpers import build_json_schema_response_format, call_llm_json
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 
 class StrictResponse(BaseModel):
@@ -128,7 +132,15 @@ def _ask(payload, *, phase):
         # Supporting evidence accumulates over time; do not re-send it in full.
         payload = {**payload, "context": _bounded_context(payload["context"])}
     try:
-        return _ask_validated(payload, phase=phase)
+        started = time.monotonic()
+        result = _ask_validated(payload, phase=phase)
+        logger.info(
+            "[intelligence] model_stage_completed stage=%s candidates=%d elapsed_s=%.1f",
+            "extraction" if phase.startswith("Extract") else "reconciliation",
+            len(result["findings"]),
+            time.monotonic() - started,
+        )
+        return result
     except (ValidationError, json.JSONDecodeError):
         raise InvalidModelOutput("invalid_schema") from None
 
@@ -185,7 +197,9 @@ def _bounded_context(context):
 
 def analyze(owner, batch, *, knowledge_only=False):
     repair_hint = None
-    for _ in range(2):
+    for attempt in range(2):
+        if attempt:
+            logger.info("[intelligence] repair_requested reason=%s attempt=1", repair_hint)
         try:
             return _analyze(owner, batch, knowledge_only=knowledge_only, repair_hint=repair_hint)
         except InvalidModelOutput as exc:
