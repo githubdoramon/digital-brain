@@ -307,7 +307,6 @@ const CONTACT_CANCEL_OPTION_PREFIX = 'cancel:';
 const CONTACT_EDIT_OPTION_PREFIX = 'edit:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
-const COMPOSER_KEYBOARD_GAP = 20;
 
 function backendErrorDetails(error: unknown): RequestErrorMetadata {
   const fallbackSummary = 'Request failed';
@@ -1276,6 +1275,7 @@ export function ChatConversationScreen({
   const scrollFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const isSendingRef = useRef(false);
   const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [threadTitle, setThreadTitle] = useState<string | null>(null);
@@ -1308,11 +1308,8 @@ export function ChatConversationScreen({
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const commandsEnabled = isMainChat;
-  const composerBottomOffset = keyboardVisible
-    ? Platform.OS === 'ios'
-      ? COMPOSER_KEYBOARD_GAP
-      : 2 * COMPOSER_KEYBOARD_GAP
-    : 0;
+  // KeyboardAvoidingView already moves the composer above the keyboard.
+  const composerBottomOffset = 0;
   const listBottomInset =
     composerHeight > 0
       ? composerHeight + composerBottomOffset + 16
@@ -1473,9 +1470,9 @@ export function ChatConversationScreen({
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading, isMainChat]);
 
   const resumePendingRun = useCallback(async () => {
-    if (!token) return;
+    if (!token || isSendingRef.current) return;
     const pendingRun = await loadPendingRun();
-    if (!pendingRun?.runId) return;
+    if (!pendingRun?.runId || isSendingRef.current) return;
     const activeThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
     const belongsToMainSession = isMainChat && pendingRun.threadId === null;
     if (!belongsToMainSession && (!activeThreadId || pendingRun.threadId !== activeThreadId)) {
@@ -1597,10 +1594,12 @@ export function ChatConversationScreen({
       : threadId
         ? await loadThreadHistory(token, threadId)
         : { threadId: null, pendingEventId: null, messages: [] };
+    if (isSendingRef.current) return;
     setThreadId(restored.threadId);
     setThreadTitle(restored.threadTitle ?? null);
     setPendingEventId(restored.pendingEventId);
     const pendingRun = await loadPendingRun();
+    if (isSendingRef.current) return;
     const activeScreenThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
     const relevantPendingRun =
       pendingRun &&
@@ -1852,8 +1851,6 @@ export function ChatConversationScreen({
       )
         return;
       Keyboard.dismiss();
-      setKeyboardVisible(false);
-      setKeyboardHeight(0);
       setInput('');
       setComposerMediaAttachments([]);
       setForceScrollNext(true);
@@ -1924,6 +1921,7 @@ export function ChatConversationScreen({
       };
 
       setIsSending(true);
+      isSendingRef.current = true;
       let activeRunId: string | null = null;
       let activeRunThreadId = isMainChat ? threadId : threadId ?? initialThreadId;
       try {
@@ -2087,6 +2085,7 @@ export function ChatConversationScreen({
           ),
         );
       } finally {
+        isSendingRef.current = false;
         setIsSending(false);
       }
     },
@@ -3168,7 +3167,7 @@ export function ChatConversationScreen({
           minInputHeight={MIN_CHAT_INPUT_HEIGHT}
           maxInputHeight={MAX_CHAT_INPUT_HEIGHT}
           composerBottomOffset={composerBottomOffset}
-          composerPaddingBottom={keyboardVisible ? 24 : tabBarClearance + (isMainChat ? 8 : 4)}
+          composerPaddingBottom={keyboardVisible ? 8 : tabBarClearance + (isMainChat ? 8 : 4)}
           onComposerHeightChange={setComposerHeight}
           onChangeInput={setInput}
           onSend={() => {

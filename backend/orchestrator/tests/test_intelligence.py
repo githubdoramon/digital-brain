@@ -1,0 +1,718 @@
+"""Real PostgreSQL contracts; model responses use anonymous deterministic fixtures."""
+
+import os
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
+
+import psycopg
+import pytest
+from psycopg import sql
+from psycopg.rows import dict_row
+
+import intelligence as store
+import intelligence_jobs as jobs
+import intelligence_model as model
+import messaging_archive as archive
+
+OWNER = "reader@example.com"
+OTHER = "other@example.com"
+FUTURE = datetime(2100, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def database(monkeypatch):
+    dsn = os.getenv("MESSAGING_TEST_DSN")
+    if not dsn:
+        pytest.skip("MESSAGING_TEST_DSN must identify a disposable PostgreSQL instance")
+    schema = "intelligence_test_" + uuid4().hex
+
+    @contextmanager
+    def connect():
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
+            yield conn
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    try:
+        with connect() as conn:
+            conn.execute("""
+                CREATE TABLE contacts(contact_id TEXT PRIMARY KEY, display_name TEXT, phones TEXT[],
+                    tags TEXT[] DEFAULT '{}', comments TEXT, emails TEXT[] DEFAULT '{}');
+                CREATE TABLE events(id TEXT PRIMARY KEY, title TEXT, summary TEXT, start_date TIMESTAMPTZ,
+                    is_cancelled BOOLEAN DEFAULT FALSE);
+                CREATE TABLE documents(document_id TEXT PRIMARY KEY, title TEXT, description TEXT, content TEXT,
+                    document_date TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW());
+                CREATE TABLE todos(todo_id TEXT PRIMARY KEY, description TEXT, status TEXT DEFAULT 'pending',
+                    due_date DATE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
+                CREATE TABLE todo_contacts(todo_id TEXT REFERENCES todos, contact_id TEXT REFERENCES contacts,
+                    PRIMARY KEY(todo_id, contact_id));
+                INSERT INTO contacts(contact_id, display_name) VALUES ('alex', 'Alex Carter');
+            """)
+            root = Path(__file__).resolve().parents[1] / "db_migrations"
+            for name in (
+                "0073_messaging_archive.sql",
+                "0074_telegram_archive.sql",
+                "0075_whatsapp_history_requests.sql",
+                "0076_scheduled_intelligence.sql",
+            ):
+                conn.execute((root / name).read_text())
+        for module in (store, jobs, archive):
+            monkeypatch.setattr(module, "get_conn", connect)
+        jobs._STOP.clear()
+        yield connect
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def setup_owner(database, owner=OWNER):
+    store.initialize(owner)
+    with database() as conn:
+        conn.execute(
+            "UPDATE intelligence_state SET started_at='2026-01-01' WHERE user_email=%s", (owner,)
+        )
+
+
+def ingest(
+    database,
+    *,
+    body="I sent the full quote to Alex today.",
+    ident="1",
+    owner=OWNER,
+    sent="2026-01-03T12:00:00+00:00",
+    outgoing=True,
+    forwarded=False,
+    kind="message",
+):
+    a = archive.set_connection(owner, True)
+    archive.stage_records(
+        a["account_id"],
+        a["generation"],
+        [
+            {
+                "kind": kind,
+                "origin": "live",
+                "chat": "15555550101@s.whatsapp.net",
+                "sender": "15555550100@s.whatsapp.net"
+                if outgoing
+                else "15555550101@s.whatsapp.net",
+                "self_jid": "15555550100@s.whatsapp.net",
+                "id": ident,
+                "sent_at": sent,
+                "effective_at": sent,
+                "outgoing": outgoing,
+                "name": "Alex Carter",
+                "title": "",
+                "body": body,
+                "attachments": [],
+                "reply_id": None,
+                "forwarded": forwarded,
+            }
+        ],
+    )
+    archive.drain_once()
+
+
+def run(database, owner=OWNER):
+    ident = uuid4().hex
+    with database() as conn:
+        conn.execute(
+            """INSERT INTO intelligence_runs(run_id, user_email, slot, cutoff, lease_token, lease_until)
+            VALUES (%s,%s,%s,%s,'token', NOW() + INTERVAL '1 hour')""",
+            (ident, owner, ident, FUTURE),
+        )
+    return {"run_id": ident, "user_email": owner, "lease_token": "token", "cutoff": FUTURE}
+
+
+def finding(row, *, kind="knowledge", **kwargs):
+    return dict(
+        kind=kind,
+        statement="Alex received the quote",
+        subject_ref="self",
+        predicate="quote_delivery",
+        status="current",
+        applicable_at=None,
+        valid_from=None,
+        valid_until=None,
+        context="work",
+        existing_id=None,
+        assignee_kind="user",
+        assignee_ref=None,
+        project_id=None,
+        due_date=None,
+        reason="The sender confirmed delivery.",
+        explicit_completion=kind == "complete",
+        requested_status="pending",
+        evidence=[{"ref": row["ref"], "quote": row["text"]}],
+        **kwargs,
+    )
+
+
+def context(batch):
+    return {
+        "people": [
+            {
+                "identity_id": r["payload"]["identity_id"],
+                "contact_id": None,
+                "is_self": True,
+                "display_name": "Alex Carter",
+            }
+            for r in batch
+            if r["kind"] == "message"
+        ],
+        "contacts": [],
+        "knowledge": [],
+        "tasks": [],
+        "projects": [],
+        "proposals": [],
+    }
+
+
+def test_calendar_slots_observe_local_daylight_saving():
+    assert jobs.latest_slot(datetime(2026, 7, 1, 4, tzinfo=timezone.utc)).hour == 5
+    assert jobs.latest_slot(datetime(2026, 1, 1, 4, tzinfo=timezone.utc)).hour == 19
+    assert jobs.latest_slot(datetime(2026, 7, 1, 18, tzinfo=timezone.utc)).hour == 19
+    assert jobs.latest_slot(datetime(2026, 1, 1, 19, tzinfo=timezone.utc)).hour == 19
+
+
+def test_seeded_backlog_and_late_old_imports_cannot_produce_tasks(database):
+    ingest(database)
+    store.initialize(OWNER)
+    batch = store.next_batch(OWNER, FUTURE, knowledge_only=True)
+    assert batch and not any(r["actionable"] for r in batch)
+    assert (
+        store.validate_findings(
+            {"findings": [finding(batch[0], kind="task")]}, batch, context(batch)
+        )
+        == []
+    )
+    setup_owner(database)
+    ingest(database, ident="old", sent="2025-12-30T12:00:00+00:00")
+    batch = store.next_batch(OWNER, FUTURE, knowledge_only=True)
+    old = next(r for r in batch if "2025" in r["payload"]["sent_at"])
+    assert not old["actionable"]
+
+
+def test_cross_source_capture_chunk_receipts_and_owner_isolation(database):
+    setup_owner(database)
+    setup_owner(database, OTHER)
+    ingest(database)
+    ingest(database, owner=OTHER)
+    with database() as conn:
+        conn.execute(
+            "INSERT INTO events VALUES ('event1','Sample decision','The quote was approved.','2026-01-03',FALSE)"
+        )
+        conn.execute(
+            "INSERT INTO documents(document_id,title,content) VALUES ('doc1','Sample document',%s)",
+            ("A" * 13000,),
+        )
+    batch = store.next_batch(OWNER, FUTURE)
+    assert {r["kind"] for r in batch} == {"message", "event", "document"}
+    assert all(r["owner_email"] in (None, OWNER) for r in batch)
+    docs = [r for r in batch if r["kind"] == "document"]
+    assert len(docs) == 3
+    store.apply_batch(OWNER, run(database), batch, context(batch), [])
+    assert store.next_batch(OWNER, FUTURE) == []
+    assert store.next_batch(OTHER, FUTURE)
+
+
+def test_source_revert_and_concurrent_late_commit_are_not_skipped(database):
+    setup_owner(database)
+    with database() as conn:
+        conn.execute("INSERT INTO events VALUES ('event1','First','A decision','2026-01-03',FALSE)")
+    first = store.next_batch(OWNER, FUTURE)
+    store.apply_batch(OWNER, run(database), first, context(first), [])
+    with database() as conn:
+        conn.execute("UPDATE events SET title='Second' WHERE id='event1'")
+        conn.execute("UPDATE events SET title='First' WHERE id='event1'")
+    assert len(store.next_batch(OWNER, FUTURE)) == 2
+
+
+def test_source_changes_during_inference_reject_effects_but_preserve_new_work(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    f = finding(batch[0])
+    findings = store.validate_findings({"findings": [f]}, batch, context(batch))
+    with database() as conn:
+        conn.execute("UPDATE messaging_messages SET body='Correction: the quote is not sent.'")
+    store.apply_batch(OWNER, run(database), batch, context(batch), findings)
+    assert store.knowledge_for(OWNER) == []
+    assert store.next_batch(OWNER, FUTURE)
+
+
+def test_evidence_and_targets_must_exist_in_scoped_context(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    f = finding(batch[0])
+    f["evidence"][0]["quote"] = "invented evidence"
+    with pytest.raises(ValueError, match="invalid_evidence"):
+        store.validate_findings({"findings": [f]}, batch, context(batch))
+    f = finding(batch[0])
+    f["subject_ref"] = "contact:not-confirmed"
+    with pytest.raises(ValueError, match="invalid_subject"):
+        store.validate_findings({"findings": [f]}, batch, context(batch))
+
+
+def test_knowledge_revisions_manual_protection_and_identity_linking(database):
+    setup_owner(database)
+    ingest(database, outgoing=False)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    f = finding(batch[0])
+    f["subject_ref"] = "identity:" + batch[0]["payload"]["identity_id"]
+    findings = store.validate_findings({"findings": [f]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, findings)
+    assert len(store.knowledge_for(OWNER)) == 1
+    assert store.knowledge_for(OWNER, contact_id="alex") == []
+    with database() as conn:
+        conn.execute("UPDATE messaging_identities SET contact_id='alex'")
+    assert len(store.knowledge_for(OWNER, contact_id="alex")) == 1
+    with database() as conn:
+        conn.execute("UPDATE intelligence_knowledge SET statement='Manual correction', manual=TRUE")
+    store.apply_batch(OWNER, run(database), batch, ctx, findings)
+    assert store.knowledge_for(OWNER)[0]["statement"] == "Manual correction"
+    assert store.knowledge_for(OTHER) == []
+
+
+def test_knowledge_revision_serializes_datetimes(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    f = finding(batch[0])
+    fs = store.validate_findings({"findings": [f]}, batch, context(batch))
+    store.apply_batch(OWNER, run(database), batch, context(batch), fs)
+    fs[0]["statement"] = "The quote is delivered"
+    store.apply_batch(OWNER, run(database), batch, context(batch), fs)
+    with database() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM intelligence_knowledge_revisions").fetchone()[
+                "n"
+            ]
+            == 1
+        )
+
+
+@pytest.mark.parametrize(
+    "forwarded,outgoing,manual,fresh,verified,expected",
+    [
+        (False, True, False, True, True, "completed"),
+        (True, True, False, True, True, "pending"),
+        (False, False, False, True, True, "pending"),
+        (False, True, True, True, True, "pending"),
+        (False, True, False, False, True, "pending"),
+        (False, True, False, True, False, "pending"),
+    ],
+)
+def test_completion_requires_direct_actor_fresh_version_and_review(
+    database, forwarded, outgoing, manual, fresh, verified, expected
+):
+    setup_owner(database)
+    ingest(database, forwarded=forwarded, outgoing=outgoing)
+    with database() as conn:
+        conn.execute(
+            """INSERT INTO todos(todo_id, description, created_at, intelligence_manual_at)
+            VALUES ('task1','Send the quote to Alex','2026-01-02',%s)""",
+            (store.utcnow() if manual else None,),
+        )
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = store.context_for(OWNER, batch)
+    assert ctx["tasks"]
+    f = finding(batch[0], kind="complete")
+    f["existing_id"] = "task1"
+    fs = store.validate_findings({"findings": [f]}, batch, ctx)
+    fs[0]["verified_completion"] = verified
+    if not fresh:
+        with database() as conn:
+            conn.execute("UPDATE todos SET updated_at=NOW() + INTERVAL '1 second'")
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    with database() as conn:
+        assert conn.execute("SELECT status FROM todos").fetchone()["status"] == expected
+        assert conn.execute("SELECT count(*) AS n FROM intelligence_task_evidence").fetchone()[
+            "n"
+        ] == (1 if expected == "completed" else 0)
+
+
+def test_proposal_acceptance_dismissal_and_replay_are_atomic(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    f = finding(batch[0], kind="task")
+    fs = store.validate_findings({"findings": [f]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    p = store.list_proposals(OWNER)[0]
+    assert store.resolve_proposal(OTHER, p["proposal_id"], accept=True) is None
+    assert store.resolve_proposal(OWNER, p["proposal_id"], accept=True)["accepted"]
+    assert store.resolve_proposal(OWNER, p["proposal_id"], accept=True)["accepted"]
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert not store.list_proposals(OWNER)
+    with database() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM todos").fetchone()["n"] == 1
+
+
+def test_stale_proposal_cannot_be_accepted(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0], kind="project")]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    p = store.list_proposals(OWNER)[0]
+    with database() as conn:
+        conn.execute("UPDATE messaging_messages SET body='This project was cancelled.'")
+    assert (
+        store.resolve_proposal(OWNER, p["proposal_id"], accept=True)["reason"] == "source_changed"
+    )
+
+
+def test_leases_recover_and_serialize_runs_per_owner(database):
+    setup_owner(database)
+    claimed = jobs.claim_run({OWNER})
+    assert claimed
+    assert jobs.claim_run({OWNER}) is None
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET lease_until=NOW()-INTERVAL '1 second'")
+    recovered = jobs.claim_run({OWNER})
+    assert recovered["lease_token"] != claimed["lease_token"]
+    with pytest.raises(ValueError, match="lease_expired"):
+        store.apply_batch(OWNER, claimed, [], {}, [])
+
+
+def test_failed_inference_keeps_receipts_unadvanced_and_uses_safe_error(database, monkeypatch):
+    setup_owner(database)
+    ingest(database)
+    # Make the backlog eligible for this controlled new source as well.
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET knowledge_only=FALSE, cutoff=%s", (FUTURE,))
+
+    def fail(*a, **k):
+        raise RuntimeError("private source text must not be persisted as an error")
+
+    monkeypatch.setattr(model, "analyze", fail)
+    assert jobs.process_once({OWNER})
+    assert store.next_batch(OWNER, FUTURE)
+    with database() as conn:
+        row = conn.execute("SELECT status,error_code FROM intelligence_runs").fetchone()
+        assert row == {"status": "failed", "error_code": "analysis_failed"}
+
+
+def test_structured_model_reconciles_candidates_and_separately_reviews_completion(
+    database, monkeypatch
+):
+    setup_owner(database)
+    ingest(database)
+    with database() as conn:
+        conn.execute(
+            "INSERT INTO todos(todo_id,description,created_at) VALUES ('task1','Send quote to Alex','2026-01-02')"
+        )
+    batch = store.next_batch(OWNER, FUTURE)
+    f = finding(batch[0], kind="complete")
+    f["existing_id"] = "task1"
+    replies = iter([{"findings": [f]}, {"findings": [f]}, {"completed": True}])
+    monkeypatch.setattr(model, "call_llm_json", lambda *a, **k: next(replies))
+    ctx, fs = model.analyze(OWNER, batch)
+    assert fs[0]["verified_completion"] is True
+    assert ctx["tasks"][0]["todo_id"] == "task1"
+
+
+def test_transactions_committed_out_of_sequence_still_get_processed(database):
+    setup_owner(database)
+    with database() as delayed:
+        delayed.execute(
+            "INSERT INTO events VALUES ('early','Early source','Earlier allocation','2026-01-03',FALSE)"
+        )
+        with database() as committed:
+            committed.execute(
+                "INSERT INTO events VALUES ('later','Later source','Committed first','2026-01-03',FALSE)"
+            )
+        batch = store.next_batch(OWNER, FUTURE)
+        assert [r["entity_id"] for r in batch] == ["later"]
+        store.apply_batch(OWNER, run(database), batch, context(batch), [])
+    assert [r["entity_id"] for r in store.next_batch(OWNER, FUTURE)] == ["early"]
+
+
+def test_slots_dedupe_and_scheduled_work_precedes_backlog(database):
+    setup_owner(database)
+    now = store.utcnow()
+    assert jobs.enqueue_due(OWNER, now=now)
+    assert not jobs.enqueue_due(OWNER, now=now)
+    claimed = jobs.claim_run({OWNER})
+    assert not claimed["knowledge_only"]
+
+
+def test_broadcast_and_announcement_sources_never_reach_the_model(database, monkeypatch):
+    setup_owner(database)
+    ingest(database)
+    with database() as conn:
+        conn.execute("UPDATE messaging_conversations SET kind='channel'")
+        conn.execute("UPDATE messaging_messages SET body='Channel broadcast update'")
+    batch = store.next_batch(OWNER, FUTURE)
+    excluded = [r for r in batch if r["payload"]["excluded"]]
+    assert excluded
+    monkeypatch.setattr(
+        model, "call_llm_json", lambda *a, **k: pytest.fail("excluded source reached model")
+    )
+    ctx, fs = model.analyze(OWNER, batch)
+    assert fs == []
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert not store.knowledge_for(OWNER)
+
+
+def test_old_knowledge_cannot_replace_newer_current_facts(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    fs = store.validate_findings({"findings": [finding(batch[0])]}, batch, context(batch))
+    store.apply_batch(OWNER, run(database), batch, context(batch), fs)
+    ingest(
+        database,
+        ident="older",
+        body="The earlier quote was still unfinished.",
+        sent="2026-01-02T12:00:00+00:00",
+    )
+    old = store.next_batch(OWNER, FUTURE)
+    f = finding(old[0])
+    f["statement"] = "The quote is unfinished"
+    fs = store.validate_findings({"findings": [f]}, old, context(old))
+    store.apply_batch(OWNER, run(database), old, context(old), fs)
+    assert store.knowledge_for(OWNER)[0]["statement"] == "Alex received the quote"
+
+
+def test_uncertain_information_does_not_replace_a_settled_fact_and_expiry_is_visible(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    f = finding(batch[0])
+    f["valid_until"] = "2026-01-04T00:00:00+00:00"
+    fs = store.validate_findings({"findings": [f]}, batch, context(batch))
+    store.apply_batch(OWNER, run(database), batch, context(batch), fs)
+    assert store.knowledge_for(OWNER)[0]["status"] == "historical"
+    f.update(status="uncertain", statement="Delivery may be delayed", valid_until=None)
+    fs = store.validate_findings({"findings": [f]}, batch, context(batch))
+    store.apply_batch(OWNER, run(database), batch, context(batch), fs)
+    assert len(store.knowledge_for(OWNER)) == 2
+
+
+def test_manual_task_changes_are_stamped_and_proposal_changes_require_current_version(database):
+    setup_owner(database)
+    ingest(database)
+    with database() as conn:
+        conn.execute(
+            "INSERT INTO todos(todo_id,description) VALUES ('task1','Send the quote to Alex')"
+        )
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = store.context_for(OWNER, batch)
+    f = finding(batch[0], kind="task_change")
+    f.update(
+        existing_id="task1",
+        requested_status="cancelled",
+        target_updated_at=ctx["tasks"][0]["updated_at"].isoformat(),
+    )
+    fs = store.validate_findings({"findings": [f]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    p = store.list_proposals(OWNER)[0]
+    with database() as conn:
+        conn.execute(
+            "UPDATE todos SET description='A manually revised task', updated_at=NOW() WHERE todo_id='task1'"
+        )
+        assert (
+            conn.execute("SELECT intelligence_manual_at FROM todos").fetchone()[
+                "intelligence_manual_at"
+            ]
+            is not None
+        )
+    assert store.resolve_proposal(OWNER, p["proposal_id"], accept=True)["reason"] == "task_changed"
+
+
+def test_project_and_task_change_acceptance_apply_once(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0], kind="project")]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    p = store.list_proposals(OWNER)[0]
+    accepted = store.resolve_proposal(OWNER, p["proposal_id"], accept=True)
+    assert accepted["accepted"]
+    with database() as conn:
+        conn.execute(
+            "INSERT INTO todos(todo_id,description) VALUES ('task1','Send the quote to Alex')"
+        )
+    ctx = store.context_for(OWNER, batch)
+    f = finding(batch[0], kind="task_change")
+    f.update(
+        existing_id="task1",
+        project_id=accepted["id"],
+        requested_status="cancelled",
+        target_updated_at=ctx["tasks"][0]["updated_at"].isoformat(),
+    )
+    fs = store.validate_findings({"findings": [f]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    proposal = store.list_proposals(OWNER)[0]
+    assert store.resolve_proposal(OWNER, proposal["proposal_id"], accept=True)["accepted"]
+    with database() as conn:
+        assert conn.execute("SELECT status FROM todos").fetchone()["status"] == "cancelled"
+
+
+def test_forwarded_flag_survives_wrappers_without_exposing_forwarding_authors():
+    proto = pytest.importorskip("tryx.waproto.whatsapp_pb2")
+    from messaging_normalization import Origin, normalize_message
+
+    message = proto.Message()
+    nested = message.ephemeralMessage.message.extendedTextMessage
+    nested.text = "I sent the quote yesterday."
+    nested.contextInfo.isForwarded = True
+    normalized = normalize_message(
+        proto=message,
+        chat="15555550101@s.whatsapp.net",
+        sender="15555550100@s.whatsapp.net",
+        message_id="sample",
+        sent_at=1767441600,
+        outgoing=True,
+        origin=Origin.LIVE,
+    )
+    assert normalized["forwarded"] is True
+    assert "contextInfo" not in normalized
+
+
+def test_context_budget_does_not_grow_with_accumulated_evidence():
+    huge = {"statement": "sample fact", "evidence": [{"quote": "A" * 10000} for _ in range(1000)]}
+    bounded = model._bounded_context({"knowledge": [huge] * 100})
+    import json
+
+    assert len(json.dumps(bounded)) < 9000
+
+
+def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(database, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from auth import get_current_user
+    from routes import intelligence as routes
+
+    monkeypatch.setattr(routes, "get_conn", database)
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0])]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    knowledge_id = store.knowledge_for(OWNER)[0]["knowledge_id"]
+    app = FastAPI()
+    app.include_router(routes.create_intelligence_router())
+    app.dependency_overrides[get_current_user] = lambda: {"email": OTHER}
+    with TestClient(app) as client:
+        assert (
+            client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}").status_code == 404
+        )
+        assert (
+            client.patch(
+                f"/mobile/intelligence/knowledge/{knowledge_id}",
+                json={"statement": "A manual correction"},
+            ).status_code
+            == 404
+        )
+        app.dependency_overrides[get_current_user] = lambda: {"email": OWNER}
+        response = client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["speaker"] == "You"
+        assert (
+            client.patch(
+                f"/mobile/intelligence/knowledge/{knowledge_id}",
+                json={"statement": "A manual correction"},
+            ).status_code
+            == 200
+        )
+    assert store.knowledge_for(OWNER)[0]["manual"] is True
+
+
+def test_task_detail_exposes_assignment_project_and_owner_checked_evidence(database, monkeypatch):
+    import todos
+
+    monkeypatch.setattr(todos, "get_conn", database)
+    monkeypatch.setattr(todos, "_collect_todo_links", lambda *a: {})
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0], kind="task")]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    proposal = store.list_proposals(OWNER)[0]
+    result = store.resolve_proposal(OWNER, proposal["proposal_id"], accept=True)
+    detail = todos.get_todo(result["id"], user_email=OWNER)
+    assert detail["assignee_kind"] == "user"
+    assert detail["analysis_evidence"][0]["action"] == "created"
+    assert todos.get_todo(result["id"], user_email=OTHER)["analysis_evidence"] == []
+    assert todos.normalize_todo_status("cancelled") == "cancelled"
+
+
+def test_confirmed_completion_withdraws_a_pending_task_suggestion(database):
+    setup_owner(database)
+    now = store.utcnow()
+    ingest(
+        database,
+        body="I will send Alex the full quote.",
+        sent=(now - timedelta(minutes=1)).isoformat(),
+    )
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0], kind="task")]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    p = store.list_proposals(OWNER)[0]
+    ingest(database, ident="completion", sent=(now + timedelta(minutes=1)).isoformat())
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = store.context_for(OWNER, batch)
+    f = finding(batch[0], kind="complete")
+    f["existing_id"] = p["proposal_id"]
+    fs = store.validate_findings({"findings": [f]}, batch, ctx)
+    fs[0]["verified_completion"] = True
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert not store.list_proposals(OWNER)
+    assert not store.resolve_proposal(OWNER, p["proposal_id"], accept=True)["accepted"]
+
+
+def test_late_history_extends_only_the_knowledge_queue(database):
+    setup_owner(database)
+    assert jobs.process_once({OWNER})  # Initial empty backlog completes.
+    ingest(database, sent="2025-12-30T12:00:00+00:00", ident="historical")
+    assert not store.next_batch(OWNER, FUTURE)
+    jobs.refresh_backlog(OWNER)
+    historical_run = jobs.claim_run({OWNER})
+    assert historical_run["knowledge_only"]
+    assert store.next_batch(OWNER, historical_run["cutoff"], knowledge_only=True)
+    jobs.finish_run(historical_run, more=True)
+    ingest(database, ident="fresh")
+    jobs.enqueue_due(OWNER, now=FUTURE)
+    fresh_run = jobs.claim_run({OWNER})
+    assert not fresh_run["knowledge_only"]
+    fresh_batch = store.next_batch(OWNER, fresh_run["cutoff"])
+    assert len(fresh_batch) == 1 and fresh_batch[0]["actionable"]
+
+
+def test_self_knowledge_appears_only_on_the_confirmed_owner_contact(database):
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    ctx = context(batch)
+    fs = store.validate_findings({"findings": [finding(batch[0])]}, batch, ctx)
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert not store.knowledge_for(OWNER, contact_id="alex")
+    with database() as conn:
+        conn.execute("UPDATE contacts SET emails=ARRAY[%s] WHERE contact_id='alex'", (OWNER,))
+    assert len(store.knowledge_for(OWNER, contact_id="alex")) == 1
+
+
+def test_first_observed_edit_without_original_cannot_generate_work(database):
+    setup_owner(database)
+    ingest(database, kind="edit")
+    batch = store.next_batch(OWNER, FUTURE)
+    assert batch and not batch[0]["actionable"]
+    assert not store.validate_findings(
+        {"findings": [finding(batch[0], kind="task")]}, batch, context(batch)
+    )

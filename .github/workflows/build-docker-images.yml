@@ -50,12 +50,25 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.orchestrator == 'true'
     runs-on: ubuntu-latest
+    services:
+      messaging-test-db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # Required by backend imports (llm_helpers/auth) during test collection.
       LLM_BASE_URL: http://localhost:11434/v1
       LLM_CHAT_MODEL_FAST: ci-test-fast-model
       LLM_CHAT_MODEL_SMART: ci-test-smart-model
       GOOGLE_CLIENT_IDS: ci-test-client-id.apps.googleusercontent.com
+      MESSAGING_TEST_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
     defaults:
       run:
         working-directory: backend/orchestrator

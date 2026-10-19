@@ -34,7 +34,7 @@ def create_todos_router() -> APIRouter:
     @router.get("/todos/{todo_id}")
     @router.get("/mobile/todos/{todo_id}")
     def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
-        todo = todos_service.get_todo(todo_id)
+        todo = todos_service.get_todo(todo_id, user_email=user.get("email") or user.get("user_email"))
         if not todo:
             raise HTTPException(status_code=404, detail="Todo not found")
         return todo

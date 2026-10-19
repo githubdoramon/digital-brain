@@ -30,6 +30,7 @@ import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
+import { ArchiveEvidence, type ArchiveSource } from '@/components/ArchiveEvidence';
 import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
 import { formatDateOnlyLocal } from '@/utils/date';
 
@@ -55,6 +56,10 @@ type TodoDetail = {
   due_date?: string | null;
   contacts?: string[];
   events?: EventResult[];
+  assignee_kind?: string;
+  assignee_name?: string | null;
+  project_title?: string | null;
+  analysis_evidence?: { action: string; evidence: ArchiveSource[] }[];
 };
 
 type TodoSnapshot = {
@@ -125,6 +130,7 @@ function NewTodoContent() {
   const [saving, setSaving] = React.useState(false);
   const [loadingTodo, setLoadingTodo] = React.useState(false);
   const [todoStatus, setTodoStatus] = React.useState('pending');
+  const [analysisDetail, setAnalysisDetail] = React.useState<TodoDetail | null>(null);
   const [contacts, setContacts] = React.useState<Contact[]>([]);
   const [contactGroups, setContactGroups] = React.useState<ContactGroup[]>([]);
   const [contactQuery, setContactQuery] = React.useState('');
@@ -247,6 +253,7 @@ function NewTodoContent() {
           `/mobile/todos/${encodeURIComponent(todoIdParam)}`,
         )) as TodoDetail;
         if (!mounted) return;
+        setAnalysisDetail(result);
         setDescription(result.description?.trim() || '');
         setDueDate(result.due_date || '');
         setTodoStatus(result.status?.trim() || 'pending');
@@ -487,6 +494,28 @@ function NewTodoContent() {
               multiline
             />
             <Text style={styles.helper}>Be specific enough for future you.</Text>
+            {analysisDetail?.assignee_kind && analysisDetail.assignee_kind !== 'user' ? (
+              <Text style={styles.helper}>
+                {analysisDetail.assignee_name
+                  ? `Assigned to ${analysisDetail.assignee_name}`
+                  : 'Assignee not yet confirmed'}
+              </Text>
+            ) : null}
+            {analysisDetail?.project_title ? (
+              <Text style={styles.helper}>Project: {analysisDetail.project_title}</Text>
+            ) : null}
+            {analysisDetail?.analysis_evidence?.map((item, index) => (
+              <View key={index} style={{ gap: 8, marginTop: 12 }}>
+                <Text style={styles.label}>
+                  {item.action === 'completed'
+                    ? 'Completion confirmed'
+                    : item.action === 'created'
+                      ? 'Suggested from your conversations'
+                      : 'Updated from your conversations'}
+                </Text>
+                <ArchiveEvidence sources={item.evidence} />
+              </View>
+            ))}
 
             <View style={styles.sectionDivider} />
 

@@ -269,6 +269,14 @@ def build_daily_briefing(
         "weather_summary": weather_summary,
     }
 
+    if user_email:
+        try:
+            import intelligence
+
+            context["intelligence"] = intelligence.briefing_digest(user_email)
+        except Exception:
+            logger.warning("[briefing] Memory analysis results unavailable")
+
     selected_news = (
         _select_news_for_generation(context)
         if news_articles
@@ -1967,6 +1975,21 @@ def _generate_markdown(
     todos_section = _render_outstanding_todos_section(context.get("all_todos") or [])
 
     sections = [header, core_sections, birthdays_section, todos_section]
+    digest = context.get("intelligence") or {}
+    if any(digest.values()):
+        lines = ["## From your archive"]
+        if digest.get("proposals"):
+            lines.append("### Suggestions to review")
+            lines.extend("- " + " ".join(item["statement"].split()) for item in digest["proposals"])
+        if digest.get("knowledge"):
+            lines.append("### Recently learned")
+            lines.extend("- " + " ".join(item["statement"].split()) +
+                         (" (uncertain)" if item["status"] == "uncertain" else " (conflicting information)" if item["status"] == "conflicted" else "")
+                         for item in digest["knowledge"])
+        if digest.get("completed"):
+            lines.append("### Completed")
+            lines.extend("- " + " ".join(item["description"].split()) for item in digest["completed"])
+        sections.append("\n".join(lines))
 
     if news_input:
         news_validation = validate_news_section(news_section, has_news_input=True)

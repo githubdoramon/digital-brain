@@ -1,8 +1,9 @@
 # Messaging archive, projects, and proactive intelligence
 
-Status: agreed product direction; logical model with WhatsApp and Telegram archive
-implementations. Projects, temporal knowledge, and proactive intelligence are
-planned extensions. See WHATSAPP_INGESTION.md for the implemented boundary.
+Status: agreed product direction with WhatsApp/Telegram archives and the scheduled
+knowledge/proposal pipeline implemented. Broader project management and external
+action execution remain future work. See [SCHEDULED_INTELLIGENCE.md](SCHEDULED_INTELLIGENCE.md)
+and WHATSAPP_INGESTION.md for the implemented boundaries.
 Decisions recorded on 2026-10-17. WhatsApp was the first connector; see
 [WHATSAPP_INGESTION.md](WHATSAPP_INGESTION.md).
 
@@ -37,6 +38,10 @@ claiming to have inspected the attachment. A reference may outlive source access
 
 ## Existing implementation versus planned extensions
 
+The table below records the original baseline. Archive identity linking and the
+scheduled knowledge/proposal layer are now implemented by migrations 0073–0076;
+the linked implementation documents describe their current scope.
+
 | Existing code | Current behavior | Planned extension |
 | --- | --- | --- |
 | `conversations.py`, `conversation_search.py`, migrations 0071/0072 | Digital Brain chat threads, per-message lexical/semantic retrieval | Reuse retrieval patterns; external messaging has separate canonical storage and source types |
@@ -45,7 +50,7 @@ claiming to have inspected the attachment. A reference may outlive source access
 | `events.py` meeting transcript flow | Extracted action items include assignee name/email; only current-user actions become todos | One task model supporting any assignee and proposals for newly inferred work |
 | `todos.py`, `todo_contacts` | Tasks with pending/completed status and associated contacts/events/places | Explicit assignee distinct from involved contacts, primary project, and evidence |
 | `routes/proposals.py` | Mobile proposal route delegates to contact-enrichment proposals | Typed proposed items for tasks, projects, and actions, with durable resolution history |
-| `daily_briefing_jobs.py`, `async_jobs` | Existing scheduled jobs and briefing generation | Independent incremental extraction and daily cross-source analysis jobs; briefing consumes their results |
+| `intelligence_jobs.py`, `intelligence.py` | Twice-daily cross-source analysis, knowledge-only backlog, contact knowledge, task/project proposals and evidenced completion | Richer project management and external action proposals |
 
 Do not silently replace existing meeting todo behavior or existing manual contact
 confirmation flows. Integration of those paths is an explicit implementation step.
@@ -198,20 +203,22 @@ a dismissal, but unchanged evidence must not repeatedly recreate it.
 
 ## Analysis and retrieval
 
-1. Incremental extraction runs in debounced, bounded batches after material arrives
-   or changes: indexing, identity resolution, facts/contact updates, and candidate
-   task/project/action discovery using related retrieved context.
-2. A daily cross-source review considers changes since its last successful
-   checkpoint, open tasks, unresolved questions, approaching dates, and relevant
-   historical evidence across messages, events, documents, contacts, and projects.
-   It updates knowledge and produces deduplicated proposed items. Run independently
-   of daily briefing generation; the briefing can present its useful results.
+The agreed cadence is one scheduled analysis pipeline at **05:00 and 19:00
+Europe/Lisbon**, rather than a separate incremental/silence-based worker. It
+processes changed evidence in bounded batches, updates facts/contact knowledge,
+proposes tasks/projects/changes, and reviews related open work. Clear new evidence
+can automatically complete the matching task; manual corrections take precedence.
+It runs independently of the daily briefing. See the implemented contracts in
+[SCHEDULED_INTELLIGENCE.md](SCHEDULED_INTELLIGENCE.md).
+
+Start tracking actionable activity when the service is activated, with two days
+of earlier messages as context. A separate one-time pass extracts knowledge from
+the imported backlog without generating tasks. Late old imports remain knowledge-only.
 
 Do not feed the entire archive into a model each day. Persist run/checkpoint and
 evidence revision information, bound retrieval and inference, and recover missed
 runs without repeating effects. Late-arriving old messages count as new observations
-but do not automatically supersede newer applicable facts. No new schedule/timezone
-has been selected yet; daily is the agreed cadence.
+but do not automatically supersede newer applicable facts.
 
 Messages are canonical storage; contextual exchanges are derived retrieval units.
 Keep ordered source-message/revision references in passages and summaries, preserving
@@ -225,10 +232,8 @@ Coverage, missing history, event loss, and attachment availability must remain
 available to reasoning. Content belongs in private storage, not application logs,
 analytics, Mirador spans, metrics labels, or general diagnostic exports.
 
-## Next design work
+## Remaining extensions
 
-Before implementation, finalize migrations/API contracts for ownership, evidence
-references, revisions, task assignment, typed proposals, and project associations.
-Choose monitoring defaults, classification UI, intelligence budgets/schedule, and
-archive purge/backup behavior. These are remaining implementation details, not
-reasons to reopen the product decisions above.
+Richer project management, executable external-action proposals, and broader
+cross-source association screens remain extensions of the implemented scheduled
+pipeline. Archive purge/backup policy remains a separate product decision.

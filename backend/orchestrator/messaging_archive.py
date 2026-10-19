@@ -146,6 +146,7 @@ def validate_record(record: dict) -> dict:
         )
     }
     result["conversation_kind"] = record.get("conversation_kind")
+    result["forwarded"] = bool(record.get("forwarded", True))
     if result["conversation_kind"] not in (None, "direct", "group", "channel"):
         raise ValueError("unsupported_conversation_kind")
     RecordKind(result["kind"])
@@ -293,13 +294,14 @@ def _apply(cur, account_id: str, record: dict):
     cur.execute(
         """INSERT INTO messaging_messages
         (message_id, account_id, conversation_id, sender_identity_id, external_id,
-         sent_at, effective_at, revision_priority, body, deleted, outgoing, reply_id, attachments)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         sent_at, effective_at, revision_priority, body, deleted, outgoing, reply_id, attachments, forwarded)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (message_id) DO UPDATE SET
             body = CASE WHEN EXCLUDED.deleted THEN messaging_messages.body ELSE EXCLUDED.body END,
             deleted = EXCLUDED.deleted,
             effective_at = EXCLUDED.effective_at, revision_priority = EXCLUDED.revision_priority,
             reply_id = EXCLUDED.reply_id,
+            forwarded = CASE WHEN EXCLUDED.deleted THEN messaging_messages.forwarded ELSE EXCLUDED.forwarded END,
             attachments = CASE WHEN EXCLUDED.deleted THEN messaging_messages.attachments ELSE EXCLUDED.attachments END
         WHERE (EXCLUDED.effective_at, EXCLUDED.revision_priority)
             > (messaging_messages.effective_at, messaging_messages.revision_priority)
@@ -320,6 +322,7 @@ def _apply(cur, account_id: str, record: dict):
             record["outgoing"],
             record["reply_id"],
             Jsonb(record["attachments"]),
+            record["forwarded"],
         ),
     )
     if not is_mutation:

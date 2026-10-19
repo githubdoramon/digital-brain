@@ -21,6 +21,7 @@ class ScheduledJobSpec:
     time_local: time | None = None
     timezone_name: str | None = None
     run_interval_seconds: int | None = None
+    times_local: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -220,14 +221,34 @@ MICROSOFT_CALENDAR_SYNC = ScheduledJobSpec(
 )
 
 CONVERSATION_INDEX = ScheduledJobSpec(
-    job_type="conversation_index", label="Conversation search index",
-    worker_module="conversation_index_jobs", schedule_kind="polling",
-    time_utc=None, poll_seconds=2, retry_seconds=60,
+    job_type="conversation_index",
+    label="Conversation search index",
+    worker_module="conversation_index_jobs",
+    schedule_kind="polling",
+    time_utc=None,
+    poll_seconds=2,
+    retry_seconds=60,
     description="Indexes saved conversation passages for History and memory retrieval; backfills existing messages and retries failures.",
     trigger_source="conversation persistence and startup backfill",
 )
 
+SCHEDULED_INTELLIGENCE = ScheduledJobSpec(
+    job_type="scheduled_intelligence",
+    label="Memory analysis",
+    worker_module="intelligence_jobs",
+    schedule_kind="daily_local",
+    time_utc=None,
+    poll_seconds=30,
+    retry_seconds=300,
+    time_local=time(hour=5),
+    times_local=("05:00", "19:00"),
+    timezone_name="Europe/Lisbon",
+    description="Reviews new evidence, maintains knowledge, proposes work and completes evidenced tasks.",
+    trigger_source="backend scheduler",
+)
+
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
+    SCHEDULED_INTELLIGENCE,
     CONVERSATION_INDEX,
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
@@ -274,11 +295,19 @@ def list_scheduled_job_statuses() -> list[dict[str, Any]]:
 def _load_runtime_status() -> dict[str, dict[str, Any]]:
     status: dict[str, dict[str, Any]] = {}
     try:
+        import intelligence_jobs
+
+        status[SCHEDULED_INTELLIGENCE.job_type] = intelligence_jobs.get_worker_status()
+    except Exception:
+        status[SCHEDULED_INTELLIGENCE.job_type] = {"worker_alive": False}
+    try:
         import conversation_index_jobs
+
         status[CONVERSATION_INDEX.job_type] = conversation_index_jobs.get_worker_status()
     except Exception:
         status[CONVERSATION_INDEX.job_type] = {
-            "job_type": CONVERSATION_INDEX.job_type, "worker_alive": False,
+            "job_type": CONVERSATION_INDEX.job_type,
+            "worker_alive": False,
             "error": "Conversation index status unavailable",
         }
     try:

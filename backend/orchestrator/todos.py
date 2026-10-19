@@ -24,6 +24,8 @@ LEGACY_COMPLETED_STATUSES = ("complete", "done", "accomplished", "closed")
 
 def normalize_todo_status(status: str | None) -> str:
     normalized = (status or "").strip().lower()
+    if normalized == "cancelled":
+        return "cancelled"
     if normalized == TODO_STATUS_COMPLETED or normalized in LEGACY_COMPLETED_STATUSES:
         return TODO_STATUS_COMPLETED
     return TODO_STATUS_PENDING
@@ -32,6 +34,7 @@ def normalize_todo_status(status: str | None) -> str:
 def _status_sql_expression(column_name: str) -> str:
     return (
         "CASE "
+        f"WHEN lower(coalesce({column_name}, '')) = 'cancelled' THEN 'cancelled' "
         f"WHEN lower(coalesce({column_name}, '')) = %s THEN %s "
         f"WHEN lower(coalesce({column_name}, '')) = ANY(%s) THEN %s "
         "ELSE %s END"
@@ -116,7 +119,8 @@ def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dic
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT todo_id, description, ({status_expr}) AS status, due_date, created_at, updated_at
+            SELECT todo_id, description, ({status_expr}) AS status, due_date, created_at, updated_at,
+                   assignee_kind, assignee_ref, project_id
             FROM todos
             {where_clause}
             {order_clause}
@@ -145,6 +149,9 @@ def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dic
                     "contacts": links.get("contacts", []),
                     "events": links.get("events", []),
                     "places": links.get("places", []),
+                    "assignee_kind": row.get("assignee_kind", "user"),
+                    "assignee_ref": row.get("assignee_ref"),
+                    "project_id": row.get("project_id"),
                 }
             )
         return todos
@@ -286,13 +293,16 @@ def update_todo_status(todo_id: str, status: str) -> bool:
     return updated
 
 
-def get_todo(todo_id: str) -> dict[str, Any] | None:
+def get_todo(todo_id: str, *, user_email: str | None = None) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT todo_id, description, status, due_date, created_at, updated_at
-            FROM todos
-            WHERE todo_id = %s
+            SELECT t.todo_id, t.description, t.status, t.due_date, t.created_at, t.updated_at,
+                   t.assignee_kind, t.assignee_ref, t.project_id, p.title AS project_title,
+                   c.display_name AS assignee_name
+            FROM todos t LEFT JOIN intelligence_projects p ON p.project_id=t.project_id
+            LEFT JOIN contacts c ON t.assignee_kind='contact' AND c.contact_id=t.assignee_ref
+            WHERE t.todo_id = %s
             """,
             (todo_id,),
         )
@@ -303,6 +313,11 @@ def get_todo(todo_id: str) -> dict[str, Any] | None:
 
         link_map = _collect_todo_links(conn, [todo_id])
         links = link_map.get(todo_id, {})
+        evidence = []
+        if user_email:
+            cur.execute("""SELECT action, evidence, recorded_at FROM intelligence_task_evidence
+                WHERE todo_id=%s AND user_email=%s ORDER BY recorded_at DESC LIMIT 10""", (todo_id, user_email))
+            evidence = [dict(r) for r in cur.fetchall()]
 
         return {
             "todo_id": row.get("todo_id"),
@@ -314,6 +329,12 @@ def get_todo(todo_id: str) -> dict[str, Any] | None:
             "contacts": links.get("contacts", []),
             "events": links.get("events", []),
             "places": links.get("places", []),
+            "assignee_kind": row.get("assignee_kind", "user"),
+            "assignee_ref": row.get("assignee_ref"),
+            "assignee_name": row.get("assignee_name"),
+            "project_id": row.get("project_id"),
+            "project_title": row.get("project_title"),
+            "analysis_evidence": evidence,
         }
 
 

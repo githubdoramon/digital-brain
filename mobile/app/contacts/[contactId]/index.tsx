@@ -24,6 +24,7 @@ import { Avatar } from '@/components/Avatar';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import { ArchiveEvidence, type ArchiveSource } from '@/components/ArchiveEvidence';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
@@ -54,6 +55,12 @@ type Contact = {
   external_id: string | null;
   avatar_url?: string | null;
   relationships: Relationship[];
+  knowledge?: {
+    knowledge_id: string;
+    statement: string;
+    status: string;
+    evidence: ArchiveSource[];
+  }[];
 };
 
 const listToText = (items: string[]) => items.join(', ');
@@ -163,7 +170,9 @@ export default function ContactDetailScreen() {
       setIsLoading(true);
       setLoadError(null);
       try {
-        const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
+        const result = (await apiFetch(
+          `/mobile/contacts/${encodeURIComponent(contactParam)}`,
+        )) as Contact;
         if (mounted) {
           setContact(result);
           setDraft(result);
@@ -256,13 +265,13 @@ export default function ContactDetailScreen() {
     if (isCreating) {
       return Boolean(
         draft.display_name.trim() ||
-          parsedAliases.length ||
-          parsedEmails.length ||
-          parsedPhones.length ||
-          parsedLinks.length ||
-          parsedTags.length ||
-          draft.comments.trim() ||
-          draft.birthday,
+        parsedAliases.length ||
+        parsedEmails.length ||
+        parsedPhones.length ||
+        parsedLinks.length ||
+        parsedTags.length ||
+        draft.comments.trim() ||
+        draft.birthday,
       );
     }
     if (!contact) return false;
@@ -390,7 +399,9 @@ export default function ContactDetailScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>{isLoading ? 'Loading contact...' : 'Contact unavailable'}</Text>
+          <Text style={styles.emptyTitle}>
+            {isLoading ? 'Loading contact...' : 'Contact unavailable'}
+          </Text>
           {loadError ? <Text style={styles.emptySubtitle}>{loadError}</Text> : null}
         </View>
       </View>
@@ -414,8 +425,18 @@ export default function ContactDetailScreen() {
         keyboardShouldPersistTaps="always"
         keyboardDismissMode="none"
       >
-        <Animated.View style={[styles.hero, { opacity: heroOpacity, transform: [{ translateY: heroTranslate }] }]}>
-          <Avatar name={draft.display_name} uri={draft.avatar_url ?? undefined} token={token} size={88} />
+        <Animated.View
+          style={[
+            styles.hero,
+            { opacity: heroOpacity, transform: [{ translateY: heroTranslate }] },
+          ]}
+        >
+          <Avatar
+            name={draft.display_name}
+            uri={draft.avatar_url ?? undefined}
+            token={token}
+            size={88}
+          />
           <View style={styles.heroText}>
             <TextInput
               style={styles.nameInput}
@@ -542,6 +563,62 @@ export default function ContactDetailScreen() {
           />
         </Card>
 
+        {contact?.knowledge?.length ? (
+          <Card style={styles.section}>
+            <Text style={styles.sectionTitle}>Known about this person</Text>
+            {contact.knowledge.map((item) => (
+              <View key={item.knowledge_id} style={{ gap: 8, marginBottom: 16 }}>
+                <TextInput
+                  multiline
+                  style={[styles.input, styles.textArea]}
+                  value={item.statement}
+                  onChangeText={(statement) =>
+                    setContact((current) =>
+                      current
+                        ? {
+                            ...current,
+                            knowledge: current.knowledge?.map((row) =>
+                              row.knowledge_id === item.knowledge_id ? { ...row, statement } : row,
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                />
+                <Text>
+                  {item.status === 'current'
+                    ? 'Current'
+                    : item.status === 'historical'
+                      ? 'Historical'
+                      : item.status === 'conflicted'
+                        ? 'Conflicting information'
+                        : 'Uncertain'}
+                </Text>
+                <ArchiveEvidence sources={item.evidence} />
+                <Button
+                  label="Save correction"
+                  variant="secondary"
+                  onPress={async () => {
+                    try {
+                      await apiFetch(
+                        `/mobile/intelligence/knowledge/${encodeURIComponent(item.knowledge_id)}`,
+                        {
+                          token,
+                          method: 'PATCH',
+                          body: JSON.stringify({ statement: item.statement }),
+                        },
+                      );
+                      showSuccess('Correction saved.');
+                    } catch {
+                      showError('Could not save this correction.');
+                    }
+                  }}
+                />
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
         {!isCreating ? (
           <Button
             label={isDeleting ? 'Deleting...' : 'Delete contact'}
@@ -554,7 +631,15 @@ export default function ContactDetailScreen() {
 
       <FloatingSaveButton
         visible={isDirty}
-        label={isSaving ? (isCreating ? 'Creating...' : 'Saving...') : isCreating ? 'Create contact' : 'Save changes'}
+        label={
+          isSaving
+            ? isCreating
+              ? 'Creating...'
+              : 'Saving...'
+            : isCreating
+              ? 'Create contact'
+              : 'Save changes'
+        }
         onPress={handleSave}
         disabled={isSaving}
         loading={isSaving}

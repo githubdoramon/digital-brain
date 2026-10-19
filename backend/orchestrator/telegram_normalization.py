@@ -86,6 +86,7 @@ def message_record(message, self_id: int, chat, sender=None, origin: Origin = Or
         "sent_at": timestamp(message.date),
         "effective_at": timestamp(message.edit_date or message.date),
         "outgoing": bool(message.out),
+        "forwarded": bool(getattr(message, "fwd_from", None)),
         "name": display_name(sender),
         "title": display_name(chat),
         "self_jid": f"{self_id}@telegram.user",

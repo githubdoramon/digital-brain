@@ -206,6 +206,22 @@ def normalize_message(
         proto = control.editedMessage if control.type == ProtocolKind.EDIT else None
     body, attachments, reply = content(proto) if proto is not None else ("", [], None)
     record.update(body=body, attachments=attachments, reply_id=reply)
+    # Only a boolean authorship signal is retained; never forwarding authors,
+    # quoted bodies, media keys or the rest of ContextInfo.
+    record["forwarded"] = False
+    if proto is not None:
+        for _ in range(4):
+            wrapper = next((field for field in (
+                "ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2",
+                "viewOnceMessageV2Extension", "documentWithCaptionMessage", "editedMessage",
+            ) if present(proto, field)), None)
+            if not wrapper:
+                break
+            proto = getattr(proto, wrapper).message
+        for _, value in proto.ListFields():
+            if hasattr(value, "contextInfo"):
+                info = value.contextInfo
+                record["forwarded"] |= bool(info.isForwarded or info.forwardingScore)
     if not body and not attachments and record["kind"] == RecordKind.MESSAGE.value:
         return None
     return record

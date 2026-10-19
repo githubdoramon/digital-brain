@@ -19,6 +19,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import { ArchiveEvidence, type ArchiveSource } from '@/components/ArchiveEvidence';
 import { ContactPicker } from '@/components/ContactPicker';
 import { EventMediaSuggestionCard } from '@/components/event-draft/EventMediaSuggestionCard';
 import {
@@ -74,7 +75,7 @@ type PlaceCandidate = {
 
 type ProposedEnrichment = {
   proposal_id: string;
-  kind: 'profession' | 'relationship';
+  kind: 'profession' | 'relationship' | 'task' | 'project' | 'task_change';
   contact_id: string;
   contact_name: string;
   related_contact_id?: string | null;
@@ -85,6 +86,14 @@ type ProposedEnrichment = {
   source_event_title?: string | null;
   confidence: 'low' | 'medium' | 'high';
   evidence?: string | null;
+  payload?: {
+    due_date?: string | null;
+    assignee_kind?: string;
+    assignee_name?: string | null;
+    requested_status?: string;
+    target_status?: string;
+  };
+  source_evidence?: ArchiveSource[];
 };
 
 function formatTimeRange(startValue: string, endValue: string): string {
@@ -884,10 +893,11 @@ export default function ProposedEventsScreen() {
 
           {enrichmentProposals.length ? (
             <>
-              <Text style={styles.sectionTitle}>Contact suggestions</Text>
+              <Text style={styles.sectionTitle}>Suggestions</Text>
               {enrichmentProposals.map((proposal) => {
                 const isSaving = savingId === proposal.proposal_id;
                 const isRelationship = proposal.kind === 'relationship';
+                const isWork = ['task', 'project', 'task_change'].includes(proposal.kind);
                 return (
                   <Card key={proposal.proposal_id} style={styles.enrichmentCard}>
                     <View style={styles.proposalHeader}>
@@ -900,28 +910,57 @@ export default function ProposedEventsScreen() {
                       </View>
                       <View style={styles.proposalTitleBlock}>
                         <Text style={styles.proposalTitle}>
-                          {isRelationship
-                            ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
-                            : proposal.contact_name}
+                          {isWork
+                            ? proposal.suggested_value
+                            : isRelationship
+                              ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
+                              : proposal.contact_name}
                         </Text>
                         <Text style={styles.proposalMeta}>
-                          {isRelationship
-                            ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
-                            : `Profession: ${proposal.suggested_value}`}
+                          {isWork
+                            ? `${proposal.kind === 'project' ? 'Project' : proposal.kind === 'task_change' ? (proposal.payload?.requested_status === 'cancelled' ? 'Task cancellation' : 'Task update') : 'Task'}${proposal.payload?.due_date ? ` · Due ${proposal.payload.due_date}` : ''}`
+                            : isRelationship
+                              ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
+                              : `Profession: ${proposal.suggested_value}`}
                         </Text>
-                        <Text style={styles.proposalMeta}>
-                          {proposal.source_event_title
-                            ? `From ${proposal.source_event_title}`
-                            : `${proposal.confidence} confidence`}
-                        </Text>
+                        {!isWork ? (
+                          <Text style={styles.proposalMeta}>
+                            {proposal.source_event_title
+                              ? `From ${proposal.source_event_title}`
+                              : `${proposal.confidence} confidence`}
+                          </Text>
+                        ) : proposal.kind !== 'project' ? (
+                          <Text style={styles.proposalMeta}>
+                            {proposal.payload?.assignee_kind === 'user'
+                              ? 'Assigned to you'
+                              : proposal.payload?.assignee_name || 'Assignee not yet confirmed'}
+                          </Text>
+                        ) : null}
                       </View>
                     </View>
                     {proposal.evidence ? (
                       <Text style={styles.reasonText}>{proposal.evidence}</Text>
                     ) : null}
+                    {proposal.source_evidence?.length ? (
+                      <ArchiveEvidence sources={proposal.source_evidence} />
+                    ) : null}
                     <View style={styles.actions}>
                       <Button
-                        label={isRelationship ? 'Add relationship' : 'Add profession'}
+                        label={
+                          isWork
+                            ? proposal.kind === 'project'
+                              ? 'Create project'
+                              : proposal.kind === 'task_change'
+                                ? proposal.payload?.requested_status === 'cancelled'
+                                  ? 'Cancel task'
+                                  : proposal.payload?.target_status === 'completed'
+                                    ? 'Reopen task'
+                                    : 'Update task'
+                                : 'Create task'
+                            : isRelationship
+                              ? 'Add relationship'
+                              : 'Add profession'
+                        }
                         onPress={() => void updateEnrichmentProposal(proposal, 'accept')}
                         loading={isSaving}
                         style={styles.primaryAction}

@@ -299,6 +299,9 @@ def create_contacts_router(
         )
         if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
             raise HTTPException(status_code=404, detail="Contact not found")
+        import intelligence
+
+        contact["knowledge"] = intelligence.knowledge_for(user.get("email") or user.get("user_email"), contact_id=contact_id)
         return contact
 
     @router.get("/mobile/contacts/{contact_id}/places")

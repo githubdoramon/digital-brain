@@ -53,8 +53,8 @@ internal class GlassesWakePolicy(
     lastPcm = elapsed; lastAudioWall = wall
     if (capture != null) {
       appendCapture(bytes)
-      val voiced = speech && GlassesAudioLevel.db(bytes) >= (-60.0 + minimum * 0.4)
-      if (voiced) {
+      // The user level gate only screens wake candidates. Quiet command speech must not start the silence timer.
+      if (speech) {
         silenceAt = null
         commandOnsetBytes = minOf(COMMAND_START_BYTES, commandOnsetBytes + bytes.size)
         if (commandOnsetBytes >= COMMAND_START_BYTES) commandStarted = true

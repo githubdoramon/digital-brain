@@ -202,6 +202,9 @@ def database(monkeypatch):
         conn.execute(migration.read_text())
         conn.execute(migration.with_name("0074_telegram_archive.sql").read_text())
         conn.execute(migration.with_name("0075_whatsapp_history_requests.sql").read_text())
+        # This fixture intentionally models only archive tables. Full migration
+        # 0076 and its shared-domain dependencies are exercised by test_intelligence.
+        conn.execute("ALTER TABLE messaging_messages ADD COLUMN forwarded BOOLEAN NOT NULL DEFAULT TRUE")
     monkeypatch.setattr(archive, "get_conn", connect)
     import telegram_sync
 

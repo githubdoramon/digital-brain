@@ -33,6 +33,8 @@ type Conversation = {
   title: string;
   external_id: string;
   effective_context: Context;
+  kind: "direct" | "group" | "channel";
+  analysis_excluded: boolean;
 };
 type Message = {
   message_id: string;
@@ -735,6 +737,32 @@ export default function MessagingManager({
             </div>
           )}
           {loading && <p role="status">Loading messages…</p>}
+          {conversation?.kind === "group" && (
+            <label className={styles.row}>
+              <input
+                type="checkbox"
+                checked={conversation.analysis_excluded}
+                disabled={busy}
+                onChange={(event) => {
+                  const excluded = event.target.checked;
+                  void act(async () => {
+                    await providerApi.put(`${base}/analysis`, {
+                      conversation_id: conversationId,
+                      announcement_only: excluded,
+                    });
+                    setConversations((old) =>
+                      old.map((c) =>
+                        c.conversation_id === conversationId
+                          ? { ...c, analysis_excluded: excluded }
+                          : c,
+                      ),
+                    );
+                  });
+                }}
+              />
+              Announcement-only group · exclude from analysis
+            </label>
+          )}
           {!loading && !messages.length && <p>No messages found.</p>}
           {messages.map((m) => (
             <article className={styles.message} key={m.message_id}>

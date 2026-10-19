@@ -81,6 +81,27 @@ class GlassesWakePolicyTest {
     assertEquals(16 * 640, out.single().chunk.pcm.size)
     assertEquals(WakeEnd.SILENCE, out.single().reason)
   }
+  @Test fun quietCommandBelowWakeThresholdKeepsCaptureOpenAndUsesShortVadSilence() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    val loud = tone(32767); val soft = tone(10)
+    policy.vad(true, 100)
+    repeat(5) { policy.pcm(loud, 10000 + it * 20L, 100 + it * 20L, 100) }
+    assertTrue(policy.capturing)
+    policy.vad(false, 200)
+    policy.vad(true, 3500)
+    // More than both endpoint deadlines, below even the lowest enabled wake threshold.
+    repeat(250) { policy.pcm(soft, 13400 + it * 20L, 3500 + it * 20L, 100) }
+    assertTrue(policy.capturing); assertTrue(out.isEmpty())
+    assertEquals(1, detector.calls)
+    policy.vad(false, 8500)
+    policy.tick(19899, 9999); assertTrue(out.isEmpty())
+    policy.tick(19900, 10000)
+    assertArrayEquals(loud + loud + loud + loud + loud + ByteArray(250 * soft.size).also { audio ->
+      repeat(250) { soft.copyInto(audio, it * soft.size) }
+    }, out.single().chunk.pcm)
+    assertEquals(WakeEnd.SILENCE, out.single().reason)
+  }
   @Test fun speechResumptionWithoutPcmStillExpiresAsUnknownTransportLoss() {
     val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
     val policy = GlassesWakePolicy(detector, {}, out::add, {})

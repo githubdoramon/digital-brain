@@ -31,6 +31,11 @@ class IdentityLink(BaseModel):
     contact_id: str | None = Field(default=None, max_length=256)
 
 
+class AnnouncementGroup(BaseModel):
+    conversation_id: str
+    announcement_only: bool
+
+
 def _owner(user: dict) -> str:
     owner = user.get("email") or user.get("user_email")
     if not owner:
@@ -40,6 +45,21 @@ def _owner(user: dict) -> str:
 
 def create_messaging_router() -> APIRouter:
     router = APIRouter(prefix="/messaging", tags=["messaging"])
+
+    @router.put("/analysis")
+    def analysis(payload: AnnouncementGroup, provider: Provider = Provider.WHATSAPP,
+                 user: dict = Depends(get_current_user)):
+        from db import get_conn
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("""UPDATE messaging_conversations c SET analysis_excluded=%s
+                FROM messaging_accounts a WHERE c.account_id=a.account_id
+                AND a.user_email=%s AND a.provider=%s AND c.conversation_id=%s AND c.kind='group'""",
+                        (payload.announcement_only, _owner(user), provider.value, payload.conversation_id))
+            if not cur.rowcount:
+                raise HTTPException(404, "Group not found.")
+            conn.commit()
+        return {"ok": True}
 
     @router.get("/status")
     def status(

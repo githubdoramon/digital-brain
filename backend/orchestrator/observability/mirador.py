@@ -169,6 +169,26 @@ def submit_with_current_context(
 
 
 @contextmanager
+def traced_intelligence_run():
+    """A static parent span; never automatically record exception text."""
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        yield None
+        return
+    tracer = trace.get_tracer("digital-brain.intelligence")
+    with tracer.start_as_current_span(
+        "intelligence.run", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attribute("intelligence.outcome", "success")
+        try:
+            yield span
+        except BaseException:
+            span.set_attribute("intelligence.outcome", "error")
+            raise
+
+
+@contextmanager
 def traced_daily_briefing_run():
     """Create a privacy-safe parent span for one daily-briefing job."""
     try:

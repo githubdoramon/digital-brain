@@ -156,6 +156,14 @@ def handle_lookup_contact(
             limit=limit,
         )
 
+        if kwargs.get("user_email"):
+            import intelligence
+
+            for contact in results:
+                contact["knowledge"] = intelligence.knowledge_for(
+                    kwargs["user_email"], contact_id=contact["contact_id"], limit=20
+                )
+
         # Update state
         if state is not None:
             if results:
