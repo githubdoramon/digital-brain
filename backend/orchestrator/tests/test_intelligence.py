@@ -592,7 +592,6 @@ def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(databas
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from auth import get_current_user
     from routes import intelligence as routes
 
     monkeypatch.setattr(routes, "get_conn", database)
@@ -605,7 +604,8 @@ def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(databas
     knowledge_id = store.knowledge_for(OWNER)[0]["knowledge_id"]
     app = FastAPI()
     app.include_router(routes.create_intelligence_router())
-    app.dependency_overrides[get_current_user] = lambda: {"email": OTHER}
+    # Auth configuration tests reload auth; override the callable captured by this router.
+    app.dependency_overrides[routes.get_current_user] = lambda: {"email": OTHER}
     with TestClient(app) as client:
         assert (
             client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}").status_code == 404
@@ -617,7 +617,7 @@ def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(databas
             ).status_code
             == 404
         )
-        app.dependency_overrides[get_current_user] = lambda: {"email": OWNER}
+        app.dependency_overrides[routes.get_current_user] = lambda: {"email": OWNER}
         response = client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}")
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
