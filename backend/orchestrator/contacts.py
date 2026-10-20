@@ -160,30 +160,44 @@ def _generate_contact_embedding(contact: Any) -> list[float]:
 def ingest_contact(contact: ContactIn) -> None:
     normalized_tags = _normalize_strings(contact.tags)
     with get_conn() as conn, conn.cursor() as cur:
+        # Serialize saves without blocking relationship foreign-key checks.
+        existing = _fetch_contact_row(cur, contact.contact_id, for_update=True)
         effective_comments = contact.comments
-        if effective_comments is None:
-            cur.execute(
-                """
-                SELECT comments
-                FROM contacts
-                WHERE contact_id = %s
-                """,
-                (contact.contact_id,),
-            )
-            row = cur.fetchone()
-            if row:
-                row = dict(row)
-                effective_comments = row.get("comments")
+        if effective_comments is None and existing:
+            effective_comments = existing.get("comments")
+        effective_external_id = contact.external_id
+        if effective_external_id is None and existing:
+            effective_external_id = existing.get("external_id")
+        birthday, birthday_month, birthday_day = birthday_parts(contact.birthday)
+        values = {
+            "display_name": contact.display_name,
+            "aliases": contact.aliases or [],
+            "birthday": birthday,
+            "birthday_month": birthday_month,
+            "birthday_day": birthday_day,
+            "emails": contact.emails or [],
+            "phones": contact.phones or [],
+            "links": contact.links or [],
+            "tags": normalized_tags,
+            "comments": effective_comments or "",
+            "external_id": effective_external_id,
+        }
+        previous = dict(existing or {})
+        for field in ("aliases", "emails", "phones", "links", "tags"):
+            previous[field] = previous.get(field) or []
+        # Contact reads expose NULL notes as an empty string.
+        previous["comments"] = previous.get("comments") or ""
+        changed_fields = {
+            field for field, value in values.items() if not existing or value != previous.get(field)
+        }
+        if not changed_fields:
+            _upsert_contact_relationships(cur, contact.contact_id, contact.relationships or [])
+            conn.commit()
+            return
 
-        embedding = _generate_contact_embedding(
-            {
-                "contact_id": contact.contact_id,
-                "display_name": contact.display_name,
-                "aliases": contact.aliases or [],
-                "tags": normalized_tags,
-                "comments": effective_comments,
-            }
-        )
+        embedding = None
+        if changed_fields & {"display_name", "aliases", "tags", "comments"}:
+            embedding = _generate_contact_embedding({"contact_id": contact.contact_id, **values})
         cur.execute(
             """
             INSERT INTO contacts (
@@ -214,13 +228,15 @@ def ingest_contact(contact: ContactIn) -> None:
                   tags = EXCLUDED.tags,
                   comments = COALESCE(EXCLUDED.comments, contacts.comments),
                   external_id = COALESCE(EXCLUDED.external_id, contacts.external_id),
-                  comments_embed = EXCLUDED.comments_embed
+                  comments_embed = COALESCE(EXCLUDED.comments_embed, contacts.comments_embed)
             """,
             (
                 contact.contact_id,
                 contact.display_name,
                 contact.aliases or [],
-                *birthday_parts(contact.birthday),
+                birthday,
+                birthday_month,
+                birthday_day,
                 contact.emails or [],
                 contact.phones or [],
                 contact.links or [],
@@ -236,7 +252,16 @@ def ingest_contact(contact: ContactIn) -> None:
             getattr(contact, "relationships", []) or [],
         )
         conn.commit()
-    _enqueue_contact_tag_enrichment(contact.contact_id)
+    if changed_fields & {
+        "display_name",
+        "aliases",
+        "emails",
+        "phones",
+        "links",
+        "tags",
+        "comments",
+    }:
+        _enqueue_contact_tag_enrichment(contact.contact_id)
 
 
 def _enqueue_contact_tag_enrichment(contact_id: str) -> None:
@@ -478,13 +503,14 @@ def _contact_exists(cur, contact_id: str) -> bool:
     return cur.fetchone() is not None
 
 
-def _fetch_contact_row(cur, contact_id: str):
+def _fetch_contact_row(cur, contact_id: str, *, for_update: bool = False):
     cur.execute(
         """
         SELECT contact_id, display_name, aliases, birthday, birthday_month, birthday_day, emails, phones, links, tags, comments, external_id
         FROM contacts
         WHERE contact_id = %s
-        """,
+        """
+        + (" FOR NO KEY UPDATE" if for_update else ""),
         (contact_id,),
     )
     row = cur.fetchone()
