@@ -118,12 +118,13 @@ def source_batch(job):
         rows = [original]
         if original["kind"] in {"chat", "message"}:
             field = "thread_id" if original["kind"] == "chat" else "conversation_id"
-            for operator, count in (("<", 5), (">", 6)):
+            for operator, count in (("<", 3), (">", 3)):
+                order = "DESC" if operator == "<" else "ASC"
                 # Operators and limits are application constants. The database bounds retrieval.
                 cur.execute(
                     f"""SELECT * FROM intelligence_sources WHERE kind=%s
                     AND owner_email=%s AND payload->>%s=%s AND source_id {operator} %s
-                    ORDER BY source_id DESC LIMIT %s""",
+                    ORDER BY source_id {order} LIMIT %s""",
                     (
                         original["kind"],
                         job["user_email"],
@@ -137,15 +138,17 @@ def source_batch(job):
         batch = []
         for row in rows:
             part = job["part"] if row["source_id"] == job["source_id"] else 0
+            supporting = row["source_id"] != job["source_id"]
             text = row["payload"].get("text", "") or ""
             batch.append(
                 {
                     **row,
                     "part": part,
                     "ref": f"{row['source_id']}:{part}",
+                    "supporting": supporting,
                     "text": text[
                         part * intelligence.CHUNK_SIZE : (part + 1) * intelligence.CHUNK_SIZE + 400
-                    ],
+                    ][: 1500 if supporting else intelligence.CHUNK_SIZE + 400],
                     "actionable": False,
                     "skip": not intelligence._current(cur, row, job["user_email"]),
                 }

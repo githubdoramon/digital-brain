@@ -6,10 +6,26 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from llm_context import CompactionPolicy
 from llm_helpers import call_llm_chat, stream_llm_chat
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
+
+
+def _compaction_policy(tools, policy=None):
+    from tools.registry import get_registry
+
+    registry = get_registry()
+    policy = policy or CompactionPolicy()
+    policy.read_only_tools = frozenset(
+        name
+        for tool in tools
+        if (name := (tool.get("function") or {}).get("name"))
+        and (contract := registry.get_contract(name)) is not None
+        and "read_only" in contract.constraints
+    )
+    return policy
 
 
 def call_llm_with_tools(
@@ -19,6 +35,7 @@ def call_llm_with_tools(
     model: str | None,
     timeout: int,
     reasoning_effort: str | None = None,
+    context_policy: CompactionPolicy | None = None,
 ) -> dict[str, Any]:
     """Make a synchronous chat-completions call with tool definitions."""
     data = call_llm_chat(
@@ -28,14 +45,14 @@ def call_llm_with_tools(
         model=model,
         timeout=timeout,
         reasoning_effort=reasoning_effort,
+        context_policy=_compaction_policy(tools, context_policy),
     )
 
     if data.get("choices"):
         return {"message": data["choices"][0].get("message", {})}
 
     raise ValueError(
-        "Unexpected LLM API response format: missing 'choices' field. "
-        f"Response: {data}"
+        f"Unexpected LLM API response format: missing 'choices' field. Response: {data}"
     )
 
 
@@ -46,6 +63,7 @@ async def stream_llm_with_tools(
     model: str | None,
     timeout: int,
     reasoning_effort: str | None = None,
+    context_policy: CompactionPolicy | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream chat-completions chunks and normalize tool-call deltas."""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
@@ -75,6 +93,7 @@ async def stream_llm_with_tools(
         model=model,
         timeout=timeout,
         reasoning_effort=reasoning_effort,
+        context_policy=_compaction_policy(tools, context_policy),
     ):
         line = line.strip()
         if not line or line == "data: [DONE]":
@@ -108,9 +127,7 @@ async def stream_llm_with_tools(
                 )
                 continue
             finish_reason = choice.get("finish_reason")
-            reasoning_delta = _coerce_text(
-                delta.get("reasoning") or delta.get("reasoning_content")
-            )
+            reasoning_delta = _coerce_text(delta.get("reasoning") or delta.get("reasoning_content"))
             if reasoning_delta:
                 accumulated_reasoning += reasoning_delta
 
@@ -141,13 +158,11 @@ async def stream_llm_with_tools(
                     accumulated_tool_calls[idx]["id"] = tc["id"]
                 if "function" in tc:
                     if tc["function"].get("name"):
-                        accumulated_tool_calls[idx]["function"]["name"] = tc["function"][
-                            "name"
-                        ]
+                        accumulated_tool_calls[idx]["function"]["name"] = tc["function"]["name"]
                     if tc["function"].get("arguments"):
-                        accumulated_tool_calls[idx]["function"]["arguments"] += tc[
-                            "function"
-                        ]["arguments"]
+                        accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"][
+                            "arguments"
+                        ]
 
             normalized_message: dict[str, Any] = {"content": delta.get("content", "")}
             accumulated_content += str(delta.get("content", "") or "")

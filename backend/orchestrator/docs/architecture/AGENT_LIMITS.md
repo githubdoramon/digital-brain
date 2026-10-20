@@ -2,6 +2,10 @@
 
 The bounded agent uses hard limits plus no-progress detection.
 
+Every model round also passes through the shared complete-request budget and
+working-context compactor. See [LLM_CONTEXT.md](LLM_CONTEXT.md) for reservations,
+protected context, bounded LLM summaries and source-processing behavior.
+
 ## Config Surface
 
 ```bash

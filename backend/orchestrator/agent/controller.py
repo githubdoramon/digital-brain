@@ -32,6 +32,7 @@ from agent.agent_interfaces import (
 )
 from agents.registry import build_conversational_profile_registry, choose_profile_interface
 from llm_config import get_smart_model
+from llm_context import CompactionPolicy
 from llm_policy import request_timeout
 from location_inference import infer_current_place
 from observability import trace
@@ -151,6 +152,9 @@ class AgentController:
         self._agent_interface_context: ContextVar[ConversationalAgentInterface | None] = ContextVar(
             "agent_interface_context",
             default=base_interface,
+        )
+        self._compaction_context: ContextVar[CompactionPolicy | None] = ContextVar(
+            "agent_compaction_context", default=None
         )
         self.agent_profile = base_interface.profile
         self.runtime_profile = self.agent_profile.runtime
@@ -320,6 +324,7 @@ class AgentController:
         if base_interface is None:
             raise RuntimeError("No conversational agent interface provided to AgentController")
         self._agent_interface_context.set(base_interface)
+        self._compaction_context.set(CompactionPolicy(current_request=question.strip()))
         self.agent_profile = base_interface.profile
         self.runtime_profile = base_interface.profile.runtime
         try:
@@ -1445,6 +1450,7 @@ class AgentController:
             model=model,
             timeout=timeout,
             reasoning_effort=reasoning_effort,
+            context_policy=self._compaction_context.get(),
         )
 
     @timed_workflow_stage("chat", "agent_llm_stream")
@@ -1464,6 +1470,7 @@ class AgentController:
             model=model,
             timeout=timeout,
             reasoning_effort=reasoning_effort,
+            context_policy=self._compaction_context.get(),
         ):
             yield chunk
 

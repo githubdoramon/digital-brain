@@ -333,7 +333,9 @@ def context_for(owner, batch, extra_text=""):
         related += [dict(r) for r in cur.fetchall()]
     import knowledge as shared_knowledge
 
-    entities = shared_knowledge.entities_for(owner, limit=150)
+    entities = shared_knowledge.entities_for(
+        owner, query=extra_text or " ".join(r["text"] for r in batch), limit=40
+    )
     entities += [
         {
             "entity_ref": r["kind"] + ":" + r["id"],

@@ -9,6 +9,7 @@ import httpx
 import pytest
 import requests
 
+import intelligence_context as prompt_context
 import intelligence_model as model
 import llm_helpers
 import llm_policy as policy
@@ -23,6 +24,10 @@ def isolated_provider(monkeypatch):
     monkeypatch.setenv("LLM_TIMEOUT", "180")
     monkeypatch.setenv("LLM_REASONING_TIMEOUT", "300")
     monkeypatch.setenv("LLM_HIGH_REASONING_TIMEOUT", "900")
+    monkeypatch.setenv("KNOWLEDGE_CONTEXT_WINDOW_TOKENS", "65536")
+    monkeypatch.setenv("KNOWLEDGE_CONTEXT_MARGIN_TOKENS", "4096")
+    monkeypatch.setenv("KNOWLEDGE_MAX_OUTPUT_TOKENS", "12000")
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "0")
     monkeypatch.setattr(policy, "_CONSTRAINTS", {})
 
 
@@ -172,11 +177,13 @@ def test_request_budget_includes_schema_instructions_and_all_source_text():
         "sources": [{"ref": "1:0", "text": "An intact source."}],
         "context": {"knowledge": [{"statement": "Old context " * 100}]},
     }
-    size = len(model._json({**payload, "context": {"knowledge": []}})) + 100
+    size = prompt_context.input_estimate(
+        {**payload, "context": {"knowledge": []}}, "instructions", {"schema": {}}
+    )
     fitted = model._fit_payload(payload, size, "instructions", {"schema": {}})
     assert fitted["sources"] == payload["sources"]
     assert payload["context"]["knowledge"]
-    assert len(model._json(fitted)) + len("instructions") + len(model._json({"schema": {}})) <= size
+    assert prompt_context.input_estimate(fitted, "instructions", {"schema": {}}) <= size
     with pytest.raises(policy.LLMRequestRejected):
         model._fit_payload(payload, 10, "instructions", {})
 
@@ -198,6 +205,175 @@ def test_context_rejection_splits_without_dropping_parts_or_downgrading_history(
     )
     assert seen == refs == context["deferred_refs"]
     assert [f["statement"] for f in findings] == refs
+
+
+def test_combined_context_reserves_output_and_margin():
+    assert prompt_context.request_limits() == (49440, 12000)
+    policy.remember_constraint(
+        "smart-test", policy.LLMRequestRejected("context_length_exceeded", context_limit=32768)
+    )
+    assert prompt_context.request_limits() == (20480, 8192)
+
+
+def test_reported_input_limit_and_accepted_reduced_budget_are_remembered():
+    rejected = policy.request_rejection(
+        response(
+            400,
+            {
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "Input has 30000 tokens, maximum input is 27648 tokens PRIVATE_SOURCE",
+                }
+            },
+        )
+    )
+    assert rejected.input_limit == 27648
+    policy.remember_constraint("smart-test", rejected)
+    assert prompt_context.request_limits() == (23552, 12000)
+    policy.remember_constraint("smart-test", input_budget=20000)
+    assert prompt_context.request_limits() == (20000, 12000)
+
+
+def test_utf8_estimate_includes_multibyte_evidence_and_keeps_it_intact():
+    payload = {"sources": [{"ref": "1:0", "text_spans": ["🪐" * 1000]}], "context": {}}
+    estimate = prompt_context.input_estimate(payload, "Instructions", {})
+    assert estimate > 4000
+    assert (
+        model._fit_payload(payload, estimate, "Instructions", {})["sources"] == payload["sources"]
+    )
+    with pytest.raises(policy.LLMRequestRejected):
+        model._fit_payload(payload, estimate - 1, "Instructions", {})
+
+
+def test_phase_projections_exclude_archive_histories_and_preserve_protection_fields():
+    context = {
+        "contacts": [
+            {
+                "contact_id": "alex",
+                "display_name": "Alex Carter",
+                "comments": "PRIVATE_NOTES" * 10000,
+            }
+        ],
+        "knowledge": [
+            {
+                "knowledge_id": "fact",
+                "statement": "Uses a Slate laptop.",
+                "manual": True,
+                "deleted_at": "2026-01-01",
+                "embedding": [0.5] * 10000,
+                "evidence": [{"quote": "PRIVATE_HISTORY" * 10000}],
+            }
+        ],
+        "tasks": [
+            {
+                "todo_id": "task",
+                "description": "Send the quote",
+                "status": "completed",
+                "intelligence_manual_at": "2026-01-01",
+            }
+        ],
+    }
+    extraction = model._bounded_context(context, extraction=True)
+    assert extraction["knowledge"] == extraction["tasks"] == []
+    reconciliation = model._bounded_context(context)
+    assert reconciliation["knowledge"][0]["manual"] is True
+    assert reconciliation["knowledge"][0]["deleted_at"] == "2026-01-01"
+    assert reconciliation["tasks"][0]["intelligence_manual_at"] == "2026-01-01"
+    assert "PRIVATE_" not in model._json(reconciliation)
+    assert "embedding" not in model._json(reconciliation)
+
+
+def test_projection_keeps_confirmed_author_and_family_before_unrelated_people():
+    unrelated = [
+        {"contact_id": f"other-{index}", "display_name": f"Anonymous Person {index}"}
+        for index in range(60)
+    ]
+    context = {
+        "source_context": [{"payload": {"identity_id": "author"}}],
+        "people": [
+            {"identity_id": "author", "contact_id": "parent", "display_name": "Alex Carter"}
+        ],
+        "contacts": [
+            *unrelated,
+            {"contact_id": "parent", "display_name": "Alex Carter"},
+            {"contact_id": "daughter", "display_name": "Dana Carter"},
+        ],
+        "contact_relationships": [
+            {
+                "from_contact_id": "daughter",
+                "to_contact_id": "parent",
+                "relationship_type": "Daughter",
+            }
+        ],
+    }
+    projected = model._bounded_context(context, extraction=True)
+    assert {row["contact_id"] for row in projected["contacts"][:2]} == {"parent", "daughter"}
+    assert projected["people"][0]["identity_id"] == "author"
+
+
+def test_budget_reduction_preserves_explicit_matching_task_and_its_override():
+    payload = {
+        "sources": [],
+        "candidates": [{"existing_id": "keep"}],
+        "context": {
+            "tasks": [
+                {
+                    "todo_id": "keep",
+                    "description": "The matched task.",
+                    "intelligence_manual_at": "2026-01-01",
+                },
+                {"todo_id": "unrelated", "description": "Unrelated context." * 500},
+            ]
+        },
+    }
+    minimum = {**payload, "context": {"tasks": payload["context"]["tasks"][:1]}}
+    limit = prompt_context.input_estimate(minimum, "Instructions", {})
+    assert model._fit_payload(payload, limit, "Instructions", {})["context"] == minimum["context"]
+
+
+def test_primary_splits_retain_cross_message_clarification(monkeypatch):
+    seen = []
+    batch = [
+        {
+            "ref": "1:0",
+            "kind": "chat",
+            "payload": {"thread_id": "thread"},
+            "text": "Alex likes quiet keyboards.",
+        },
+        {
+            "ref": "2:0",
+            "kind": "chat",
+            "payload": {"thread_id": "thread"},
+            "text": "I mean Alex Carter.",
+        },
+    ]
+
+    def analyze(owner, rows, **kwargs):
+        primary = [row for row in rows if not row.get("supporting")]
+        if len(primary) > 1:
+            raise policy.LLMRequestRejected("context_length_exceeded")
+        assert {row["ref"] for row in rows} == {"1:0", "2:0"}
+        seen.append(primary[0]["ref"])
+        return {}, []
+
+    monkeypatch.setattr(model, "_analyze_repaired", analyze)
+    assert model.analyze("reader@example.com", batch, knowledge_only=True) == ({}, [])
+    assert seen == ["1:0", "2:0"]
+
+
+def test_reconciliation_sources_include_only_cited_spans_with_stable_indices():
+    sources = [
+        {"ref": "1:0", "text_spans": ["First excerpt.", "Second excerpt.", "Third excerpt."]},
+        {"ref": "2:0", "text_spans": ["Unrelated evidence."]},
+    ]
+    findings = [{"evidence": [{"ref": "1:0", "span_index": 2, "quote": None}]}]
+    scoped = model._reconciliation_sources(sources, findings)
+    assert len(scoped) == 1 and scoped[0]["text_spans"] == [None, None, "Third excerpt."]
+    model._check_reconciliation_citations({"findings": findings}, scoped)
+    with pytest.raises(model.InvalidModelOutput):
+        model._check_reconciliation_citations(
+            {"findings": [{"evidence": [{"ref": "1:0", "span_index": 0}]}]}, scoped
+        )
 
 
 def test_spans_preserve_every_character_including_short_final_fragment():

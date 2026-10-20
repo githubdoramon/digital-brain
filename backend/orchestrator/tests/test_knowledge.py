@@ -291,6 +291,98 @@ def test_expired_running_job_is_recovered_and_errors_never_advance_receipt(datab
     assert knowledge.list_items(OWNER) == []
 
 
+def test_chat_context_uses_nearest_replies_and_keeps_primary_evidence_complete(database):
+    setup_owner(database)
+    with database() as conn:
+        conn.execute("INSERT INTO conversation_threads VALUES('context-thread',%s)", (OWNER,))
+        for index in range(9):
+            conn.execute(
+                "INSERT INTO conversation_messages(thread_id,role,content) VALUES('context-thread','user',%s)",
+                (f"Message {index}: " + "A" * 2500,),
+            )
+    job = jobs.claim([OWNER])
+    batch = jobs.source_batch(job)
+    assert len(batch) == 4
+    assert not batch[0]["supporting"] and len(batch[0]["text"]) > 2500
+    assert all(row["supporting"] and len(row["text"]) == 1500 for row in batch[1:])
+    assert [row["text"].split(":", 1)[0] for row in batch] == [
+        "Message 0",
+        "Message 1",
+        "Message 2",
+        "Message 3",
+    ]
+
+
+def test_supporting_evidence_alone_cannot_create_a_finding_for_primary_job(database, monkeypatch):
+    setup_owner(database)
+    with database() as conn:
+        conn.execute("INSERT INTO conversation_threads VALUES('support-thread',%s)", (OWNER,))
+        conn.execute(
+            "INSERT INTO conversation_messages(thread_id,role,content) VALUES('support-thread','user','My laptop is a Slate.'),('support-thread','user','Thanks for the help.')"
+        )
+        conn.execute(
+            "UPDATE knowledge_learning SET status='done' WHERE source_id=(SELECT min(source_id) FROM knowledge_learning)"
+        )
+    job = jobs.claim([OWNER])
+    batch = jobs.source_batch(job)
+    support = next(row for row in batch if row["supporting"])
+    candidate = finding(support)
+    monkeypatch.setattr(
+        jobs.intelligence_model, "call_llm_json", lambda *a, **k: {"findings": [candidate]}
+    )
+    _, findings = jobs.intelligence_model.analyze(OWNER, batch, knowledge_only=True)
+    assert findings == []
+
+
+@pytest.mark.parametrize("database", ["pre_context"], indirect=True)
+def test_context_recovery_migration_preserves_other_failures_and_receipts(database):
+    from pathlib import Path
+
+    save(database)
+    for index in range(3):
+        ingest(database, ident=f"context-{index}")
+    with database() as conn:
+        sources = conn.execute(
+            "SELECT source_id FROM intelligence_sources ORDER BY source_id"
+        ).fetchall()
+        for row, status, code in zip(
+            sources,
+            ("failed", "failed", "done", "deferred"),
+            ("context_length_exceeded", "invalid_evidence", None, None),
+            strict=True,
+        ):
+            conn.execute(
+                "INSERT INTO knowledge_learning(user_email,source_id,status,error_code,attempts) VALUES(%s,%s,%s,%s,3)",
+                (OWNER, row["source_id"], status, code),
+            )
+        for row, code in zip(
+            sources[:2], ("context_length_exceeded", "invalid_evidence"), strict=True
+        ):
+            conn.execute(
+                "INSERT INTO intelligence_failures(user_email,source_id,part,knowledge_only,error_code,attempts) VALUES(%s,%s,0,TRUE,%s,3)",
+                (OWNER, row["source_id"], code),
+            )
+        receipts = conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+        conn.execute(
+            (
+                Path(__file__).resolve().parents[1]
+                / "db_migrations/0082_intelligence_context_recovery.sql"
+            ).read_text()
+        )
+        assert [
+            row["status"]
+            for row in conn.execute("SELECT status FROM knowledge_learning ORDER BY source_id")
+        ] == ["pending", "failed", "done", "deferred"]
+        assert [
+            row["attempts"]
+            for row in conn.execute("SELECT attempts FROM intelligence_failures ORDER BY source_id")
+        ] == [0, 3]
+        assert (
+            conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+            == receipts
+        )
+
+
 def test_summary_cannot_publish_after_concurrent_correction(database, monkeypatch):
     item = save(database)
 

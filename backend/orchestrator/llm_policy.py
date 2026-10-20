@@ -18,22 +18,34 @@ def _key(model):
     return os.getenv("LLM_BASE_URL", ""), model
 
 
-def remember_constraint(model, error):
+def remember_constraint(model, error=None, *, input_budget=None):
     with _LOCK:
         if len(_CONSTRAINTS) >= 64:
             _CONSTRAINTS.clear()
         row = _CONSTRAINTS.setdefault(_key(model), {})
         row["expires"] = time.monotonic() + 3600
+        if input_budget is not None:
+            row["input_budget"] = min(row.get("input_budget", input_budget), input_budget)
+        if error is None:
+            return
         if error.code == "output_limit_exceeded" and error.limit:
             row["output_limit"] = error.limit
         if error.code == "unsupported_response_format":
             row["json_object"] = True
+        for key in ("input_limit", "context_limit"):
+            value = getattr(error, key, None)
+            if value:
+                row[key] = min(row.get(key, value), value)
+
+
+def model_constraints(model):
+    with _LOCK:
+        row = _CONSTRAINTS.get(_key(model), {})
+        return dict(row) if row.get("expires", 0) > time.monotonic() else {}
 
 
 def apply_constraints(payload):
-    with _LOCK:
-        row = _CONSTRAINTS.get(_key(payload.get("model")), {})
-        row = dict(row) if row.get("expires", 0) > time.monotonic() else {}
+    row = model_constraints(payload.get("model"))
     limits = [
         n
         for n in (int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "0")), row.get("output_limit", 0))
@@ -64,10 +76,12 @@ def request_timeout(payload, timeout=None):
 class LLMRequestRejected(requests.HTTPError):
     """Only static reason codes and bounded numeric limits escape the provider body."""
 
-    def __init__(self, code, *, response=None, limit=None):
+    def __init__(self, code, *, response=None, limit=None, input_limit=None, context_limit=None):
         super().__init__(code, response=response)
         self.code = code
         self.limit = limit
+        self.input_limit = input_limit
+        self.context_limit = context_limit
 
 
 def request_rejection(response):
@@ -75,6 +89,7 @@ def request_rejection(response):
     # prefix locally, but never return/log arbitrary message, code or param values.
     body = str(getattr(response, "text", "") or "")[:16000].lower()
     code, limit = "invalid_request", None
+    input_limit = context_limit = None
     if getattr(response, "status_code", None) == 413:
         return LLMRequestRejected("context_length_exceeded", response=response)
     if any(
@@ -88,6 +103,16 @@ def request_rejection(response):
         )
     ):
         code = "context_length_exceeded"
+
+        def numeric_limit(pattern):
+            match = re.search(pattern, body)
+            value = int(match[1]) if match else 0
+            return value if 256 <= value <= 10000000 else None
+
+        input_limit = numeric_limit(
+            r"maximum input(?:\s+(?:length|size))?(?:\s+tokens)?\s*(?:is|of|:)?\s*(\d{3,8})"
+        )
+        context_limit = numeric_limit(r"maximum context length\s*(?:is|of|:)?\s*(\d{3,8})")
     elif any(
         s in body for s in ("max_tokens", "max_completion_tokens", "output must be between")
     ) and any(s in body for s in ("maximum", "must be", "at most", "exceed", "less than")):
@@ -104,7 +129,9 @@ def request_rejection(response):
         code = "unsupported_response_format"
     elif any(s in body for s in ("invalid_json_schema", "invalid schema")):
         code = "invalid_response_schema"
-    return LLMRequestRejected(code, response=response, limit=limit)
+    return LLMRequestRejected(
+        code, response=response, limit=limit, input_limit=input_limit, context_limit=context_limit
+    )
 
 
 def failure_code(error):

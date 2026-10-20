@@ -47,13 +47,43 @@ defer rejected HTTP requests per batch, allowing later sources to proceed; trans
 provider outages still back off the run. Repeated batch failures pause after three
 attempts and retain their evidence for explicit recovery.
 
-Extraction bounds the aggregate request, including instructions, response schema,
-source text, candidates and retrieved context, through
-`KNOWLEDGE_REQUEST_CHAR_BUDGET` (48,000 by default). Source text is never truncated
-to fit: context is reduced first and oversized batches are split. A provider context
-rejection retries once with a smaller context budget before splitting. Character
-size is an estimate, not a tokenizer-specific proof of fit. Raw source payload
-internals are not duplicated into model metadata. Sources expose an ordered array
+Intelligence uses two bounded phases. Extraction receives primary source text and
+compact identity/entity hints; it does not receive archive facts, task lists,
+proposal histories or unrelated documents. Reconciliation retrieves matching records
+for at most three candidates at a time and receives only their cited excerpts,
+retaining original source refs and span indices. It cannot cite omitted excerpts.
+Both phases use explicit field projections: embeddings, evidence histories, source
+snapshots, raw metadata and manual contact Notes never enter retrieved prompt context.
+Controller validation still uses complete original records, including correction,
+deletion and task-override protections.
+
+Budget calculation and request measurement are shared with the global LLM preflight
+in [LLM_CONTEXT.md](LLM_CONTEXT.md). Knowledge keeps its source-preserving splitting
+policy; conversational working summaries are never extraction evidence.
+
+`KNOWLEDGE_CONTEXT_WINDOW_TOKENS` defaults to a combined 65,536-token window.
+Generated output and reasoning reserve up to 12,000 tokens, with another 4,096-token
+margin (`KNOWLEDGE_CONTEXT_MARGIN_TOKENS`), leaving at most 49,440 estimated input
+tokens. A conservative UTF-8 wire-byte estimate includes both messages, instructions,
+JSON escaping and the response schema. This avoids a character-only assumption and
+requires no network tokenizer dependency. Lower input/context limits reported by
+the provider override the defaults per model/provider for one hour; a smaller
+budget that successfully repairs a rejection is also reused. Optional lower provider
+output caps are respected when reserving the window. Logs contain phase, counts,
+estimated input, input budget and output reserve, never prompt text.
+
+Primary source text is never truncated to fit. Oversized primary batches split while
+retaining nearby clarification as supporting evidence. Chat learning reads the
+nearest three earlier/later messages, with at most 1,500 characters per supporting
+message; those messages keep their own independent full learning jobs. Supporting
+messages can clarify a primary assertion but cannot independently create findings
+for that job. A rejection reduces optional context before retrying/splitting; an
+individual unsplittable input retains its failure instead of receiving a success
+receipt. Migration `0082_intelligence_context_recovery.sql` requeues retained
+context-limit failures once, leaving other paused failures and successful receipts
+unchanged. No `.env` update is needed for the default 64k deployment.
+
+Raw source payload internals are not duplicated into model metadata. Sources expose an ordered array
 of exact text spans, without duplicating the source text. Models can select a span
 index and the controller copies its original text into the saved evidence, avoiding
 quote transcription errors. Exact quote validation runs before reconciliation,

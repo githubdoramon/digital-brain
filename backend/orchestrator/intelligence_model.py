@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Literal
 
@@ -11,8 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 import intelligence
 from contact_learning import ContactChanges
+from intelligence_context import compact_context as _bounded_context
+from intelligence_context import fit_payload as _fit_payload
+from intelligence_context import input_estimate, request_limits
+from intelligence_context import json_for as _json
+from llm_config import get_smart_model
 from llm_helpers import LLMEmptyContentError, build_json_schema_response_format, call_llm_json
-from llm_policy import LLMRequestRejected
+from llm_policy import LLMRequestRejected, remember_constraint
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -215,8 +219,27 @@ rules; age of a source never permits overwriting conflicting current contact det
 
 def _ask(payload, *, phase):
     if "context" in payload:
-        # Supporting evidence accumulates over time; do not re-send it in full.
-        payload = {**payload, "context": _bounded_context(payload["context"])}
+        query = " ".join(f["statement"] for f in payload.get("candidates", []))
+        if not query:
+            query = " ".join(
+                span or ""
+                for source in payload.get("sources", [])
+                for span in source.get("text_spans", [])
+            )
+        payload = {
+            **payload,
+            "context": _bounded_context(
+                payload["context"],
+                extraction=phase.startswith("Extract"),
+                query=query,
+                anchors={
+                    value
+                    for finding in payload.get("candidates", [])
+                    for key in ("existing_id", "project_id", "assignee_ref")
+                    if (value := finding.get(key))
+                },
+            ),
+        }
     try:
         started = time.monotonic()
         result = _ask_validated(payload, phase=phase)
@@ -232,7 +255,7 @@ def _ask(payload, *, phase):
 
 
 def _ask_validated(payload, *, phase):
-    budget = int(os.getenv("KNOWLEDGE_REQUEST_CHAR_BUDGET", "48000"))
+    budget, output = request_limits()
     system = SYSTEM + "\nPhase: " + phase
     response_format = build_json_schema_response_format(
         name="scheduled_intelligence", schema=SCHEMA
@@ -240,11 +263,12 @@ def _ask_validated(payload, *, phase):
     for attempt in range(2):
         fitted = _fit_payload(payload, budget, system, response_format)
         logger.info(
-            "[intelligence] request_prepared stage=%s source_parts=%d request_chars=%d budget_chars=%d",
+            "[intelligence] request_prepared stage=%s source_parts=%d input_estimate=%d input_budget=%d output_budget=%d",
             "extraction" if phase.startswith("Extract") else "reconciliation",
             len(fitted.get("sources", [])),
-            len(_json(fitted)) + len(system) + len(_json(response_format)),
+            input_estimate(fitted, system, response_format),
             budget,
+            output,
         )
         try:
             result = call_llm_json(
@@ -254,20 +278,22 @@ def _ask_validated(payload, *, phase):
                 temperature=0,
                 reasoning_effort="medium",
                 timeout=300,
-                max_tokens=int(os.getenv("KNOWLEDGE_MAX_OUTPUT_TOKENS", "12000")),
+                max_tokens=output,
                 sensitive_payload=True,
                 response_format=response_format,
             )
-            return Analysis.model_validate(result).model_dump()
+            result = Analysis.model_validate(result).model_dump()
+            if "candidates" in payload and len(result["findings"]) > len(payload["candidates"]):
+                raise InvalidModelOutput("invalid_schema")
+            if attempt:
+                remember_constraint(get_smart_model(), input_budget=budget)
+            return result
         except LLMRequestRejected as exc:
             if exc.code != "context_length_exceeded" or attempt:
                 raise
             # This is a changed request, never a blind retry of the rejected input.
-            budget //= 2
-
-
-def _json(value):
-    return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+            new_budget, output = request_limits()
+            budget = min(budget // 2, new_budget)
 
 
 def source_spans(text):
@@ -301,86 +327,157 @@ def expand_citations(result, batch):
     return {**result, "findings": findings}
 
 
-def _fit_payload(payload, budget, system, response_format):
-    context = {k: list(v) for k, v in payload.get("context", {}).items()}
-    fitted = {**payload, "context": context}
-    fixed_size = len(system) + len(_json(response_format))
-    # Source text and candidate quotes are indivisible. Reduce retrieved context
-    # first; oversized source batches are split by analyze, never silently cut.
-    priority = (
-        "related",
-        "lookback",
-        "projects",
-        "entities",
-        "proposals",
-        "tasks",
-        "knowledge",
-        "contact_relationships",
-        "contacts",
-        "people",
-    )
-    while fixed_size + len(_json(fitted)) > budget:
-        name = next((name for name in priority if context.get(name)), None)
-        if name is None:
-            raise LLMRequestRejected("context_length_exceeded")
-        context[name].pop()
-    return fitted
-
-
-def _bounded_context(context):
-    def compact(value):
-        if isinstance(value, str):
-            return value[:1200]
-        if isinstance(value, list):
-            return [compact(x) for x in value[-3:]]
-        if isinstance(value, dict):
-            return {k: compact(v) for k, v in value.items()}
-        return value
-
-    budgets = {
-        "entities": 10000,
-        "people": 8000,
-        "contacts": 4000,
-        "contact_relationships": 5000,
-        "tasks": 10000,
-        "knowledge": 8000,
-        "proposals": 6000,
-        "projects": 3000,
-        "lookback": 10000,
-        "related": 4000,
-    }
-    bounded = {}
-    for name, budget in budgets.items():
-        bounded[name] = []
-        for row in context.get(name, []):
-            item = compact(row)
-            size = len(json.dumps(item, default=str))
-            if size > budget:
-                continue
-            bounded[name].append(item)
-            budget -= size
-    return bounded
-
-
 def analyze(owner, batch, *, knowledge_only=False):
     try:
         return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
     except LLMRequestRejected as exc:
-        if exc.code != "context_length_exceeded" or len(batch) < 2:
+        if exc.code != "context_length_exceeded":
             raise
-        middle = len(batch) // 2
+        primary = [row for row in batch if not row.get("supporting")]
+        supporting = [row for row in batch if row.get("supporting")]
+        if len(primary) < 2:
+            if not supporting:
+                raise
+            logger.info("[intelligence] supporting_context_reduced sources=%d", len(supporting))
+            return analyze(
+                owner, primary + supporting[: len(supporting) // 2], knowledge_only=knowledge_only
+            )
+        middle = len(primary) // 2
         logger.info(
             "[intelligence] batch_split reason=context_length_exceeded source_parts=%d", len(batch)
         )
         context, findings = {}, []
-        for group in (batch[:middle], batch[middle:]):
+        for group in (primary[:middle], primary[middle:]):
+            # Keep nearby clarification available across the split. These rows
+            # are context only, never another primary source silently receipted.
+            refs = {row.get("ref") for row in group}
+            conversations = {
+                (
+                    row.get("kind"),
+                    row.get("payload", {}).get("thread_id")
+                    or row.get("payload", {}).get("conversation_id"),
+                )
+                for row in group
+            }
+            neighbors = [
+                row
+                for row in batch
+                if row.get("ref") not in refs
+                and (
+                    row.get("kind"),
+                    row.get("payload", {}).get("thread_id")
+                    or row.get("payload", {}).get("conversation_id"),
+                )
+                in conversations
+                and (
+                    row.get("payload", {}).get("thread_id")
+                    or row.get("payload", {}).get("conversation_id")
+                )
+            ]
+            group = group + [{**row, "supporting": True} for row in neighbors[:4]]
             ctx, fs = analyze(owner, group, knowledge_only=knowledge_only)
-            for name, rows in ctx.items():
-                existing = context.setdefault(name, [])
-                seen = {_json(row) for row in existing}
-                existing.extend(row for row in rows if _json(row) not in seen)
+            _merge_context(context, ctx)
             findings.extend(fs)
         return context, findings
+
+
+def _merge_context(target, incoming):
+    keys = {
+        "contacts": "contact_id",
+        "people": "identity_id",
+        "knowledge": "knowledge_id",
+        "tasks": "todo_id",
+        "proposals": "proposal_id",
+        "projects": "project_id",
+        "entities": "entity_ref",
+        "contact_relationships": "relationship_id",
+        "source_context": "ref",
+        "lookback": "message_id",
+        "related": "id",
+    }
+    for name, rows in incoming.items():
+
+        def key(row, field=keys.get(name)):
+            return row.get(field) or _json(row) if isinstance(row, dict) else row
+
+        merged = {key(row): row for row in target.get(name, [])}
+        merged.update({key(row): row for row in rows})
+        target[name] = list(merged.values())
+
+
+def _reconciliation_sources(sources, findings):
+    citations = {}
+    for finding in findings:
+        for evidence in finding["evidence"]:
+            citations.setdefault(evidence["ref"], []).append(evidence)
+    result = []
+    for source in sources:
+        evidence = citations.get(source["ref"], [])
+        if not evidence:
+            continue
+        spans = [None] * len(source["text_spans"])
+        quotes = []
+        for citation in evidence:
+            if citation.get("span_index") is not None:
+                index = citation["span_index"]
+                spans[index] = source["text_spans"][index]
+            elif citation.get("quote"):
+                quotes.append(citation["quote"])
+        result.append({**source, "text_spans": spans, "exact_quotes": list(dict.fromkeys(quotes))})
+    return result
+
+
+def _check_reconciliation_citations(result, sources):
+    allowed = {source["ref"]: source for source in sources}
+    for finding in result["findings"]:
+        for citation in finding["evidence"]:
+            source = allowed.get(citation["ref"])
+            if source is None:
+                raise InvalidModelOutput("invalid_evidence")
+            index = citation.get("span_index")
+            spans = source["text_spans"]
+            if index is not None and (index >= len(spans) or spans[index] is None):
+                raise InvalidModelOutput("invalid_evidence")
+            if citation.get("quote") and not any(
+                citation["quote"] in text for text in [*spans, *source["exact_quotes"]] if text
+            ):
+                raise InvalidModelOutput("invalid_evidence")
+
+
+def _reconcile(owner, batch, payload, candidates, context):
+    refs = {e["ref"] for finding in candidates for e in finding["evidence"]}
+    cited_batch = [row for row in batch if row["ref"] in refs]
+    related = intelligence.context_for(
+        owner, cited_batch, " ".join(f["statement"] for f in candidates)
+    )
+    _merge_context(context, related)
+    sources = _reconciliation_sources(payload["sources"], candidates)
+    scoped = {
+        **payload,
+        "sources": sources,
+        "context": related,
+        "candidates": candidates,
+        "primary_refs": [ref for ref in payload.get("primary_refs", []) if ref in refs],
+    }
+    try:
+        result = _ask(
+            scoped,
+            phase="Reconcile only these candidates against matching records. Return at most one finding per candidate. Only non-null text_spans and exact_quotes are supplied evidence; retain their original refs and span indices. Remove duplicates and unsupported or dismissed unchanged work.",
+        )
+    except LLMRequestRejected as exc:
+        if exc.code != "context_length_exceeded" or len(candidates) < 2:
+            raise
+        middle = len(candidates) // 2
+        left = _reconcile(owner, batch, payload, candidates[:middle], context)
+        right = _reconcile(owner, batch, payload, candidates[middle:], context)
+        return {
+            "findings": left["findings"] + right["findings"],
+            "deferred_refs": list(
+                set(left.get("deferred_refs", []) + right.get("deferred_refs", []))
+            ),
+        }
+    _check_reconciliation_citations(result, sources)
+    return result
 
 
 def _analyze_repaired(owner, batch, *, knowledge_only=False):
@@ -442,6 +539,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     payload = {
         "sources": sources,
         "context": context,
+        "primary_refs": [row["ref"] for row in eligible if not row.get("supporting")],
         "knowledge_only": knowledge_only,
         "analysis_time": intelligence.utcnow().isoformat(),
         "timezone": "Europe/Lisbon",
@@ -452,7 +550,10 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
             "instruction": "Regenerate findings. Use only allowed values and exact source quotes. "
             "Omit unsupported findings; never invent evidence or IDs to repair a rejection.",
         }
-    candidates = _ask(payload, phase="Extract supported candidates; empty findings is valid.")
+    candidates = _ask(
+        payload,
+        phase="Extract supported candidates from primary_refs. Every finding must cite a primary source; other sources only clarify it. Existing facts and work will be retrieved in reconciliation. Empty findings is valid.",
+    )
     # Repair fabricated/paraphrased quotes before spending a reconciliation call.
     try:
         for finding in expand_citations(candidates, eligible)["findings"]:
@@ -464,25 +565,14 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     if candidates["findings"]:
         if len(candidates["findings"]) > intelligence.MAX_FINDINGS:
             raise ValueError("too_many_findings")
-        related = intelligence.context_for(
-            owner, eligible, " ".join(f["statement"] for f in candidates["findings"])
-        )
-        for name, id_key in (
-            ("contacts", "contact_id"),
-            ("contact_relationships", "relationship_id"),
-            ("knowledge", "knowledge_id"),
-            ("tasks", "todo_id"),
-            ("proposals", "proposal_id"),
-            ("projects", "project_id"),
-        ):
-            merged = {r[id_key]: r for r in context[name]}
-            merged.update({r[id_key]: r for r in related[name]})
-            context[name] = list(merged.values())
-        payload.update(context=context, candidates=candidates["findings"])
-        candidates = _ask(
-            payload,
-            phase="Reconcile candidates with existing knowledge/work. Remove duplicates, unsupported items and dismissed unchanged work. Return final findings.",
-        )
+        reconciled = {"findings": [], "deferred_refs": list(candidates.get("deferred_refs", []))}
+        for offset in range(0, len(candidates["findings"]), 3):
+            result = _reconcile(
+                owner, eligible, payload, candidates["findings"][offset : offset + 3], context
+            )
+            reconciled["findings"].extend(result["findings"])
+            reconciled["deferred_refs"].extend(result.get("deferred_refs", []))
+        candidates = reconciled
     try:
         findings = intelligence.validate_findings(
             expand_citations(candidates, eligible), eligible, context, knowledge_only=knowledge_only
@@ -510,6 +600,15 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         }:
             code = "invalid_dates"
         raise InvalidModelOutput(code) from None
+    primary = {(row["source_id"], row["part"]) for row in eligible if not row.get("supporting")}
+    findings = [
+        finding
+        for finding in findings
+        if any((e["source_id"], e["part"]) in primary for e in finding["evidence"])
+    ]
+    context["deferred_refs"] = [
+        ref for ref in context["deferred_refs"] if ref in payload["primary_refs"]
+    ]
     tasks = {t["todo_id"]: t for t in context["tasks"]}
     for f in findings:
         if f["kind"] == "task_change":

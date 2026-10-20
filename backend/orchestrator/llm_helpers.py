@@ -24,6 +24,7 @@ from llm_config import (
     is_ollama_base_url,
     resolve_chat_model,
 )
+from llm_context import CompactionPolicy, prepare_request
 from llm_policy import (
     LLMRequestRejected,
     apply_constraints,
@@ -547,6 +548,7 @@ def _post_chat_completion(
                 _preview_response_text(response),
             )
             if rejected:
+                remember_constraint(model_name, rejected)
                 raise rejected from None
             if is_llm_unavailable_error(exc):
                 raise _wrap_llm_unavailable(exc) from exc
@@ -640,7 +642,9 @@ def _post_chat_completion_stream(
         stream=True,
     )
     if response.status_code in {400, 413, 422}:
-        raise request_rejection(response) from None
+        rejected = request_rejection(response)
+        remember_constraint(payload.get("model"), rejected)
+        raise rejected from None
     response.raise_for_status()
 
     for raw_line in response.iter_lines(decode_unicode=True):
@@ -740,6 +744,7 @@ def _call_llm_raw(
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
     sensitive_payload: bool = False,
+    context_policy: CompactionPolicy | None = None,
 ) -> dict[str, Any]:
     payload = build_chat_payload(
         messages,
@@ -755,6 +760,7 @@ def _call_llm_raw(
         tools=tools,
         tool_choice=tool_choice,
     )
+    payload = _prepare_chat_request(payload, context_policy)
 
     logger.info(
         "[llm_helpers] LLM request model=%s stream=%s timeout=%s",
@@ -790,6 +796,17 @@ def _call_llm_raw(
     return content
 
 
+def _prepare_chat_request(payload, policy=None):
+    def summarize(request):
+        # The compactor is itself budget-checked, has no tools, and never logs
+        # private source text or generated summaries. No recursive compaction.
+        request = prepare_request(request, summarize=summarize)
+        result = _post_chat_completion(request, timeout=60, sensitive_payload=True)
+        return result.get("choices", [{}])[0].get("message", {}).get("content")
+
+    return prepare_request(payload, summarize=summarize, policy=policy)
+
+
 def call_llm_chat(
     messages: list[dict[str, Any]],
     *,
@@ -806,6 +823,7 @@ def call_llm_chat(
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
     sensitive_payload: bool = False,
+    context_policy: CompactionPolicy | None = None,
 ) -> dict[str, Any]:
     data = _call_llm_raw(
         messages,
@@ -822,6 +840,7 @@ def call_llm_chat(
         tools=tools,
         tool_choice=tool_choice,
         sensitive_payload=sensitive_payload,
+        context_policy=context_policy if context_policy is not None else CompactionPolicy(),
     )
     _raise_for_llm_error(data)
     return data
@@ -842,6 +861,7 @@ async def stream_llm_chat(
     reasoning_effort: Optional[str] = None,
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
+    context_policy: CompactionPolicy | None = None,
 ) -> AsyncGenerator[str, None]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     payload = build_chat_payload(
@@ -857,6 +877,11 @@ async def stream_llm_chat(
         extra_body=extra_body,
         tools=tools,
         tool_choice=tool_choice,
+    )
+    payload = await asyncio.to_thread(
+        _prepare_chat_request,
+        payload,
+        context_policy if context_policy is not None else CompactionPolicy(),
     )
     logger.info(
         "[llm_helpers] LLM input (stream): %s",
@@ -942,7 +967,9 @@ async def stream_llm_chat(
                     if response.status_code >= 400:
                         error_preview = await _response_error_preview(response)
                         if response.status_code in {400, 413, 422}:
-                            raise request_rejection(response) from None
+                            rejected = request_rejection(response)
+                            remember_constraint(payload.get("model"), rejected)
+                            raise rejected from None
                         logger.error(
                             "[llm_helpers] LLM stream request rejected status=%s response=%s",
                             response.status_code,

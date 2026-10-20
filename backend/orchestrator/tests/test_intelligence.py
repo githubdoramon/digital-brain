@@ -73,7 +73,13 @@ def database(monkeypatch, request):
                 "0079_shared_knowledge.sql",
                 "0080_learned_contact_changes.sql",
                 "0081_learning_reliability.sql",
+                "0082_intelligence_context_recovery.sql",
             ):
+                if (
+                    name == "0082_intelligence_context_recovery.sql"
+                    and getattr(request, "param", None) == "pre_context"
+                ):
+                    continue
                 if (
                     name == "0081_learning_reliability.sql"
                     and getattr(request, "param", None) == "pre_reliability"
@@ -530,6 +536,43 @@ def test_model_cites_controller_supplied_spans_without_transcribing_quotes(datab
     assert fs[0]["evidence"][0]["quote"] == batch[0]["text"]
     store.apply_batch(OWNER, run(database), batch, ctx, fs)
     assert len(store.knowledge_for(OWNER)) == 1
+
+
+def test_reconciliation_retrieves_small_candidate_groups_without_full_source_text(
+    database, monkeypatch
+):
+    import json
+
+    setup_owner(database)
+    ingest(database, body="An anonymous source sentence. " * 160)
+    batch = store.next_batch(OWNER, FUTURE)
+    candidates = [
+        {
+            **finding(batch[0]),
+            "predicate": f"observation_{index}",
+            "evidence": [{"ref": batch[0]["ref"], "span_index": 0, "quote": None}],
+        }
+        for index in range(7)
+    ]
+    requests = []
+
+    def ask(prompt, **kwargs):
+        payload = json.loads(prompt)
+        requests.append(payload)
+        if "candidates" not in payload:
+            assert not payload["context"]["knowledge"]
+            assert not payload["context"]["tasks"]
+            return {"findings": candidates}
+        assert len(payload["candidates"]) <= 3
+        assert payload["sources"][0]["text_spans"][1:] == [None] * (
+            len(model.source_spans(batch[0]["text"])) - 1
+        )
+        return {"findings": payload["candidates"]}
+
+    monkeypatch.setattr(model, "call_llm_json", ask)
+    _, findings = model.analyze(OWNER, batch, knowledge_only=True)
+    assert len(findings) == 7
+    assert [len(request["candidates"]) for request in requests[1:]] == [3, 3, 1]
 
 
 def test_rejected_batches_defer_without_receipts_then_pause_and_allow_other_sources(
