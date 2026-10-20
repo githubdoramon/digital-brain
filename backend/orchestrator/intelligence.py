@@ -152,8 +152,13 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
 def progress(owner, cutoff, *, knowledge_only=False):
     """Snapshot source-part coverage, including deferred work, without exposing evidence."""
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """SELECT COUNT(*) AS total_parts,
+        return progress_with_cursor(cur, owner, cutoff, knowledge_only=knowledge_only)
+
+
+def progress_with_cursor(cur, owner, cutoff, *, knowledge_only=False):
+    """Use the caller's snapshot for API and periodic worker reports."""
+    cur.execute(
+        """SELECT COUNT(*) AS total_parts,
             COUNT(*) FILTER (WHERE done.source_id IS NOT NULL) AS processed_parts,
             COUNT(*) FILTER (WHERE done.source_id IS NULL) AS remaining_parts,
             COUNT(*) FILTER (WHERE done.source_id IS NULL AND
@@ -161,7 +166,11 @@ def progress(owner, cutoff, *, knowledge_only=False):
             COUNT(*) FILTER (WHERE done.source_id IS NULL AND
                 f.next_attempt_at > NOW()) AS retrying_parts,
             COUNT(*) FILTER (WHERE done.source_id IS NULL AND
-                f.source_id IS NOT NULL AND f.next_attempt_at IS NULL) AS paused_parts
+                f.source_id IS NOT NULL AND f.next_attempt_at IS NULL) AS paused_parts,
+            MIN(s.observed_at) FILTER (WHERE done.source_id IS NULL) AS oldest_pending_observed_at,
+            MIN((s.payload->>'sent_at')::timestamptz) FILTER (WHERE done.source_id IS NULL) AS oldest_pending_source_at,
+            MIN(f.next_attempt_at) FILTER (WHERE done.source_id IS NULL AND f.next_attempt_at>NOW()) AS next_retry_at,
+            MAX(done.processed_at) AS last_success_at
             FROM intelligence_sources s JOIN intelligence_state st ON st.user_email=%s
             CROSS JOIN LATERAL generate_series(0, GREATEST(0,
                 (length(COALESCE(s.payload->>'text','')) - 1) / %s)) p(part)
@@ -169,21 +178,22 @@ def progress(owner, cutoff, *, knowledge_only=False):
                 AND done.source_id=s.source_id AND done.part=p.part
             LEFT JOIN intelligence_failures f ON f.user_email=st.user_email
                 AND f.source_id=s.source_id AND f.part=p.part AND NOT f.review
-            WHERE (s.owner_email IS NULL OR s.owner_email=st.user_email)
+            WHERE s.kind IN ('message','event','document')
+                AND (s.owner_email IS NULL OR s.owner_email=st.user_email)
                 AND s.observed_at <= %s
                 AND (%s = (s.historical OR s.observed_at < st.started_at
                     OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE)))""",
-            (owner, CHUNK_SIZE, cutoff, knowledge_only),
-        )
-        counts = dict(cur.fetchone())
-        cur.execute(
-            """SELECT COUNT(*) FILTER (WHERE f.next_attempt_at IS NOT NULL) AS review_retrying,
+        (owner, CHUNK_SIZE, cutoff, knowledge_only),
+    )
+    counts = dict(cur.fetchone())
+    cur.execute(
+        """SELECT COUNT(*) FILTER (WHERE f.next_attempt_at IS NOT NULL) AS review_retrying,
             COUNT(*) FILTER (WHERE f.next_attempt_at IS NULL) AS review_paused
             FROM intelligence_failures f JOIN intelligence_sources s USING(source_id)
             WHERE f.user_email=%s AND f.knowledge_only=%s AND f.review AND s.observed_at <= %s""",
-            (owner, knowledge_only, cutoff),
-        )
-        return {**counts, **dict(cur.fetchone())}
+        (owner, knowledge_only, cutoff),
+    )
+    return {**counts, **dict(cur.fetchone())}
 
 
 def _query(text):
@@ -421,10 +431,12 @@ def _current(cur, row, owner):
 
 
 def evidence_for(finding, batch):
+    from learning_validation import reject
+
     refs = {r["ref"]: r for r in batch}
     evidence = finding.get("evidence")
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 8:
-        raise ValueError("invalid_evidence")
+        reject("invalid_evidence", "invalid_evidence_count", finding=finding)
     result = []
     for e in evidence:
         row = refs.get(e.get("ref"))
@@ -435,9 +447,16 @@ def evidence_for(finding, batch):
             or not 8 <= len(quote.strip()) <= 1200
             or quote not in row["text"]
         ):
-            raise ValueError("invalid_evidence")
+            reject(
+                "invalid_evidence",
+                "unknown_source_or_non_exact_quote",
+                finding=finding,
+                citation=e,
+                allowed_refs=list(refs),
+                source_text=row["text"] if row else None,
+            )
         if row["payload"].get("deleted") or row["payload"].get("excluded"):
-            raise ValueError("invalid_evidence")
+            reject("invalid_evidence", "excluded_source", citation=e, finding=finding)
         result.append(
             {
                 "source_id": row["source_id"],
@@ -481,7 +500,11 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
             # Old imports are valid knowledge evidence but never actionable work.
             continue
         if f.get("subject_ref") not in subjects and f["kind"] != "knowledge":
-            raise ValueError("invalid_subject")
+            from learning_validation import reject
+
+            reject(
+                "invalid_subject", "unknown_subject_ref", finding=f, allowed_refs=sorted(subjects)
+            )
         if not isinstance(f.get("statement"), str) or not 3 <= len(f["statement"]) <= 2000:
             raise ValueError("invalid_statement")
         if f["kind"] == "contact_change":

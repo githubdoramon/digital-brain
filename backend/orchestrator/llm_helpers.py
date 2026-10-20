@@ -32,6 +32,7 @@ from llm_policy import (
     request_rejection,
     request_timeout,
 )
+from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_llm_request
 
@@ -301,69 +302,107 @@ def build_chat_payload(
     return payload
 
 
+def _chat_warmup_payload(model: str, keep_alive: str | int | None):
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    if not is_ollama_base_url(base_url):
+        logger.info("[llm_helpers] Skip model warmup for non-Ollama base URL")
+        return None
+
+    model_name = str(model or "").strip()
+    if not model_name:
+        raise RuntimeError("model is required for warm_chat_model")
+
+    return {
+        "model": model_name,
+        # Empty history loads an Ollama model without requesting a generated reply.
+        "messages": [],
+        "stream": False,
+        "keep_alive": keep_alive if keep_alive is not None else LLM_WARM_KEEP_ALIVE,
+    }
+
+
+def _log_chat_model_warmed(payload, data):
+    logger.info(
+        "[llm_helpers] Warmed chat model model=%s keep_alive=%s done_reason=%s",
+        payload["model"],
+        payload["keep_alive"],
+        data.get("done_reason", ""),
+    )
+
+
 def warm_chat_model(
     model: str,
     *,
     timeout: Optional[int] = None,
     keep_alive: str | int | None = None,
 ) -> bool:
-    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
-    if not is_ollama_base_url(base_url):
-        logger.info("[llm_helpers] Skip model warmup for non-Ollama base URL")
+    """Synchronous warm-up for benchmark workers; startup uses the async path."""
+    payload = _chat_warmup_payload(model, keep_alive)
+    if payload is None:
         return False
-
-    model_name = str(model or "").strip()
-    if not model_name:
-        raise RuntimeError("model is required for warm_chat_model")
-
-    payload = {
-        "model": model_name,
-        "messages": [{"role": "user", "content": "ping"}],
-        "stream": False,
-        "keep_alive": keep_alive if keep_alive is not None else LLM_WARM_KEEP_ALIVE,
-    }
-    data = _post_chat_model_warmup(
-        payload,
-        timeout=timeout or LLM_WARMUP_TIMEOUT,
-    )
-    logger.info(
-        "[llm_helpers] Warmed chat model model=%s keep_alive=%s done_reason=%s",
-        model_name,
-        payload["keep_alive"],
-        data.get("done_reason", ""),
-    )
+    data = _post_chat_model_warmup(payload, timeout=timeout or LLM_WARMUP_TIMEOUT)
+    _log_chat_model_warmed(payload, data)
     return True
+
+
+def _chat_warmup_requests(payload):
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    return (
+        (f"{get_ollama_api_base_url(base_url)}/api/chat", payload),
+        (
+            f"{base_url}/chat/completions",
+            {
+                "model": payload["model"],
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": False,
+                "max_tokens": 1,
+                "reasoning_effort": "none",
+                "reasoning": {"effort": "none"},
+            },
+        ),
+    )
+
+
+def _chat_warmup_response(response, *, native):
+    if native and response.status_code in {404, 405}:
+        logger.info("[llm_helpers] Native warmup unavailable; using chat completions")
+        return None
+    response.raise_for_status()
+    data = response.json()
+    _raise_for_llm_error(data)
+    return data
 
 
 @traced_llm_request
 def _post_chat_model_warmup(payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
     """Trace the small Ollama chat request used to warm a configured model."""
-    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
-    response = requests.post(
-        f"{get_ollama_api_base_url(base_url)}/api/chat",
-        headers=get_llm_headers(),
-        json=payload,
-        timeout=timeout,
-    )
-    if response.status_code in {404, 405}:
-        # A reverse proxy may expose only the configured OpenAI-compatible API.
-        logger.info("[llm_helpers] Native warmup unavailable; using chat completions")
+    for index, (url, body) in enumerate(_chat_warmup_requests(payload)):
         response = requests.post(
-            f"{base_url}/chat/completions",
+            url,
             headers=get_llm_headers(),
-            json={
-                "model": payload["model"],
-                "messages": payload["messages"],
-                "stream": False,
-                "max_tokens": 1,
-                "reasoning_effort": "none",
-            },
+            json=body,
             timeout=timeout,
         )
-    response.raise_for_status()
-    data = response.json()
-    _raise_for_llm_error(data)
-    return data
+        data = _chat_warmup_response(response, native=index == 0)
+        if data is not None:
+            return data
+    raise RuntimeError("model_warmup_failed")
+
+
+@traced_llm_request
+async def _post_chat_model_warmup_async(payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    # One deadline includes connection setup, native probe and compatible fallback.
+    # Native async I/O also makes shutdown cancellation close the in-flight request.
+    async with asyncio.timeout(timeout):
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=min(10, timeout))
+        ) as client:
+            for index, (url, body) in enumerate(_chat_warmup_requests(payload)):
+                response = await client.post(url, headers=get_llm_headers(), json=body)
+                data = _chat_warmup_response(response, native=index == 0)
+                if data is not None:
+                    return data
+    raise RuntimeError("model_warmup_failed")
 
 
 def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
@@ -374,8 +413,8 @@ def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
     )
 
 
-def warm_configured_chat_models(*, timeout: Optional[int] = None) -> list[str]:
-    """Warm each configured chat model once using the shared Ollama keep-alive."""
+async def warm_configured_chat_models(*, timeout: Optional[int] = None) -> list[str]:
+    """Best-effort cancellable startup warm-up, independent of request timeouts."""
     warmed_models: list[str] = []
     seen_models: set[str] = set()
     keep_alive = get_chat_keep_alive()
@@ -385,15 +424,20 @@ def warm_configured_chat_models(*, timeout: Optional[int] = None) -> list[str]:
             continue
         seen_models.add(model)
         try:
-            if warm_chat_model(model, timeout=timeout, keep_alive=keep_alive):
-                warmed_models.append(model)
+            payload = _chat_warmup_payload(model, keep_alive)
+            if payload is None:
+                continue
+            data = await _post_chat_model_warmup_async(
+                payload, timeout=timeout or LLM_WARMUP_TIMEOUT
+            )
+            _log_chat_model_warmed(payload, data)
+            warmed_models.append(model)
         except Exception as exc:
             logger.warning(
-                "[llm_helpers] Chat model warmup failed model=%s timeout=%s: %s",
+                "[llm_helpers] Chat model warmup failed model=%s timeout=%s reason=%s",
                 model,
                 timeout or LLM_WARMUP_TIMEOUT,
-                exc,
-                exc_info=exc,
+                type(exc).__name__,
             )
     return warmed_models
 
@@ -459,6 +503,14 @@ def _post_chat_completion(
     request_url = f"{base_url}/chat/completions"
 
     if sensitive_payload:
+        diagnostic(
+            "llm_request",
+            model=model_name,
+            timeout=resolved_timeout,
+            messages=messages,
+            tools=payload.get("tools"),
+            response_format=payload.get("response_format"),
+        )
         logger.info(
             "[llm_helpers] Sensitive LLM request model=%s timeout=%ss messages=%d",
             model_name,
@@ -526,6 +578,20 @@ def _post_chat_completion(
 
             response.raise_for_status()
             content = response.json()
+            if sensitive_payload:
+                diagnostic(
+                    "llm_response",
+                    model=model_name,
+                    choices=[
+                        {
+                            "finish_reason": choice.get("finish_reason"),
+                            "content": (choice.get("message") or {}).get("content"),
+                        }
+                        for choice in content.get("choices") or []
+                    ],
+                    usage=content.get("usage"),
+                    error=content.get("error"),
+                )
             _raise_for_llm_error(content)
             return content
 
@@ -534,6 +600,14 @@ def _post_chat_completion(
             status_code = response.status_code if response is not None else "unknown"
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             rejected = request_rejection(response) if status_code in {400, 413, 422} else None
+            if sensitive_payload:
+                diagnostic(
+                    "llm_provider_rejected",
+                    model=model_name,
+                    status=status_code,
+                    code=rejected.code if rejected else None,
+                    response_body=response.text if response is not None else None,
+                )
             logger.error(
                 "[llm_helpers] LLM HTTP error status=%s model=%s elapsed=%.1fms timeout=%ss messages=%d attempt=%d/%d reason=%s output_limit=%s response=%s",
                 status_code,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 
 import fastapi
@@ -136,6 +137,14 @@ def _resolve_session_context(
     )
 
 
+async def _warm_chat_models_in_background():
+    try:
+        warmed_models = await warm_configured_chat_models()
+        logger.info("Warmed configured chat models: %s", ", ".join(warmed_models) or "none")
+    except Exception as exc:
+        logger.warning("Chat-model warmup failed reason=%s", type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
@@ -156,12 +165,6 @@ async def lifespan(_app: FastAPI):
     with get_conn():
         pass
 
-    try:
-        warmed_models = warm_configured_chat_models()
-        logger.info("Warmed configured chat models: %s", ", ".join(warmed_models) or "none")
-    except Exception:
-        logger.exception("Chat-model warmup failed; continuing startup")
-
     meeting_transcript_jobs.start_worker()
     event_tag_jobs.start_worker()
     document_tag_jobs.start_worker()
@@ -178,9 +181,15 @@ async def lifespan(_app: FastAPI):
     whatsapp_runtime.start_worker()
     intelligence_jobs.start_worker()
     knowledge_jobs.start_worker()
+    # Optional model readiness must never hold ASGI startup or other workers.
+    warmup_task = asyncio.create_task(_warm_chat_models_in_background(), name="chat-model-warmup")
+    logger.info("Chat-model warmup scheduled in background")
     try:
         yield
     finally:
+        warmup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await warmup_task
         knowledge_jobs.stop_worker()
         intelligence_jobs.stop_worker()
         whatsapp_runtime.stop_worker()

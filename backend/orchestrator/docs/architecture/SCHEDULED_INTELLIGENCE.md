@@ -129,12 +129,13 @@ becoming new work after it has already been accomplished.
   No message-sending or external-action execution endpoint is introduced.
 
 All LLM calls use the configured smart model through `llm_helpers`, with a static
-`intelligence.run` parent span. Worker errors and telemetry never include source
-text, model output, identities, task descriptions or raw exception strings.
-Extraction, reconciliation, repair and completion-review calls set
-`sensitive_payload=True`; runtime logs retain request metadata and bounded failure
-codes, never prompts, responses or reasoning. This protects future log entries;
-previously exported logs are unaffected.
+`intelligence.run` parent span. External telemetry never includes source text,
+model output, identities, task descriptions or raw exception strings. At the user's
+request, local authenticated system logs now include bounded diagnostic records:
+analysis/source IDs, source text, model output, exact validation failures, repair
+feedback and committed effects. `LLM_DIAGNOSTICS_ENABLED` defaults to true and can
+be disabled; configured credentials remain redacted. Persisted error codes and
+telemetry remain bounded. See [LLM_CONTEXT.md](LLM_CONTEXT.md).
 
 Progress logs distinguish `model_stage_completed` (candidate counts and elapsed
 time) from `batch_committed` (durable effects after the database commit). Batch
@@ -143,7 +144,7 @@ older evidence added, protected facts, proposals created, tasks completed,
 proposals expired and skipped findings. Duplicate proposals are not creations;
 repeated receipts are not newly processed parts. Fact updates include revisions
 and evidence changes, not just a changed statement. `repair_requested` records
-only the static rejection code.
+the static rejection code; a correlated diagnostic record carries the details.
 
 After each worker turn, `run_yielded`, `run_failed` or `run_drained` reports a
 snapshot through that run's cutoff: total/processed/remaining source parts and
@@ -153,6 +154,17 @@ still need retry or attention. Counts cover captured snapshots/parts, not unique
 messages or a claim of complete messenger history. No owner, run/source IDs,
 predicates, fact statements, quotes or model reasoning enter these summaries.
 Snapshot failure emits `progress_snapshot_unavailable` and never fails the work.
+
+The independent knowledge progress observer also emits `[learning] progress` at
+startup and every minute during long model calls. Its shared API snapshot reports
+separate historical/scheduled coverage through the current snapshot time, including
+late imports beyond a previous run's cutoff, retry reasons, active runs, elapsed time,
+oldest waiting source dates and latest successful receipts. `/mobile/intelligence/status`
+adds these two lanes under `progress`; `/mobile/knowledge/progress` includes them
+alongside ongoing/historical knowledge learning and summaries. See
+[Knowledge progress and activity](KNOWLEDGE.md#progress-and-activity). Local activity
+logs include owner and source/run references; source bodies remain in the explicitly
+enabled local diagnostics, never telemetry.
 
 Model warmup falls back to the configured `/chat/completions` API with a one-token
 request when the Ollama-native endpoint returns 404/405 (for example, a reverse

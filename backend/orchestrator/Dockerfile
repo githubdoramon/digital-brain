@@ -37,6 +37,9 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 COPY --from=tryx-builder /wheels /wheels
 RUN pip install --find-links=/wheels -r /app/requirements.txt
+# Cache public tokenizer data at build time; requests must not download vocabularies.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 COPY . /app
 

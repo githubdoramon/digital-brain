@@ -46,7 +46,12 @@ relationship changes: confident current changes with resolved identities and no
 conflicts apply atomically; uncertain changes enter Proposed items with identity
 choices and checked acceptance. Unknown birth years remain unknown (`--MM-DD`).
 Historical knowledge-only learning includes contact structuring, never historical
-task/project actions. See `backend/orchestrator/docs/architecture/KNOWLEDGE.md`.
+task/project actions. Shared `learning_progress` snapshots distinguish ongoing and
+historical coverage, unqueued parts, active leases, retries, clarification waits,
+summaries and indexing. The independent knowledge observer logs progress every minute
+even during long model calls; the Knowledge screen uses the same authenticated API.
+Never infer completed history from `run_drained` alone. See
+`backend/orchestrator/docs/architecture/KNOWLEDGE.md`.
 
 ## Architecture Documentation
 
@@ -105,7 +110,11 @@ and document evidence at 05:00/19:00 Europe/Lisbon. Its one-time historical pass
 knowledge-only. Facts/contact knowledge update automatically; tasks/projects/edits
 enter Proposed items. Explicit verified direct evidence may complete a matching
 task automatically, with source links and manual-override protection. Keep source
-snapshots and outputs out of logs/telemetry. See
+snapshots and outputs out of external telemetry. Detailed local learning diagnostics
+are enabled by default at the user's request: include source IDs/text, candidates,
+model content, validation details, repair feedback and committed effects. Redact
+credentials and cap each entry; `LLM_DIAGNOSTICS_ENABLED=false` disables this detail.
+Never copy diagnostic content into tests or examples. See
 `backend/orchestrator/docs/architecture/SCHEDULED_INTELLIGENCE.md`.
 
 **Messaging archive**: `whatsapp_runtime.py` supervises patched Tryx 1.5.0+digitalbrain.1 and Telethon
@@ -471,7 +480,7 @@ LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=180
 LLM_REASONING_TIMEOUT=300             # Minimum for medium reasoning
 LLM_HIGH_REASONING_TIMEOUT=900        # Minimum for high/xhigh reasoning
-LLM_WARMUP_TIMEOUT=180                 # Startup Ollama model warmup timeout
+LLM_WARMUP_TIMEOUT=180                 # Background model warmup deadline per model
 LLM_CHAT_MODEL_FAST=mistral            # Optional fast profile override
 LLM_CHAT_MODEL_SMART=gpt-4o            # Optional smart profile override
 

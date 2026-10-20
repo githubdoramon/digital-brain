@@ -970,54 +970,71 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
 
         return wrapped_stream  # type: ignore[return-value]
 
+    if inspect.iscoroutinefunction(function):
+
+        @wraps(function)
+        async def wrapped_async(payload: dict[str, Any], *args: Any, **kwargs: Any):
+            with _llm_request_trace(payload, stream=False) as result:
+                result["value"] = await function(payload, *args, **kwargs)
+                return result["value"]
+
+        return wrapped_async  # type: ignore[return-value]
+
     @wraps(function)
     def wrapped(payload: dict[str, Any], *args: Any, **kwargs: Any) -> _T:
-        try:
-            from opentelemetry import trace
-        except ImportError:
-            return function(payload, *args, **kwargs)
-
-        messages = payload.get("messages")
-        tracer = trace.get_tracer("digital-brain.llm")
-        started = time.perf_counter()
-        model = str(payload.get("model") or "unknown")[:128]
-        result: Any = None
-        outcome = "error"
-        with tracer.start_as_current_span("llm.chat_completion") as span:
-            span.set_attribute("gen_ai.request.model", model)
-            span.set_attribute(
-                "gen_ai.request.message_count", len(messages) if isinstance(messages, list) else 0
-            )
-            span.set_attribute("gen_ai.request.stream", function.__name__.endswith("_stream"))
-            try:
-                result = function(payload, *args, **kwargs)
-                outcome = "success"
-                span.set_attribute("llm.outcome", "success")
-                if isinstance(result, dict):
-                    usage = result.get("usage")
-                    _set_llm_token_attributes(span, usage)
-                return result
-            except Exception as exc:
-                span.set_attribute("llm.outcome", "error")
-                span.set_attribute("error.type", type(exc).__name__)
-                try:
-                    from opentelemetry.trace import Status, StatusCode
-
-                    span.set_status(Status(StatusCode.ERROR))
-                except ImportError:
-                    pass
-                raise
-            finally:
-                duration_seconds = time.perf_counter() - started
-                span.set_attribute("llm.duration_ms", duration_seconds * 1000)
-                _record_llm_metrics(
-                    model=model,
-                    duration_seconds=duration_seconds,
-                    outcome=outcome,
-                    result=result,
-                )
+        with _llm_request_trace(payload, stream=function.__name__.endswith("_stream")) as result:
+            result["value"] = function(payload, *args, **kwargs)
+            return result["value"]
 
     return wrapped
+
+
+@contextmanager
+def _llm_request_trace(payload, *, stream):
+    """Share tracing across sync and awaitable transports without exporting error text."""
+    result = {"value": None}
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        yield result
+        return
+
+    messages = payload.get("messages")
+    tracer = trace.get_tracer("digital-brain.llm")
+    started = time.perf_counter()
+    model = str(payload.get("model") or "unknown")[:128]
+    outcome = "error"
+    with tracer.start_as_current_span(
+        "llm.chat_completion", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attribute("gen_ai.request.model", model)
+        span.set_attribute(
+            "gen_ai.request.message_count", len(messages) if isinstance(messages, list) else 0
+        )
+        span.set_attribute("gen_ai.request.stream", stream)
+        try:
+            yield result
+            outcome = "success"
+            span.set_attribute("llm.outcome", "success")
+            if isinstance(result["value"], dict):
+                _set_llm_token_attributes(span, result["value"].get("usage"))
+        except BaseException as exc:
+            span.set_attribute("llm.outcome", "error")
+            span.set_attribute("error.type", type(exc).__name__)
+            try:
+                from opentelemetry.trace import Status, StatusCode
+
+                span.set_status(Status(StatusCode.ERROR))
+            except ImportError:
+                pass
+            raise
+        finally:
+            duration_seconds = time.perf_counter() - started
+            span.set_attribute("llm.duration_ms", duration_seconds * 1000)
+            _record_llm_metrics(
+                model=model, duration_seconds=duration_seconds,
+                outcome=outcome, result=result["value"],
+            )
 
 
 def _set_llm_token_attributes(span: Any, usage: Any) -> None:

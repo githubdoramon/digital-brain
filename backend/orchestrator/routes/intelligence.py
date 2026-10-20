@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 import intelligence
+import intelligence_jobs
+import learning_progress
 import messaging_archive
 from auth import get_current_user
 from db import get_conn
@@ -77,7 +79,8 @@ def create_intelligence_router():
             )
             state = cur.fetchone()
             cur.execute(
-                """SELECT slot, status, batches, error_code FROM intelligence_runs
+                """SELECT slot,status,batches,error_code,knowledge_only,cutoff,started_at,lease_until,next_attempt_at
+                FROM intelligence_runs
                 WHERE user_email=%s ORDER BY cutoff DESC LIMIT 8""",
                 (user["email"],),
             )
@@ -90,11 +93,12 @@ def create_intelligence_router():
             )
             failures = dict(cur.fetchone())
         return {
-            "schedule": ["05:00", "19:00"],
-            "timezone": "Europe/Lisbon",
+            "schedule": [f"{hour:02d}:00" for hour in intelligence_jobs.HOURS],
+            "timezone": intelligence_jobs.TIMEZONE,
             "state": state,
             "runs": runs,
             "failures": failures,
+            "progress": learning_progress.snapshot(user["email"])["intelligence"],
         }
 
     @router.post("/retry-failures")

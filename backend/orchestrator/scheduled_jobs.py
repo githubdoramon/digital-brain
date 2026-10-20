@@ -255,7 +255,7 @@ KNOWLEDGE_LEARNING = ScheduledJobSpec(
     time_utc=None,
     poll_seconds=10,
     retry_seconds=300,
-    description="Learns from Brain chats, revisits retained history, and refreshes entity summaries.",
+    description="Learns from Brain chats, revisits retained history, refreshes entity summaries, and reports progress every minute independently of model calls.",
     trigger_source="persisted evidence and background worker",
 )
 

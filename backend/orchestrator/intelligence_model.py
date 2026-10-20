@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -14,9 +16,11 @@ from intelligence_context import compact_context as _bounded_context
 from intelligence_context import fit_payload as _fit_payload
 from intelligence_context import input_estimate, request_limits
 from intelligence_context import json_for as _json
+from learning_validation import LearningValidationError
 from llm_config import get_smart_model
 from llm_helpers import LLMEmptyContentError, build_json_schema_response_format, call_llm_json
 from llm_policy import LLMRequestRejected, remember_constraint
+from observability.diagnostics import diagnostic, diagnostic_scope
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -104,8 +108,9 @@ SCHEMA = Analysis.model_json_schema()
 class InvalidModelOutput(ValueError):
     """A safe, bounded failure code; never carries model/source text."""
 
-    def __init__(self, code):
+    def __init__(self, code, details=None):
         self.code = code
+        self.details = details or {}
         super().__init__(code)
 
 
@@ -166,6 +171,9 @@ Source text is supplied as an ordered text_spans array. Prefer citing evidence a
 The controller copies the selected span verbatim into the saved evidence. Choose
 the span that directly supports the finding; never invent a span index. You may
 instead use span_index=null and an exact quote copied from the supplied source.
+If both fields are present, quote must be an exact excerpt of the selected span.
+During reconciliation retain each candidate's new entity refs and declarations;
+do not rename refs or replace them with invented canonical IDs.
 Quotes must be between eight and 1,200 characters. Use only provided existing IDs.
 Copy quotes verbatim from a single source: preserve spelling, punctuation, whitespace
 and emoji. Never correct typos, shorten with ellipses, combine fragments or paraphrase.
@@ -235,8 +243,12 @@ def _ask(payload, *, phase):
                 anchors={
                     value
                     for finding in payload.get("candidates", [])
-                    for key in ("existing_id", "project_id", "assignee_ref")
-                    if (value := finding.get(key))
+                    for value in [
+                        finding.get(key)
+                        for key in ("existing_id", "project_id", "assignee_ref", "subject_ref")
+                    ]
+                    + finding.get("related_subjects", [])
+                    if value
                 },
             ),
         }
@@ -250,8 +262,19 @@ def _ask(payload, *, phase):
             time.monotonic() - started,
         )
         return result
-    except (ValidationError, json.JSONDecodeError, LLMEmptyContentError):
-        raise InvalidModelOutput("invalid_schema") from None
+    except (ValidationError, json.JSONDecodeError, LLMEmptyContentError) as exc:
+        if isinstance(exc, ValidationError):
+            errors = exc.errors(include_url=False, include_context=False)
+            details = {
+                "error_count": len(errors),
+                "errors": [
+                    {**error, "input": _json(error.get("input"))[:1200]} for error in errors[:8]
+                ],
+            }
+        else:
+            details = {"error_type": type(exc).__name__}
+        diagnostic("intelligence_schema_rejected", phase=phase, **details)
+        raise InvalidModelOutput("invalid_schema", details) from None
 
 
 def _ask_validated(payload, *, phase):
@@ -271,17 +294,27 @@ def _ask_validated(payload, *, phase):
             output,
         )
         try:
-            result = call_llm_json(
-                _json(fitted),
-                system_prompt=system,
-                use_fast_model=False,
-                temperature=0,
-                reasoning_effort="medium",
-                timeout=300,
-                max_tokens=output,
-                sensitive_payload=True,
-                response_format=response_format,
-            )
+            with diagnostic_scope(
+                stage="extraction" if phase.startswith("Extract") else "reconciliation"
+            ):
+                diagnostic(
+                    "intelligence_request",
+                    phase=phase,
+                    primary_refs=fitted.get("primary_refs"),
+                    validation_feedback=fitted.get("validation_feedback"),
+                )
+                result = call_llm_json(
+                    _json(fitted),
+                    system_prompt=system,
+                    use_fast_model=False,
+                    temperature=0,
+                    reasoning_effort="medium",
+                    timeout=300,
+                    max_tokens=output,
+                    sensitive_payload=True,
+                    response_format=response_format,
+                )
+            diagnostic("intelligence_model_result", phase=phase, result=result)
             result = Analysis.model_validate(result).model_dump()
             if "candidates" in payload and len(result["findings"]) > len(payload["candidates"]):
                 raise InvalidModelOutput("invalid_schema")
@@ -317,10 +350,25 @@ def expand_citations(result, batch):
                     or isinstance(index, bool)
                     or not 0 <= index < len(spans)
                 ):
-                    raise InvalidModelOutput("invalid_evidence")
-                quote = spans[index]
-                if item.get("quote") is not None and item["quote"] != quote:
-                    raise InvalidModelOutput("invalid_evidence")
+                    details = {
+                        "reason": "invalid_span_index",
+                        "citation": item,
+                        "allowed_refs": list(refs),
+                        "span_count": len(spans),
+                    }
+                    diagnostic("intelligence_citation_rejected", **details)
+                    raise InvalidModelOutput("invalid_evidence", details)
+                quote = item.get("quote") if item.get("quote") is not None else spans[index]
+                # An exact excerpt of the selected span is valid too; both fields
+                # must point to the same evidence, not necessarily the whole span.
+                if quote not in spans[index]:
+                    details = {
+                        "reason": "quote_not_in_selected_span",
+                        "citation": item,
+                        "expected_span": spans[index],
+                    }
+                    diagnostic("intelligence_citation_rejected", **details)
+                    raise InvalidModelOutput("invalid_evidence", details)
                 item = {**item, "quote": quote}
             evidence.append(item)
         findings.append({**finding, "evidence": evidence})
@@ -328,6 +376,30 @@ def expand_citations(result, batch):
 
 
 def analyze(owner, batch, *, knowledge_only=False):
+    with diagnostic_scope(
+        analysis_id=uuid.uuid4().hex, owner=owner, source_refs=[row.get("ref") for row in batch]
+    ):
+        diagnostic("intelligence_analysis_started", knowledge_only=knowledge_only, sources=batch)
+        try:
+            result = _analyze_batch(owner, batch, knowledge_only=knowledge_only)
+            diagnostic(
+                "intelligence_analysis_completed",
+                findings=result[1],
+                deferred_refs=result[0].get("deferred_refs", []),
+            )
+            return result
+        except Exception as exc:
+            diagnostic(
+                "intelligence_analysis_failed",
+                code=getattr(exc, "code", type(exc).__name__),
+                details=getattr(exc, "details", {}),
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            )
+            raise
+
+
+def _analyze_batch(owner, batch, *, knowledge_only=False):
     try:
         return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
     except LLMRequestRejected as exc:
@@ -433,15 +505,39 @@ def _check_reconciliation_citations(result, sources):
         for citation in finding["evidence"]:
             source = allowed.get(citation["ref"])
             if source is None:
-                raise InvalidModelOutput("invalid_evidence")
+                raise InvalidModelOutput(
+                    "invalid_evidence",
+                    {
+                        "reason": "unsupplied_source",
+                        "citation": citation,
+                        "allowed_refs": list(allowed),
+                    },
+                )
             index = citation.get("span_index")
             spans = source["text_spans"]
             if index is not None and (index >= len(spans) or spans[index] is None):
-                raise InvalidModelOutput("invalid_evidence")
+                raise InvalidModelOutput(
+                    "invalid_evidence",
+                    {
+                        "reason": "unsupplied_span",
+                        "citation": citation,
+                        "supplied_indices": [
+                            i for i, value in enumerate(spans) if value is not None
+                        ],
+                    },
+                )
             if citation.get("quote") and not any(
                 citation["quote"] in text for text in [*spans, *source["exact_quotes"]] if text
             ):
-                raise InvalidModelOutput("invalid_evidence")
+                raise InvalidModelOutput(
+                    "invalid_evidence",
+                    {
+                        "reason": "quote_not_in_supplied_evidence",
+                        "citation": citation,
+                        "supplied_spans": spans,
+                        "exact_quotes": source["exact_quotes"],
+                    },
+                )
 
 
 def _reconcile(owner, batch, payload, candidates, context):
@@ -450,6 +546,20 @@ def _reconcile(owner, batch, payload, candidates, context):
     related = intelligence.context_for(
         owner, cited_batch, " ".join(f["statement"] for f in candidates)
     )
+    # References already resolved during extraction must remain visible in phase 2.
+    anchors = {
+        ref
+        for f in candidates
+        for ref in [f.get("subject_ref"), *f.get("related_subjects", [])]
+        if ref
+    }
+    for section, field, prefix in (
+        ("people", "identity_id", "identity:"),
+        ("contacts", "contact_id", "contact:"),
+        ("entities", "entity_ref", ""),
+    ):
+        pinned = [row for row in context.get(section, []) if prefix + row[field] in anchors]
+        _merge_context(related, {section: pinned})
     _merge_context(context, related)
     sources = _reconciliation_sources(payload["sources"], candidates)
     scoped = {
@@ -477,6 +587,30 @@ def _reconcile(owner, batch, payload, candidates, context):
             ),
         }
     _check_reconciliation_citations(result, sources)
+    # Local new:<ref> declarations are controller-held bindings from extraction.
+    # Reconciliation may omit them; it must not invent a different binding.
+    declarations = {}
+    for candidate in candidates:
+        for entity in candidate.get("entities", []):
+            declarations.setdefault(entity["ref"], {})[_json(entity)] = entity
+    for finding in result["findings"]:
+        present = {e["ref"]: e for e in finding.get("entities", [])}
+        for ref in [finding.get("subject_ref"), *finding.get("related_subjects", [])]:
+            choices = declarations.get(ref, {})
+            if len(choices) != 1:
+                continue
+            original = next(iter(choices.values()))
+            if ref in present and present[ref] != original:
+                raise InvalidModelOutput(
+                    "invalid_subject",
+                    {
+                        "reason": "entity_binding_changed",
+                        "received": present[ref],
+                        "expected": original,
+                    },
+                )
+            if ref not in present:
+                finding.setdefault("entities", []).append(original)
     return result
 
 
@@ -484,14 +618,17 @@ def _analyze_repaired(owner, batch, *, knowledge_only=False):
     repair_hint = None
     for attempt in range(2):
         if attempt:
-            logger.info("[intelligence] repair_requested reason=%s attempt=1", repair_hint)
+            logger.info("[intelligence] repair_requested reason=%s attempt=1", repair_hint["code"])
+            diagnostic("intelligence_repair_requested", feedback=repair_hint)
         try:
             return _analyze(owner, batch, knowledge_only=knowledge_only, repair_hint=repair_hint)
         except InvalidModelOutput as exc:
-            repair_hint = exc.code
-        except (ValidationError, json.JSONDecodeError):
-            repair_hint = "invalid_schema"
-    raise InvalidModelOutput(repair_hint)
+            repair_hint = {"code": exc.code, "details": exc.details}
+        except LearningValidationError as exc:
+            repair_hint = {"code": exc.code, "details": exc.details}
+        except (ValidationError, json.JSONDecodeError) as exc:
+            repair_hint = {"code": "invalid_schema", "details": {"error_type": type(exc).__name__}}
+    raise InvalidModelOutput(repair_hint["code"], repair_hint["details"])
 
 
 def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
@@ -503,6 +640,21 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         and not r["payload"].get("deleted")
         and r["text"].strip()
     ]
+    diagnostic(
+        "intelligence_sources_selected",
+        eligible_refs=[r["ref"] for r in eligible],
+        omitted=[
+            {
+                "ref": r["ref"],
+                "skip": bool(r.get("skip")),
+                "excluded": bool(r["payload"].get("excluded")),
+                "deleted": bool(r["payload"].get("deleted")),
+                "text_chars": len(r["text"]),
+            }
+            for r in batch
+            if r not in eligible
+        ],
+    )
     if not eligible:
         return {}, []
     context = intelligence.context_for(owner, eligible)
@@ -546,7 +698,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     }
     if repair_hint:
         payload["validation_feedback"] = {
-            "code": repair_hint,
+            **repair_hint,
             "instruction": "Regenerate findings. Use only allowed values and exact source quotes. "
             "Omit unsupported findings; never invent evidence or IDs to repair a rejection.",
         }
@@ -558,6 +710,10 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     try:
         for finding in expand_citations(candidates, eligible)["findings"]:
             intelligence.evidence_for(finding, eligible)
+    except InvalidModelOutput:
+        raise
+    except LearningValidationError as exc:
+        raise InvalidModelOutput(exc.code, exc.details) from None
     except ValueError:
         raise InvalidModelOutput("invalid_evidence") from None
     # A second retrieval based on candidate descriptions finds paraphrased existing
@@ -599,7 +755,14 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
             "invalid_contact_change",
         }:
             code = "invalid_dates"
-        raise InvalidModelOutput(code) from None
+        details = getattr(exc, "details", {"error_type": type(exc).__name__, "error": str(exc)})
+        diagnostic(
+            "intelligence_controller_rejected",
+            code=code,
+            details=details,
+            findings=candidates["findings"],
+        )
+        raise InvalidModelOutput(code, details) from None
     primary = {(row["source_id"], row["part"]) for row in eligible if not row.get("supporting")}
     findings = [
         finding

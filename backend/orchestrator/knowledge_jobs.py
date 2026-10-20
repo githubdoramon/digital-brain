@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import Counter
 from uuid import uuid4
 
 import intelligence
@@ -13,12 +14,14 @@ import knowledge
 from db import get_conn
 from job_leases import lease_heartbeat
 from llm_policy import failure_code
+from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_intelligence_run
 
 _STOP = threading.Event()
 _THREAD = None
 _SUMMARY_THREAD = None
+_PROGRESS_THREAD = None
 logger = get_runtime_logger(__name__)
 
 
@@ -101,7 +104,8 @@ def claim(owners):
         token = uuid4().hex
         cur.execute(
             """UPDATE knowledge_learning SET status='running',attempts=attempts+1,
-            lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes' WHERE user_email=%s AND source_id=%s AND part=%s""",
+            lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes',started_at=NOW()
+            WHERE user_email=%s AND source_id=%s AND part=%s""",
             (token, row["user_email"], row["source_id"], row["part"]),
         )
         conn.commit()
@@ -193,6 +197,14 @@ def process_once(owners):
     job = claim(owners)
     if not job:
         return False
+    logger.info(
+        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d",
+        job["user_email"],
+        job["source_id"],
+        job["part"],
+        job["historical"],
+        job["attempts"] + 1,
+    )
     try:
         with _heartbeat(job):
             batch = source_batch(job)
@@ -211,21 +223,26 @@ def process_once(owners):
                 r["source_id"] for r in batch if intelligence._current(cur, r, job["user_email"])
             }
             contacts_changed = False
+            effects = Counter()
             for f in findings:
                 if all(e["source_id"] in current for e in f["evidence"]):
                     if f["kind"] == "knowledge":
-                        intelligence._save_knowledge(cur, job["user_email"], f)
+                        effects[intelligence._save_knowledge(cur, job["user_email"], f)] += 1
                     elif f["kind"] == "contact_change":
                         import contact_learning
 
                         outcome = contact_learning.save(cur, job["user_email"], f)
+                        effects[outcome] += 1
                         contacts_changed |= outcome == "contact_changes_applied"
+                else:
+                    effects["stale_source_skipped"] += 1
             deferred = set(context.get("deferred_refs", []))
             status = "deferred" if f"{job['source_id']}:{job['part']}" in deferred else "done"
             if status == "deferred" and contacts_changed:
                 status = "pending"
             cur.execute(
-                """UPDATE knowledge_learning SET status=%s,lease_until=NULL,next_attempt_at=NOW(),
+                """UPDATE knowledge_learning SET status=%s,lease_until=NULL,lease_token=NULL,
+                    error_code=NULL,next_attempt_at=NOW(),last_success_at=NOW(),
                     attempts=CASE WHEN %s THEN 0 ELSE attempts END
                 WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s""",
                 (
@@ -238,6 +255,15 @@ def process_once(owners):
                 ),
             )
             conn.commit()
+        diagnostic(
+            "knowledge_learning_committed",
+            owner=job["user_email"],
+            source_ref=f"{job['source_id']}:{job['part']}",
+            historical=job["historical"],
+            findings=findings,
+            status=status,
+            effects=dict(effects),
+        )
         logger.info(
             "[knowledge] learning_completed historical=%s findings=%d deferred=%s",
             job["historical"],
@@ -251,7 +277,23 @@ def process_once(owners):
             else failure_code(exc)
         )
         _finish(job, "failed", code)
-        logger.warning("[knowledge] learning_failed; bounded retry scheduled reason=%s", code)
+        diagnostic(
+            "knowledge_learning_failed",
+            owner=job["user_email"],
+            source_ref=f"{job['source_id']}:{job['part']}",
+            code=code,
+            details=getattr(exc, "details", {}),
+            error=str(exc),
+        )
+        logger.warning(
+            "[knowledge] learning_failed owner=%s source_ref=%s:%s attempt=%d state=%s reason=%s",
+            job["user_email"],
+            job["source_id"],
+            job["part"],
+            job["attempts"] + 1,
+            "paused" if job["attempts"] + 1 >= 3 else "retrying",
+            code,
+        )
     return True
 
 
@@ -272,12 +314,18 @@ def summarize_once(owners):
         row = dict(row)
         row["lease_token"] = uuid4().hex
         cur.execute(
-            """UPDATE knowledge_summaries SET lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes'
+            """UPDATE knowledge_summaries SET lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes',started_at=NOW()
             WHERE user_email=%s AND subject_ref=%s""",
             (row["lease_token"], row["user_email"], row["subject_ref"]),
         )
         conn.commit()
     started = time.monotonic()
+    logger.info(
+        "[knowledge] summary_started owner=%s subject_ref=%s version=%s",
+        row["user_email"],
+        row["subject_ref"],
+        row["version"],
+    )
     try:
         facts = []
         budget = 14000
@@ -319,7 +367,7 @@ def summarize_once(owners):
                     raise intelligence_model.InvalidModelOutput("invalid_summary")
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                """UPDATE knowledge_summaries SET summary=%s,rendered_version=version,error_code=NULL
+                """UPDATE knowledge_summaries SET summary=%s,rendered_version=version,error_code=NULL,last_success_at=NOW()
                 WHERE user_email=%s AND subject_ref=%s AND version=%s AND lease_token=%s AND lease_until>NOW()""",
                 (
                     summary,
@@ -468,7 +516,9 @@ def _summary_loop():
 
 
 def start_worker():
-    global _THREAD, _SUMMARY_THREAD
+    import learning_progress
+
+    global _THREAD, _SUMMARY_THREAD, _PROGRESS_THREAD
     _STOP.clear()
     if not _THREAD or not _THREAD.is_alive():
         _THREAD = threading.Thread(target=_loop, name="knowledge-learning", daemon=True)
@@ -478,11 +528,16 @@ def start_worker():
             target=_summary_loop, name="knowledge-summaries", daemon=True
         )
         _SUMMARY_THREAD.start()
+    if not _PROGRESS_THREAD or not _PROGRESS_THREAD.is_alive():
+        _PROGRESS_THREAD = threading.Thread(
+            target=learning_progress.log_loop, args=(_STOP,), name="knowledge-progress", daemon=True
+        )
+        _PROGRESS_THREAD.start()
 
 
 def stop_worker(timeout=5):
     _STOP.set()
-    for thread in (_THREAD, _SUMMARY_THREAD):
+    for thread in (_THREAD, _SUMMARY_THREAD, _PROGRESS_THREAD):
         if thread:
             thread.join(timeout=timeout)
 
@@ -548,5 +603,7 @@ def get_worker_status():
     return {
         "job_type": "knowledge_learning",
         "worker_alive": bool(_THREAD and _THREAD.is_alive()),
+        "summary_worker_alive": bool(_SUMMARY_THREAD and _SUMMARY_THREAD.is_alive()),
+        "progress_worker_alive": bool(_PROGRESS_THREAD and _PROGRESS_THREAD.is_alive()),
         "poll_seconds": 10,
     }

@@ -110,7 +110,7 @@ def claim_run(owners):
         token = uuid4().hex
         cur.execute(
             """UPDATE intelligence_runs SET status='running', lease_token=%s,
-            lease_until=NOW() + INTERVAL '15 minutes', error_code=NULL WHERE run_id=%s""",
+            lease_until=NOW() + INTERVAL '15 minutes', error_code=NULL,started_at=NOW() WHERE run_id=%s""",
             (token, run["run_id"]),
         )
         conn.commit()
@@ -200,8 +200,11 @@ def _heartbeat(run):
 @traced_intelligence_run()
 def _process_run(run):
     logger.info(
-        "[intelligence] run_started mode=%s",
+        "[intelligence] run_started mode=%s owner=%s run_id=%s cutoff=%s",
         "history" if run["knowledge_only"] else "scheduled",
+        run["user_email"],
+        run["run_id"],
+        run["cutoff"],
     )
     for _ in range(4):
         if _STOP.is_set():
@@ -286,7 +289,7 @@ def get_worker_status():
     return {
         "job_type": JOB_TYPE,
         "worker_alive": bool(_THREAD and _THREAD.is_alive()),
-        "time_local": ["05:00", "19:00"],
+        "time_local": [f"{hour:02d}:00" for hour in HOURS],
         "timezone_name": TIMEZONE,
         "poll_seconds": POLL_SECONDS,
     }

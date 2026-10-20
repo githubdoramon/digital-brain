@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from llm_policy import LLMRequestRejected, model_constraints
+from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -39,13 +42,22 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
-def estimate_input(payload: dict[str, Any]) -> int:
-    """Conservative text estimate including escaping, schemas and message envelopes.
+@lru_cache(maxsize=1)
+def _tokenizer():
+    try:
+        import tiktoken
 
-    Text UTF-8 bytes upper-bound ordinary byte-based tokenizer counts. Images have
-    provider-specific costs: reserve a configurable amount instead of counting their
-    base64 transport encoding as text. Images are never removed or summarized.
-    """
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception as exc:
+        logger.warning(
+            "[llm_context] Tokenizer unavailable; using UTF-8 upper bound reason=%s",
+            type(exc).__name__,
+        )
+        return None
+
+
+def input_measurement(payload: dict[str, Any]) -> dict[str, Any]:
+    """Model-independent BPE estimate with headroom, not an exact provider count."""
     images = 0
 
     def projected(value):
@@ -60,9 +72,42 @@ def estimate_input(payload: dict[str, Any]) -> int:
         return value
 
     envelope = projected(payload)
-    return len(_json(envelope).encode("utf-8")) + images * int(
-        os.getenv("LLM_IMAGE_INPUT_TOKENS", "8192")
+    text = _json(envelope)
+    tokenizer = _tokenizer()
+    count = (
+        math.ceil(len(tokenizer.encode_ordinary(text)) * 1.2)
+        if tokenizer
+        else len(text.encode("utf-8"))
     )
+    count += 16 * len(payload.get("messages", []))
+    return {
+        "estimated_tokens": count + images * int(os.getenv("LLM_IMAGE_INPUT_TOKENS", "8192")),
+        "wire_bytes": len(text.encode("utf-8")),
+        "images": images,
+        "estimator": "cl100k_base_with_20_percent_headroom" if tokenizer else "utf8_upper_bound",
+    }
+
+
+def estimate_input(payload: dict[str, Any]) -> int:
+    return input_measurement(payload)["estimated_tokens"]
+
+
+def _compact_tool_descriptions(tools):
+    def compact(value):
+        if isinstance(value, list):
+            return [compact(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: item
+                if key in {"const", "enum", "default", "examples"}
+                else item[:240]
+                if key == "description" and isinstance(item, str)
+                else compact(item)
+                for key, item in value.items()
+            }
+        return value
+
+    return compact(tools)
 
 
 @dataclass(frozen=True)
@@ -255,14 +300,60 @@ def prepare_request(
     )
     for key in output_keys or ["max_tokens"]:
         payload[key] = min(int(payload.get(key) or budget.output_limit), budget.output_limit)
-    before = estimate_input(payload)
+    measurement = input_measurement(payload)
+    before = measurement["estimated_tokens"]
     target = int(budget.input_limit * 0.8)
+    diagnostic(
+        "llm_context_budget",
+        **measurement,
+        input_limit=budget.input_limit,
+        output_reserve=budget.output_limit,
+        components={
+            key: estimate_input({key: value})
+            for key, value in payload.items()
+            if key in {"messages", "tools", "response_format"}
+        },
+        messages=[
+            {
+                "index": i,
+                "role": msg.get("role"),
+                "estimated_tokens": estimate_input({"messages": [msg]}),
+            }
+            for i, msg in enumerate(payload.get("messages", []))
+        ],
+        tools=[
+            {
+                "name": (tool.get("function") or {}).get("name"),
+                "estimated_tokens": estimate_input({"tools": [tool]}),
+            }
+            for tool in payload.get("tools", [])
+        ],
+    )
     if before <= target or policy is None:
         if before > budget.input_limit:
+            diagnostic(
+                "llm_context_unfit",
+                reason="protected_or_source_processing_input",
+                input_limit=budget.input_limit,
+                **measurement,
+                messages=payload.get("messages"),
+                tools=payload.get("tools"),
+                response_format=payload.get("response_format"),
+            )
             raise LLMRequestRejected("context_length_exceeded")
         return payload
 
     messages = list(payload.get("messages") or [])
+    if payload.get("tools"):
+        compacted_tools = _compact_tool_descriptions(payload["tools"])
+        diagnostic(
+            "tool_descriptions_compacted",
+            before=estimate_input({"tools": payload["tools"]}),
+            after=estimate_input({"tools": compacted_tools}),
+        )
+        payload["tools"] = compacted_tools
+        if estimate_input(payload) <= target:
+            return payload
     focus = policy.current_request or next(
         (msg.get("content") for msg in reversed(messages) if msg.get("role") == "user"), ""
     )
@@ -389,5 +480,17 @@ def prepare_request(
         len(replacements),
     )
     if after > budget.input_limit:
+        diagnostic(
+            "llm_context_unfit",
+            **input_measurement(payload),
+            input_limit=budget.input_limit,
+            summaries=len(replacements),
+            protected_messages=[
+                {"index": i, "role": msg.get("role"), "content": msg.get("content")}
+                for i, msg in enumerate(payload.get("messages", []))
+                if msg.get("role") in {"system", "developer"}
+            ],
+            tools=[(tool.get("function") or {}).get("name") for tool in payload.get("tools", [])],
+        )
         raise LLMRequestRejected("context_length_exceeded")
     return payload

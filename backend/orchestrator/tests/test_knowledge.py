@@ -398,6 +398,71 @@ def test_summary_cannot_publish_after_concurrent_correction(database, monkeypatc
     assert knowledge.summary_for(OWNER, "self")["summary"] is None
 
 
+def test_validation_recovery_retries_only_retained_validation_failures(database):
+    from pathlib import Path
+
+    item = save(database)
+    knowledge.change(OWNER, item["knowledge_id"], statement="The quote is still pending.")
+    for index in range(5):
+        ingest(database, ident=f"validation-{index}")
+    with database() as conn:
+        sources = conn.execute(
+            "SELECT source_id FROM intelligence_sources ORDER BY source_id"
+        ).fetchall()
+        for row, status, code in zip(
+            sources,
+            ("failed", "failed", "failed", "done", "deferred", "running"),
+            (
+                "invalid_subject",
+                "invalid_evidence",
+                "invalid_request",
+                None,
+                None,
+                "invalid_subject",
+            ),
+            strict=True,
+        ):
+            conn.execute(
+                "INSERT INTO knowledge_learning(user_email,source_id,status,error_code,attempts) VALUES(%s,%s,%s,%s,3)",
+                (OWNER, row["source_id"], status, code),
+            )
+        for row, code in zip(
+            sources[:3], ("invalid_subject", "invalid_evidence", "invalid_request"), strict=True
+        ):
+            conn.execute(
+                "INSERT INTO intelligence_failures(user_email,source_id,part,knowledge_only,error_code,attempts) VALUES(%s,%s,0,TRUE,%s,3)",
+                (OWNER, row["source_id"], code),
+            )
+        conn.execute("UPDATE intelligence_runs SET status='succeeded',knowledge_only=TRUE")
+        receipts = conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+        conn.execute(
+            (
+                Path(__file__).resolve().parents[1]
+                / "db_migrations/0083_learning_validation_recovery.sql"
+            ).read_text()
+        )
+        assert [
+            row["status"]
+            for row in conn.execute("SELECT status FROM knowledge_learning ORDER BY source_id")
+        ] == ["pending", "pending", "failed", "done", "deferred", "running"]
+        assert [
+            row["attempts"]
+            for row in conn.execute("SELECT attempts FROM intelligence_failures ORDER BY source_id")
+        ] == [0, 0, 3]
+        runs = conn.execute("SELECT slot,status FROM intelligence_runs").fetchall()
+        assert any(
+            row["slot"] != "knowledge-backlog" and row["status"] == "pending" for row in runs
+        )
+        assert all(
+            row["status"] == "succeeded" for row in runs if row["slot"] == "knowledge-backlog"
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+            == receipts
+        )
+    assert knowledge.list_items(OWNER)[0]["statement"] == "The quote is still pending."
+
+
 def test_summary_claim_excludes_concurrent_workers_and_repairs_bad_shape(database, monkeypatch):
     save(database)
     with database() as conn:

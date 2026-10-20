@@ -129,6 +129,7 @@ def compact_context(context, *, extraction=False, query="", anchors=()):
         context.get("people", []),
         context.get("contact_relationships", []),
     ) | set(anchors)
+    pinned |= {ref.partition(":")[2] for ref in tuple(pinned) if isinstance(ref, str)}
 
     def compact(value):
         if isinstance(value, str):

@@ -8,6 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 
 from db import get_conn
+from learning_validation import reject
 
 KINDS = {
     "person",
@@ -48,24 +49,41 @@ def validate_entities(finding, context, evidence):
     mapping = {}
     entities = []
     quotes = "\n".join(e["quote"] for e in evidence).casefold()
+    subjects = [finding["subject_ref"], *finding.get("related_subjects", [])]
     for entity in finding.get("entities", []):
         ref, kind, label = (
             entity.get("ref", ""),
             entity.get("kind"),
             entity.get("label", "").strip(),
         )
+        # Only entities linked by this finding can be persisted. Extra definitions
+        # from other candidates do not invalidate an otherwise supported fact.
+        if ref not in subjects:
+            continue
         if not re.fullmatch(r"new:[a-z0-9_.-]{1,80}", ref) or kind not in KINDS - {"person"}:
-            raise ValueError("invalid_subject")
+            reject("invalid_subject", "invalid_entity_definition", entity=entity, finding=finding)
         if not 2 <= len(label) <= 200 or label.casefold() not in quotes:
-            raise ValueError("invalid_subject")
+            reject(
+                "invalid_subject",
+                "entity_label_not_in_cited_evidence",
+                entity=entity,
+                finding=finding,
+                evidence=evidence,
+            )
         canonical = "entity:" + intelligence.key(kind, label.casefold())[:32]
         if ref in mapping:
-            raise ValueError("invalid_subject")
+            reject("invalid_subject", "duplicate_entity_ref", entity=entity, finding=finding)
         mapping[ref] = canonical
         entities.append({"entity_ref": canonical, "kind": kind, "label": label})
-    subjects = [finding["subject_ref"], *finding.get("related_subjects", [])]
     if len(subjects) > 12 or any(s not in known and s not in mapping for s in subjects):
-        raise ValueError("invalid_subject")
+        reject(
+            "invalid_subject",
+            "unknown_subject_ref",
+            finding=finding,
+            rejected_refs=[s for s in subjects if s not in known and s not in mapping],
+            allowed_refs=sorted(known),
+            declared_entity_refs=list(mapping),
+        )
     canonical_subjects = [mapping.get(s, s) for s in subjects]
     entities.extend(e for e in context.get("entities", []) if e["entity_ref"] in canonical_subjects)
     entities.extend(
@@ -275,10 +293,6 @@ def summary_for(owner, subject):
         )
         row = cur.fetchone()
         return dict(row) if row else {"summary": None, "version": 0, "rendered_version": 0}
-
-
-
-
 
 
 def source_is_current(cur, row, owner):

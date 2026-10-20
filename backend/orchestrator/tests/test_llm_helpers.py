@@ -28,6 +28,8 @@ def test_warmup_falls_back_to_configured_chat_api(monkeypatch, native_status):
     assert llm_helpers.warm_chat_model("test-model", timeout=9)
     assert calls[1][0] == "https://models.example/v1/chat/completions"
     assert calls[1][1]["json"]["max_tokens"] == 1
+    assert calls[1][1]["json"]["reasoning_effort"] == "none"
+    assert calls[1][1]["json"]["reasoning"] == {"effort": "none"}
     assert "keep_alive" not in calls[1][1]["json"]
 
 
@@ -43,6 +45,7 @@ def test_warmup_fallback_preserves_provider_failures(monkeypatch):
 
 
 def test_sensitive_json_request_redacts_input_output_and_reasoning(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_DIAGNOSTICS_ENABLED", "false")
     import logging
 
     response = MagicMock()
@@ -166,14 +169,14 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     assert mock_post.call_args.args[0] == "http://localhost:11434/api/chat"
     assert kwargs["json"] == {
         "model": "fast-model",
-        "messages": [{"role": "user", "content": "ping"}],
+        "messages": [],
         "stream": False,
         "keep_alive": "24h",
     }
     assert kwargs["timeout"] == 12
 
 
-def test_warm_configured_chat_models_warms_fast_and_smart(monkeypatch):
+async def test_warm_configured_chat_models_warms_fast_and_smart(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
@@ -181,32 +184,32 @@ def test_warm_configured_chat_models_warms_fast_and_smart(monkeypatch):
 
     calls = []
 
-    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
-        calls.append((model, timeout, keep_alive))
-        return True
+    async def fake_warm_chat_model(payload, *, timeout):
+        calls.append((payload["model"], timeout, payload["keep_alive"]))
+        return {"done": True}
 
-    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+    monkeypatch.setattr(llm_helpers, "_post_chat_model_warmup_async", fake_warm_chat_model)
 
-    warmed = llm_helpers.warm_configured_chat_models(timeout=12)
+    warmed = await llm_helpers.warm_configured_chat_models(timeout=12)
 
     assert warmed == ["fast-model", "smart-model"]
     assert calls == [("fast-model", 12, "24h"), ("smart-model", 12, "24h")]
 
 
-def test_warm_configured_chat_models_dedupes_same_model(monkeypatch):
+async def test_warm_configured_chat_models_dedupes_same_model(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "same-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "same-model")
 
     calls = []
 
-    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
-        calls.append(model)
-        return True
+    async def fake_warm_chat_model(payload, *, timeout):
+        calls.append(payload["model"])
+        return {"done": True}
 
-    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+    monkeypatch.setattr(llm_helpers, "_post_chat_model_warmup_async", fake_warm_chat_model)
 
-    warmed = llm_helpers.warm_configured_chat_models()
+    warmed = await llm_helpers.warm_configured_chat_models()
 
     assert warmed == ["same-model"]
     assert calls == ["same-model"]
@@ -228,7 +231,7 @@ def test_warm_chat_model_uses_requested_model(monkeypatch):
     _, kwargs = mock_post.call_args
     assert kwargs["json"] == {
         "model": "qwen3.5:0.8b",
-        "messages": [{"role": "user", "content": "ping"}],
+        "messages": [],
         "stream": False,
         "keep_alive": "20m",
     }
@@ -253,22 +256,22 @@ def test_warm_chat_model_uses_configured_default_timeout(monkeypatch):
     assert kwargs["timeout"] == 180
 
 
-def test_warm_configured_chat_models_continues_after_model_failure(monkeypatch):
+async def test_warm_configured_chat_models_continues_after_model_failure(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
 
     calls = []
 
-    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
-        calls.append(model)
-        if model == "fast-model":
+    async def fake_warm_chat_model(payload, *, timeout):
+        calls.append(payload["model"])
+        if payload["model"] == "fast-model":
             raise requests.Timeout("timed out")
-        return True
+        return {"done": True}
 
-    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+    monkeypatch.setattr(llm_helpers, "_post_chat_model_warmup_async", fake_warm_chat_model)
 
-    warmed = llm_helpers.warm_configured_chat_models()
+    warmed = await llm_helpers.warm_configured_chat_models()
 
     assert warmed == ["smart-model"]
     assert calls == ["fast-model", "smart-model"]

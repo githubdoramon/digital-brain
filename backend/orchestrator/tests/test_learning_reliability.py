@@ -53,6 +53,7 @@ def test_reasoning_timeouts(effort, explicit, expected):
 
 
 def test_sensitive_400_is_classified_without_logging_provider_text(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_DIAGNOSTICS_ENABLED", "false")
     post = MagicMock(
         return_value=response(
             400,
@@ -234,10 +235,10 @@ def test_reported_input_limit_and_accepted_reduced_budget_are_remembered():
     assert prompt_context.request_limits() == (20000, 12000)
 
 
-def test_utf8_estimate_includes_multibyte_evidence_and_keeps_it_intact():
+def test_token_estimate_includes_multibyte_evidence_and_keeps_it_intact():
     payload = {"sources": [{"ref": "1:0", "text_spans": ["🪐" * 1000]}], "context": {}}
     estimate = prompt_context.input_estimate(payload, "Instructions", {})
-    assert estimate > 4000
+    assert estimate > 1000
     assert (
         model._fit_payload(payload, estimate, "Instructions", {})["sources"] == payload["sources"]
     )

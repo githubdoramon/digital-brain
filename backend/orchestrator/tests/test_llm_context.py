@@ -34,8 +34,8 @@ def payload(messages, **kwargs):
 def old_dialogue():
     return [
         {"role": "system", "content": "Controller instructions stay exact."},
-        {"role": "user", "content": "Alex Carter chose the Slate laptop. " * 700},
-        {"role": "assistant", "content": "We still need to confirm its warranty. " * 500},
+        {"role": "user", "content": "Alex Carter chose the Slate laptop. " * 1100},
+        {"role": "assistant", "content": "We still need to confirm its warranty. " * 800},
         {"role": "user", "content": "What is still unresolved?"},
     ]
 
@@ -89,7 +89,21 @@ def test_complete_envelope_is_checked_before_any_outbound_call(monkeypatch):
         llm_helpers.call_llm_chat(
             [{"role": "user", "content": "Small question"}],
             tools=[
-                {"type": "function", "function": {"name": "oversized", "description": "x" * 16000}}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "oversized",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "choice": {
+                                    "type": "string",
+                                    "enum": [f"item-{i}" for i in range(10000)],
+                                }
+                            },
+                        },
+                    },
+                }
             ],
         )
     post.assert_not_called()
@@ -97,7 +111,14 @@ def test_complete_envelope_is_checked_before_any_outbound_call(monkeypatch):
 
 @pytest.mark.parametrize("field", ["messages", "response_format", "tools"])
 def test_estimate_includes_non_ascii_and_all_large_prompt_sections(field):
-    value = {field: "😀" * 4000}
+    content = "😀" * 10000
+    value = {
+        field: [{"role": "user", "content": content}]
+        if field == "messages"
+        else [{"type": "function", "function": {"name": "test", "parameters": {"enum": [content]}}}]
+        if field == "tools"
+        else {"json_schema": {"enum": [content]}}
+    }
     assert context.estimate_input(value) > 16000
     with pytest.raises(llm_policy.LLMRequestRejected):
         context.prepare_request(
@@ -183,7 +204,7 @@ def test_read_only_tool_summary_preserves_pairing_exact_ids_and_source_state():
                     "status": "current",
                     "deleted": False,
                     "updated_at": "2026-01-02",
-                    "content": "Evidence. " * 5000,
+                    "content": "Evidence. " * 9000,
                 }
             ],
         }
@@ -208,13 +229,13 @@ def test_read_only_tool_summary_preserves_pairing_exact_ids_and_source_state():
 @pytest.mark.parametrize(
     "tool,result",
     [
-        ("write_record", {"success": True, "content": "Receipt. " * 5000}),
-        ("get_document", {"error": "Repair needed.", "content": "Evidence. " * 5000}),
-        ("get_document", {"success": False, "content": "Evidence. " * 5000}),
-        ("get_document", {"valid": False, "content": "Evidence. " * 5000}),
+        ("write_record", {"success": True, "content": "Receipt. " * 9000}),
+        ("get_document", {"error": "Repair needed.", "content": "Evidence. " * 9000}),
+        ("get_document", {"success": False, "content": "Evidence. " * 9000}),
+        ("get_document", {"valid": False, "content": "Evidence. " * 9000}),
         (
             "get_document",
-            {"_validation": {"warnings": ["Check source"]}, "content": "Evidence. " * 5000},
+            {"_validation": {"warnings": ["Check source"]}, "content": "Evidence. " * 9000},
         ),
     ],
 )
@@ -251,7 +272,7 @@ def test_bad_compaction_cannot_send_partial_or_overflowing_context(response, cap
 def test_compaction_failure_keeps_usable_original_when_it_still_fits():
     original = payload(
         [
-            {"role": "user", "content": "Older context. " * 770},
+            {"role": "user", "content": "Older context. " * 3100},
             {"role": "user", "content": "Continue."},
         ]
     )
@@ -266,7 +287,7 @@ def test_background_evidence_is_preserved_for_caller_owned_splitting(monkeypatch
     post = MagicMock()
     monkeypatch.setattr(llm_helpers.requests, "post", post)
     with pytest.raises(llm_policy.LLMRequestRejected):
-        llm_helpers.call_llm_json("Original source. " * 2000, sensitive_payload=True)
+        llm_helpers.call_llm_json("Original source. " * 8000, sensitive_payload=True)
     post.assert_not_called()
 
 
@@ -349,3 +370,92 @@ async def test_async_stream_compacts_without_blocking_the_event_loop(monkeypatch
             task.cancel()
     assert len(sent) == 1
     assert context.estimate_input(sent[0]) < context.request_budget("fast-test").input_limit
+
+
+def test_initial_chat_with_large_instructions_uses_tokens_without_rewriting_them(monkeypatch):
+    monkeypatch.setenv("LLM_CONTEXT_WINDOW_TOKENS", "65536")
+    instructions = "Use tools to inspect sources and preserve the user's decisions. " * 1100
+    messages = [
+        {"role": "system", "content": instructions},
+        {"role": "user", "content": "Find my recent notes."},
+    ]
+    post = MagicMock(return_value={"choices": [{"message": {"content": "Ready."}}]})
+    monkeypatch.setattr(llm_helpers, "_post_chat_completion", post)
+    result = llm_helpers.call_llm_chat(messages, model="smart-test")
+    post.assert_called_once()
+    sent = post.call_args.args[0]
+    measurement = context.input_measurement(sent)
+    assert measurement["wire_bytes"] > 60000
+    assert measurement["estimated_tokens"] < 30000
+    assert measurement["estimator"] == "cl100k_base_with_20_percent_headroom"
+    assert sent["messages"] == messages
+    assert result["choices"][0]["message"]["content"] == "Ready."
+
+
+def test_large_tool_descriptions_shrink_without_changing_parameter_contracts():
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "inspect_records",
+            "description": "Read records with care. " * 5000,
+            "parameters": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind"],
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["event", "document"],
+                        "description": "Choose a source kind. " * 1000,
+                    }
+                },
+            },
+        },
+    }
+    original = payload(
+        [
+            {"role": "system", "content": "Preserve these instructions."},
+            {"role": "user", "content": "Inspect my records."},
+        ],
+        tools=[tool],
+    )
+    snapshot = deepcopy(original)
+    summarize = MagicMock()
+    assert context.estimate_input(original) > context.request_budget("smart-test").input_limit
+    fitted = context.prepare_request(
+        original, summarize=summarize, policy=context.CompactionPolicy()
+    )
+    assert fitted["messages"] == original["messages"]
+    function = fitted["tools"][0]["function"]
+    assert function["name"] == tool["function"]["name"]
+    assert function["parameters"]["required"] == ["kind"]
+    assert function["parameters"]["additionalProperties"] is False
+    assert function["parameters"]["properties"]["kind"]["enum"] == ["event", "document"]
+    assert original == snapshot
+    summarize.assert_not_called()
+    assert context.estimate_input(fitted) < context.request_budget("smart-test").input_limit
+
+
+def test_missing_tokenizer_has_an_explicit_safe_fallback(monkeypatch):
+    monkeypatch.setattr(context, "_tokenizer", lambda: None)
+    request = payload([{"role": "user", "content": "😀" * 10000}])
+    assert context.input_measurement(request)["estimator"] == "utf8_upper_bound"
+    with pytest.raises(llm_policy.LLMRequestRejected):
+        context.prepare_request(request, summarize=MagicMock())
+
+
+def test_tool_compaction_preserves_literal_description_fields_in_schema_values():
+    literal = {"description": "A literal value that must remain exact. " * 40}
+    schema = {
+        "const": literal,
+        "default": literal,
+        "enum": [literal],
+        "examples": [literal],
+        "description": "Actual schema annotation. " * 100,
+    }
+    compacted = context._compact_tool_descriptions(
+        [{"type": "function", "function": {"name": "inspect_record", "parameters": schema}}]
+    )[0]["function"]["parameters"]
+    for key in ("const", "default", "enum", "examples"):
+        assert compacted[key] == schema[key]
+    assert len(compacted["description"]) == 240

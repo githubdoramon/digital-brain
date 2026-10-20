@@ -37,7 +37,10 @@ callback parses only explicitly stated deterministic aliases.
 `intelligence_model.analyze` and controller `_save_knowledge` as scheduled analysis.
 Per-part receipts, leases, checked source revisions, transactional effects and
 bounded retries survive restarts. Neighbor retrieval is bounded. All model calls
-use `llm_helpers` and sensitive payload handling; logs contain counts/static codes.
+use `llm_helpers`. Detailed local diagnostic logs now include analysis/source IDs,
+source text, model results, validation details and targeted repair feedback. They
+are enabled by default at the user's request, bounded, credential-redacted and
+excluded from telemetry. See [LLM_CONTEXT.md](LLM_CONTEXT.md).
 
 Migration `0081_learning_reliability.sql` requeues previously failed learning and
 paused intelligence parts once, without resetting successful receipts or ambiguous
@@ -64,9 +67,9 @@ policy; conversational working summaries are never extraction evidence.
 `KNOWLEDGE_CONTEXT_WINDOW_TOKENS` defaults to a combined 65,536-token window.
 Generated output and reasoning reserve up to 12,000 tokens, with another 4,096-token
 margin (`KNOWLEDGE_CONTEXT_MARGIN_TOKENS`), leaving at most 49,440 estimated input
-tokens. A conservative UTF-8 wire-byte estimate includes both messages, instructions,
-JSON escaping and the response schema. This avoids a character-only assumption and
-requires no network tokenizer dependency. Lower input/context limits reported by
+tokens. A local BPE estimate with 20% headroom includes both messages, instructions,
+JSON escaping and the response schema. Vocabulary data is cached at image build
+time; no runtime tokenizer network request is needed. Lower input/context limits reported by
 the provider override the defaults per model/provider for one hour; a smaller
 budget that successfully repairs a rejection is also reused. Optional lower provider
 output caps are respected when reserving the window. Logs contain phase, counts,
@@ -87,11 +90,26 @@ Raw source payload internals are not duplicated into model metadata. Sources exp
 of exact text spans, without duplicating the source text. Models can select a span
 index and the controller copies its original text into the saved evidence, avoiding
 quote transcription errors. Exact quote validation runs before reconciliation,
-and rejected evidence gets one repair attempt with static feedback;
+and rejected evidence gets one repair attempt with detailed field/citation feedback;
 the controller never accepts paraphrased or fabricated supporting quotes.
 
-The shared transport logs allow-listed rejection categories and bounded numeric
-output limits without logging private provider error bodies. JSON calls can adapt
+An exact excerpt plus its correct span index is accepted together. Reconciliation
+retains resolved subject references and restores uniquely bound new-entity
+declarations from extraction when the model omits them; changed or conflicting
+bindings still fail validation. Unreferenced entity declarations are neither saved
+nor allowed to invalidate an otherwise supported fact. Failed repairs carry the
+actual rejected ref/citation, allowed values and relevant source span into one
+bounded repair attempt. Persisted error codes remain static.
+
+Migration `0083_learning_validation_recovery.sql` retries only retained
+`invalid_subject`/`invalid_evidence` failures. It preserves successful receipts,
+active leases, ambiguous-identity deferrals and manual corrections. Chat learning
+logs committed effects after the transaction, including protected or stale-source
+skips; recovered jobs clear their previous error and lease token.
+
+The shared transport keeps allow-listed rejection categories and bounded numeric
+output limits for persistent status and telemetry. Detailed local diagnostics also
+show model content, provider rejection bodies and controller values. JSON calls can adapt
 once per reported output limit or unsupported schema format, and remember those
 constraints for one hour per provider/model. Unknown HTTP 400s are not retried
 unchanged. Strict schema normalization preserves local controller validation when
@@ -206,10 +224,52 @@ applicability/provenance remains unknown. Old overwritten/deleted user-fact vers
 were not retained and cannot be reconstructed reliably; backfill can rediscover a
 previously deleted statement from retained history.
 
-`GET /mobile/knowledge/progress` reports durable part states. Failed parts retry up
-to three times; `POST /mobile/knowledge/retry` resets that owner's failed-part budget.
-Deferred identity work is distinct from failures. Summary failures retry separately.
-The existing authenticated frontend `/api/mobile/*` proxy carries every client call.
+### Progress and activity
+
+`GET /mobile/knowledge/progress` retains its flat durable job-state counts and adds
+`details`, produced by the shared read-only `learning_progress.snapshot`. The existing
+authenticated frontend `/api/mobile/*` proxy carries every client call. The app's
+Knowledge screen refreshes this snapshot every 15 seconds while focused.
+
+The snapshot separates ongoing knowledge learning, the all-source historical revisit,
+historical external intelligence, scheduled external intelligence, subject summaries,
+and fact indexing. Each extraction path has its own source-part coverage; these are
+independent passes and must not be added into a unique-source total. Historical
+coverage includes explicitly historical work and sources whose original or ingestion
+date precedes activation, even when their durable queue flag prioritizes them as
+ongoing. Active items also expose that queue flag; reporting does not change execution
+order or action permissions. Source and ingestion dates are reported separately. Coverage is of retained
+source snapshots, not a claim that a messaging provider supplied its complete archive.
+
+Learning coverage includes eligible parts not yet queued by the 500-part seeder.
+Counts distinguish ready, actively leased, delayed, automatic retry, paused after
+exhausted attempts, and waiting for clarification. Expired running leases count as
+ready for recovery rather than active. Intelligence reports active runs separately
+from source parts, with latest-run cutoff/status, elapsed time and current leases.
+Its coverage includes eligible late imports beyond a previous run's cutoff, so a
+previously succeeded run cannot hide new backlog. Summary debounce waits are separate
+from errors. Indexing reports facts still waiting for embeddings; lexical retrieval
+is already available.
+
+`history_caught_up` requires initialized source seeding and no remaining work or active
+run in either historical path. Paused, retrying or ambiguous parts prevent that state.
+This concerns extraction coverage; summaries and indexing have separate progress.
+Migration `0084_learning_progress.sql` adds activity/success timestamps without
+inventing completion times for old receipts or requeuing successful work.
+
+A third, independent `knowledge-progress` observer thread logs `[learning] progress`
+immediately on startup and every 60 seconds, even while extraction/summarization is
+blocked in a long model call. One header records snapshot time, process-local worker
+liveness, cutoffs and historical catch-up state; individual lane lines record counts,
+active refs, elapsed time, oldest waiting dates, next retry and last successful commit.
+Snapshots use one read-only repeatable-read database transaction. They contain no
+source bodies or model output and are not exported as telemetry. Learning, summary
+and intelligence start logs identify work before the model request begins. The
+observer uses the same shutdown signal as the knowledge workers.
+
+Failed parts retry up to three times; `POST /mobile/knowledge/retry` resets that owner's
+failed-part budget and requeues retained intelligence/summary failures. Deferred
+identity work waits for new context; retrying does not invent an identity.
 
 Knowledge has one API: `/mobile/knowledge` (listing, correction, deletion and subject
 summaries). Explicit instructions use `GET /mobile/rules` and

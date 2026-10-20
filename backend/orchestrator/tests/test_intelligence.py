@@ -74,6 +74,8 @@ def database(monkeypatch, request):
                 "0080_learned_contact_changes.sql",
                 "0081_learning_reliability.sql",
                 "0082_intelligence_context_recovery.sql",
+                "0083_learning_validation_recovery.sql",
+                "0084_learning_progress.sql",
             ):
                 if (
                     name == "0082_intelligence_context_recovery.sql"
@@ -100,8 +102,9 @@ def database(monkeypatch, request):
                 conn.execute((root / name).read_text())
         import knowledge
         import knowledge_jobs
+        import learning_progress
 
-        for module in (store, jobs, archive, knowledge, knowledge_jobs):
+        for module in (store, jobs, archive, knowledge, knowledge_jobs, learning_progress):
             monkeypatch.setattr(module, "get_conn", connect)
         monkeypatch.setattr(knowledge, "vector_for", lambda text: None)
         jobs._STOP.clear()
@@ -534,6 +537,38 @@ def test_model_cites_controller_supplied_spans_without_transcribing_quotes(datab
     monkeypatch.setattr(model, "call_llm_json", ask)
     ctx, fs = model.analyze(OWNER, batch)
     assert fs[0]["evidence"][0]["quote"] == batch[0]["text"]
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert len(store.knowledge_for(OWNER)) == 1
+
+
+def test_subject_repair_receives_rejected_ref_and_commits_supported_result(database, monkeypatch):
+    import json
+
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    valid = finding(batch[0])
+    invalid = {**valid, "subject_ref": "contact:missing"}
+    responses = iter(
+        [
+            {"findings": [invalid]},
+            {"findings": [invalid]},
+            {"findings": [valid]},
+            {"findings": [valid]},
+        ]
+    )
+    calls = []
+
+    def ask(prompt, **kwargs):
+        calls.append(json.loads(prompt))
+        return next(responses)
+
+    monkeypatch.setattr(model, "call_llm_json", ask)
+    ctx, fs = model.analyze(OWNER, batch, knowledge_only=True)
+    feedback = calls[2]["validation_feedback"]
+    assert feedback["code"] == "invalid_subject"
+    assert feedback["details"]["rejected_refs"] == ["contact:missing"]
+    assert "self" in feedback["details"]["allowed_refs"]
     store.apply_batch(OWNER, run(database), batch, ctx, fs)
     assert len(store.knowledge_for(OWNER)) == 1
 

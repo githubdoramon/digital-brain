@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 import knowledge
 import knowledge_jobs
+import learning_progress
 from auth import get_current_user
 
 
@@ -51,7 +52,8 @@ def create_knowledge_router():
 
     @router.get("/progress")
     def progress(user=Depends(get_current_user)):
-        return knowledge_jobs.progress(user["email"])
+        report = learning_progress.snapshot(user["email"])
+        return {**report.pop("counts"), "details": report}
 
     @router.post("/retry")
     def retry(user=Depends(get_current_user)):
