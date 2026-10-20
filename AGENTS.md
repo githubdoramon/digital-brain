@@ -52,6 +52,13 @@ summaries and indexing. The independent knowledge observer logs progress every m
 even during long model calls; the Knowledge screen uses the same authenticated API.
 Never infer completed history from `run_drained` alone. See
 `backend/orchestrator/docs/architecture/KNOWLEDGE.md`.
+Migration 0085 adds durable per-owner fairness: eligible history gets a turn after
+at most two current turns in both extractors; intelligence yields after each model
+batch. Unchanged contact-note snapshots are excluded from work and progress while
+their evidence remains intact; actual changes and reversions remain distinct.
+`knowledge_references.py` supplies exact typed contact refs without changing opaque
+contact IDs or stored subject links. Models copy the explicit refs; controller
+normalization never guesses unknown contacts or bypasses ambiguity checks.
 
 ## Architecture Documentation
 

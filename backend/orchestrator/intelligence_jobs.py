@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import intelligence
 import intelligence_model
+import learning_fairness
 from db import get_conn
 from job_leases import lease_heartbeat
 from llm_policy import LLMRequestRejected, failure_code
@@ -88,13 +89,13 @@ def claim_run(owners):
         # Lock owner state before choosing a run: backlog and scheduled work for
         # the same owner cannot infer/apply concurrently across server instances.
         cur.execute(
-            """SELECT s.user_email FROM intelligence_state s WHERE s.user_email = ANY(%s)
+            """SELECT s.user_email,s.current_streak FROM intelligence_state s WHERE s.user_email = ANY(%s)
             AND EXISTS(SELECT 1 FROM intelligence_runs r WHERE r.user_email = s.user_email
                 AND r.status <> 'succeeded' AND r.next_attempt_at <= NOW()
                 AND (r.lease_until IS NULL OR r.lease_until <= NOW()))
             AND NOT EXISTS(SELECT 1 FROM intelligence_runs active WHERE active.user_email = s.user_email
                 AND active.lease_until > NOW())
-            ORDER BY s.user_email FOR UPDATE SKIP LOCKED LIMIT 1""",
+            ORDER BY s.last_claimed_at NULLS FIRST,s.user_email FOR UPDATE SKIP LOCKED LIMIT 1""",
             (list(owners),),
         )
         owner = cur.fetchone()
@@ -103,8 +104,8 @@ def claim_run(owners):
         cur.execute(
             """SELECT * FROM intelligence_runs WHERE user_email = %s AND status <> 'succeeded'
             AND next_attempt_at <= NOW() AND (lease_until IS NULL OR lease_until <= NOW())
-            ORDER BY knowledge_only, cutoff, run_id FOR UPDATE LIMIT 1""",
-            (owner["user_email"],),
+            ORDER BY (knowledge_only=%s) DESC,cutoff,run_id FOR UPDATE LIMIT 1""",
+            (owner["user_email"], learning_fairness.history_first(owner["current_streak"])),
         )
         run = dict(cur.fetchone())
         token = uuid4().hex
@@ -112,6 +113,9 @@ def claim_run(owners):
             """UPDATE intelligence_runs SET status='running', lease_token=%s,
             lease_until=NOW() + INTERVAL '15 minutes', error_code=NULL,started_at=NOW() WHERE run_id=%s""",
             (token, run["run_id"]),
+        )
+        learning_fairness.record_claim(
+            cur, "intelligence", run["user_email"], run["knowledge_only"]
         )
         conn.commit()
         return {**run, "lease_token": token}
@@ -206,7 +210,7 @@ def _process_run(run):
         run["run_id"],
         run["cutoff"],
     )
-    for _ in range(4):
+    for _ in range(learning_fairness.INTELLIGENCE_BATCHES_PER_TURN):
         if _STOP.is_set():
             finish_run(run, more=True)
             return True
@@ -292,4 +296,6 @@ def get_worker_status():
         "time_local": [f"{hour:02d}:00" for hour in HOURS],
         "timezone_name": TIMEZONE,
         "poll_seconds": POLL_SECONDS,
+        "max_current_turns": learning_fairness.MAX_CURRENT_TURNS,
+        "batches_per_turn": learning_fairness.INTELLIGENCE_BATCHES_PER_TURN,
     }

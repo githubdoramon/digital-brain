@@ -16,6 +16,17 @@ New non-person entity labels must appear literally in cited evidence. People
 require supplied confirmed contact IDs or provider identities; names alone do not
 merge identities. Distinguish a product model from an individually owned item.
 
+`knowledge_references.py` owns contact subject references. A contact ID is opaque:
+an ID of `contact:alex` has the existing typed subject reference
+`contact:contact:alex`. Stored references and links are preserved. Both model phases
+receive explicit `subject_ref` values on contacts/people and `from_ref`/`to_ref` on
+relationships; contact-note metadata also supplies `contact_ref`. Models copy these
+values verbatim. At controller boundaries an exact supplied opaque contact ID may
+resolve to its typed reference when it cannot collide with an already valid canonical
+reference. Unknown IDs and names are never guessed. The same normalization applies
+before ambiguity checks, knowledge validation and structured contact graph validation.
+Task assignees continue to store opaque IDs rather than typed subject references.
+
 Facts preserve category, direct/inferred origin and inference explanation,
 importance, evidence, applicability, status, revisions and manual corrections.
 Inferred patterns may coexist with supporting experiences. A single disliked
@@ -33,7 +44,7 @@ the exchange transaction. Assistant text is never captured as evidence. Chat
 routing no longer decides whether a personal-fact-only extractor runs. The chat
 callback parses only explicitly stated deterministic aliases.
 
-`knowledge_jobs` processes live chat before historical work. It uses the same
+`knowledge_jobs` prioritizes new chat with bounded historical turns. It uses the same
 `intelligence_model.analyze` and controller `_save_knowledge` as scheduled analysis.
 Per-part receipts, leases, checked source revisions, transactional effects and
 bounded retries survive restarts. Neighbor retrieval is bounded. All model calls
@@ -209,9 +220,33 @@ On first worker activation for an authorized owner, a versioned seeding transact
 queues all retained eligible Brain chats, external messages, events, documents,
 notes and imported legacy facts for a knowledge-only revisit. Existing source
 exclusions/deletions are checked again before committing. Source/part uniqueness and bounded 500-part enqueue batches
-make seeding repeatable without a commit-order-sensitive ID cursor; live chat jobs precede historical parts. No historical
+make seeding repeatable without a commit-order-sensitive ID cursor; claims follow
+the fair turn policy below. No historical
 tasks, actions or automatic task completion are produced by this pass. Original
 scheduled processing receipts are not reset.
+
+Migration `0085_learning_fairness_note_dedup.sql` excludes consecutive contact-note
+snapshots that differ only in capture time. `duplicate_of_source_id` points to the
+first snapshot in each unchanged episode. Original snapshots, timestamps, fingerprints,
+evidence links, manual corrections, completed receipts and active leases remain intact.
+Duplicate work is omitted from seeding, claiming, retries and coverage; it is not
+reported as newly processed. An actual A → B → A content change retains three
+episodes. Title/identity metadata changes also retain new observations. Future no-op
+contact saves compare the semantic note payload before creating a source, including
+legacy seeds with an unknown original date. Existing duplicate evidence remains valid.
+Only retained reference-format failures are requeued, not ambiguity deferrals or
+successful receipts.
+
+Both extractors use `learning_fairness.py`: while ongoing and historical work remain
+eligible, history receives a turn after at most two current-work claims. The counters
+and last claim/history timestamps persist per owner in the database and update under
+the same row lock as job claiming, so restarts and concurrent servers cannot reset
+the policy. When only one lane is ready it can use all turns; retry delays and paused
+parts remain respected. Knowledge turns claim one source part; intelligence turns
+run at most one model batch before yielding their run lease. Owners rotate by last
+claim time. This guarantees bounded turns, rather than equal wall-clock duration:
+an in-flight model request finishes before another lane can run. Historical action
+restrictions, evidence validation, lease tokens and transactional receipts still apply.
 
 Migration 0080 requeues previously completed shared-learning parts once so retained
 evidence also receives contact structuring. Here knowledge-only includes contact
@@ -262,6 +297,8 @@ immediately on startup and every 60 seconds, even while extraction/summarization
 blocked in a long model call. One header records snapshot time, process-local worker
 liveness, cutoffs and historical catch-up state; individual lane lines record counts,
 active refs, elapsed time, oldest waiting dates, next retry and last successful commit.
+The header also reports durable fairness counters and `last_history_claimed_at` for
+each extractor, plus `ignored_note_versions` for retained redundant snapshots.
 Snapshots use one read-only repeatable-read database transaction. They contain no
 source bodies or model output and are not exported as telemetry. Learning, summary
 and intelligence start logs identify work before the model request begins. The

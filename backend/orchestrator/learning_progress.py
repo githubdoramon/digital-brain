@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import intelligence
+import learning_fairness
 from db import get_conn
 from observability.logger import get_runtime_logger
 
@@ -103,7 +104,7 @@ def _learning(cur, owner):
             LEFT JOIN knowledge_learning j ON j.user_email=%s AND j.source_id=s.source_id AND j.part=p.part
             LEFT JOIN knowledge_backfills b ON b.user_email=%s
             LEFT JOIN intelligence_state st ON st.user_email=COALESCE(b.user_email,j.user_email)
-            WHERE (s.owner_email IS NULL OR s.owner_email=%s)
+            WHERE (s.owner_email IS NULL OR s.owner_email=%s) AND s.duplicate_of_source_id IS NULL
                 AND (j.source_id IS NOT NULL OR (b.version>=1 AND
                     (s.observed_at<=b.seeded_at OR s.kind IN ('chat','contact_note'))))
         ) SELECT historical,status,phase,error_code,COUNT(*) AS count,
@@ -129,7 +130,7 @@ def _learning(cur, owner):
             EXTRACT(EPOCH FROM (NOW()-j.started_at))::bigint AS elapsed_s
         FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
         LEFT JOIN intelligence_state st ON st.user_email=j.user_email
-        WHERE j.user_email=%s AND j.status='running' AND j.lease_until>NOW()
+        WHERE j.user_email=%s AND j.status='running' AND j.lease_until>NOW() AND s.duplicate_of_source_id IS NULL
         ORDER BY j.started_at LIMIT 10""",
         (owner,),
     )
@@ -232,6 +233,13 @@ def snapshot(owner):
             (owner,),
         )
         indexing = {"unit": "facts", **dict(cur.fetchone())}
+        fairness = learning_fairness.status(cur, owner)
+        cur.execute(
+            """SELECT COUNT(*) AS ignored_note_versions FROM intelligence_sources
+            WHERE duplicate_of_source_id IS NOT NULL AND (owner_email IS NULL OR owner_email=%s)""",
+            (owner,),
+        )
+        deduplication = dict(cur.fetchone())
     for lane in (*learning.values(), *analysis.values(), summaries):
         lane["state"] = _state(lane, initialized)
     knowledge_workers = knowledge_jobs.get_worker_status()
@@ -259,6 +267,8 @@ def snapshot(owner):
         "intelligence": analysis,
         "summaries": summaries,
         "indexing": indexing,
+        "fairness": fairness,
+        "deduplication": deduplication,
     }
 
 
@@ -274,6 +284,8 @@ def log_snapshot(owner):
             "learning_cutoff",
             "activation_at",
             "schedule",
+            "fairness",
+            "deduplication",
         )
     }
     logger.info("[learning] progress owner=%s %s", owner, json.dumps(header, default=str))

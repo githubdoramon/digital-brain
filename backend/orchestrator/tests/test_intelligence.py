@@ -76,7 +76,13 @@ def database(monkeypatch, request):
                 "0082_intelligence_context_recovery.sql",
                 "0083_learning_validation_recovery.sql",
                 "0084_learning_progress.sql",
+                "0085_learning_fairness_note_dedup.sql",
             ):
+                if (
+                    name == "0085_learning_fairness_note_dedup.sql"
+                    and getattr(request, "param", None) == "pre_fairness"
+                ):
+                    continue
                 if (
                     name == "0082_intelligence_context_recovery.sql"
                     and getattr(request, "param", None) == "pre_context"
@@ -636,6 +642,10 @@ def test_rejected_batches_defer_without_receipts_then_pause_and_allow_other_sour
     ]
     monkeypatch.setattr(model, "analyze", lambda *a, **k: ({}, []))
     jobs._process_run(claimed)
+    # A committed batch yields; a later turn performs the final drain/review.
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET next_attempt_at=NOW()")
+    jobs.process_once({OWNER})
     with database() as conn:
         assert conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 1
         assert (
@@ -667,6 +677,9 @@ def test_worker_continues_past_invalid_batch_without_saving_it(database, monkeyp
     assert jobs.process_once({OWNER})
     assert len(calls) == 1
     with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET next_attempt_at=NOW()")
+    assert jobs.process_once({OWNER})
+    with database() as conn:
         assert not conn.execute("SELECT 1 FROM intelligence_processed").fetchone()
         assert (
             conn.execute("SELECT attempts FROM intelligence_failures").fetchone()["attempts"] == 1
@@ -695,6 +708,11 @@ def test_http_rejected_batch_does_not_block_later_sources(database, monkeypatch)
 
     monkeypatch.setattr(model, "analyze", analyze)
     assert jobs.process_once({OWNER})
+    # Rejected and healthy batches get separate turns, leaving room for history.
+    for _ in range(2):
+        with database() as conn:
+            conn.execute("UPDATE intelligence_runs SET next_attempt_at=NOW()")
+        assert jobs.process_once({OWNER})
     with database() as conn:
         assert conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 1
         assert (

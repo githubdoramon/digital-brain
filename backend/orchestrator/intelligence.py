@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from psycopg.types.json import Jsonb
 
 from db import get_conn
+from knowledge_references import contact_ref, normalize_finding
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -260,7 +261,7 @@ def context_for(owner, batch, extra_text=""):
             (
                 owner,
                 ["identity:" + i for i in identities]
-                + ["contact:" + c for c in contact_ids]
+                + [contact_ref(c) for c in contact_ids]
                 + ["self"],
                 query,
             ),
@@ -477,13 +478,14 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
         raise ValueError("invalid_analysis")
     subjects = {"self", "general"}
     subjects.update("identity:" + p["identity_id"] for p in context["people"])
-    subjects.update("contact:" + p["contact_id"] for p in context["contacts"])
+    subjects.update(contact_ref(p["contact_id"]) for p in context["contacts"])
     known_tasks = {t["todo_id"]: t for t in context["tasks"]}
     known_knowledge = {k["knowledge_id"]: k for k in context["knowledge"]}
     projects = {p["project_id"] for p in context["projects"]}
     refs = {r["source_id"]: r for r in batch}
     validated = []
     for f in findings:
+        f = normalize_finding(f, context)
         if f.get("kind") not in {
             "knowledge",
             "task",
@@ -1070,7 +1072,7 @@ def resolve_proposal(owner, proposal_id, *, accept, contact_resolutions=None):
 def knowledge_for(owner, *, contact_id=None, query=None, limit=40):
     import knowledge
 
-    subject = "contact:" + contact_id if contact_id else None
+    subject = contact_ref(contact_id) if contact_id else None
     result = knowledge.list_items(owner, query=query, subject=subject, limit=limit)
     if contact_id:
         with get_conn() as conn, conn.cursor() as cur:

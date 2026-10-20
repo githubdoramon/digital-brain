@@ -243,7 +243,7 @@ SCHEDULED_INTELLIGENCE = ScheduledJobSpec(
     time_local=time(hour=5),
     times_local=("05:00", "19:00"),
     timezone_name="Europe/Lisbon",
-    description="Reviews new evidence, maintains knowledge, proposes work and completes evidenced tasks.",
+    description="Reviews new evidence and retained history with bounded fair turns, maintains knowledge, proposes work and completes evidenced tasks.",
     trigger_source="backend scheduler",
 )
 
@@ -255,7 +255,7 @@ KNOWLEDGE_LEARNING = ScheduledJobSpec(
     time_utc=None,
     poll_seconds=10,
     retry_seconds=300,
-    description="Learns from Brain chats, revisits retained history, refreshes entity summaries, and reports progress every minute independently of model calls.",
+    description="Learns from Brain chats with a historical turn after at most two ongoing turns, refreshes summaries, and reports progress every minute independently of model calls.",
     trigger_source="persisted evidence and background worker",
 )
 

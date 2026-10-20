@@ -51,10 +51,12 @@ derived knowledge is retained when a group is subsequently excluded.
   the lease. Inference failure persists only `analysis_failed` and retries after
   five minutes.
 - Sources are split into 5,000-character parts with 400 characters of overlap;
-  twelve parts form a model batch. Four batches are handled per worker turn, then
-  the persisted run continues. Scheduled runs select fresh evidence only, so a
-  large backlog cannot hold them open. Late historical imports extend the separate
-  knowledge-only queue; backlog work yields to queued scheduled runs.
+  twelve parts form a model batch. One batch is handled per worker turn, then
+  the persisted run yields its lease. Shared durable fairness counters give eligible
+  historical work a turn after at most two scheduled turns, even with continuous
+  new arrivals. Scheduled runs select fresh evidence only. Late historical imports
+  extend the separate knowledge-only queue. A sole eligible queue uses every turn;
+  backoff and active-lease protections still apply. Model calls finish before yielding.
 - A source/part receipt commits in the same transaction as its findings. Failed
   inference or a lost lease advances no receipts. Receipts, rather than a sequence
   high-water mark, also cover transactions that commit out of order.

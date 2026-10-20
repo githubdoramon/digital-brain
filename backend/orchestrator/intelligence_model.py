@@ -16,6 +16,7 @@ from intelligence_context import compact_context as _bounded_context
 from intelligence_context import fit_payload as _fit_payload
 from intelligence_context import input_estimate, request_limits
 from intelligence_context import json_for as _json
+from knowledge_references import contact_ref, normalize_finding
 from learning_validation import LearningValidationError
 from llm_config import get_smart_model
 from llm_helpers import LLMEmptyContentError, build_json_schema_response_format, call_llm_json
@@ -152,6 +153,10 @@ valid_from/valid_until; leave them null when unknown. Do not invent precise date
 Subject references: self for the archive owner, identity:<identity_id> for a
 message author (retain identity even if linked), contact:<contact_id> only for a
 provided confirmed contact, general for topics. Never infer a contact match by name.
+Copy contacts/people subject_ref values exactly, including in related_subjects
+and contact_changes person/relationship refs. IDs are opaque and may already
+contain contact:; do not construct, shorten or remove prefixes from subject_ref.
+For assignee_kind=contact, assignee_ref is the supplied opaque contact_id instead.
 Use canonical lower-case predicate keys such as employment or dietary_preference;
 predicate keys must use only ASCII a-z, 0-9, underscore, period or hyphen, up to 100 characters.
 for independent facts about a general topic, include the topic in the predicate.
@@ -558,7 +563,12 @@ def _reconcile(owner, batch, payload, candidates, context):
         ("contacts", "contact_id", "contact:"),
         ("entities", "entity_ref", ""),
     ):
-        pinned = [row for row in context.get(section, []) if prefix + row[field] in anchors]
+        pinned = [
+            row
+            for row in context.get(section, [])
+            if (contact_ref(row[field]) if section == "contacts" else prefix + row[field])
+            in anchors
+        ]
         _merge_context(related, {section: pinned})
     _merge_context(context, related)
     sources = _reconciliation_sources(payload["sources"], candidates)
@@ -688,6 +698,9 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         }
         for r in eligible
     ]
+    for source in sources:
+        if ident := source["metadata"].get("contact_id"):
+            source["metadata"]["contact_ref"] = contact_ref(ident)
     payload = {
         "sources": sources,
         "context": context,
@@ -706,6 +719,9 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         payload,
         phase="Extract supported candidates from primary_refs. Every finding must cite a primary source; other sources only clarify it. Existing facts and work will be retrieved in reconciliation. Empty findings is valid.",
     )
+    candidates["findings"] = [
+        normalize_finding(finding, context) for finding in candidates["findings"]
+    ]
     # Repair fabricated/paraphrased quotes before spending a reconciliation call.
     try:
         for finding in expand_citations(candidates, eligible)["findings"]:

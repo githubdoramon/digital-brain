@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from birthdays import birthday_label, birthday_parts, birthday_value, parse_birthday
+from knowledge_references import contact_ref, normalize_finding
 
 
 class PersonChange(BaseModel):
@@ -48,10 +49,11 @@ def _name(value):
 def validate(finding, context, evidence):
     import knowledge
 
+    finding = normalize_finding(finding, context)
     graph = ContactChanges.model_validate(finding.get("contact_changes")).model_dump()
     if finding.get("inferred") and not finding.get("inference_reason"):
         raise ValueError("invalid_contact_change")
-    known = {"contact:" + c["contact_id"]: c for c in context.get("contacts", [])}
+    known = {contact_ref(c["contact_id"]): c for c in context.get("contacts", [])}
     refs = {p["ref"] for p in graph["people"]}
     if len(refs) != len(graph["people"]):
         raise ValueError("invalid_contact_change")
@@ -362,7 +364,7 @@ def _apply(cur, owner, finding, plan, *, wake_deferred=True):
                 {
                     **finding,
                     "kind": "knowledge",
-                    "subject_ref": "contact:" + ident,
+                    "subject_ref": contact_ref(ident),
                     "related_subjects": [],
                     "entities": [],
                     "existing_id": None,
@@ -402,8 +404,8 @@ def _apply(cur, owner, finding, plan, *, wake_deferred=True):
             {
                 **finding,
                 "kind": "knowledge",
-                "subject_ref": "contact:" + source,
-                "related_subjects": ["contact:" + target],
+                "subject_ref": contact_ref(source),
+                "related_subjects": [contact_ref(target)],
                 "entities": [],
                 "existing_id": None,
                 "predicate": "relationship." + intelligence.key(*sorted([source, target]))[:24],

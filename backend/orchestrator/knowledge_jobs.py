@@ -11,6 +11,7 @@ from uuid import uuid4
 import intelligence
 import intelligence_model
 import knowledge
+import learning_fairness
 from db import get_conn
 from job_leases import lease_heartbeat
 from llm_policy import failure_code
@@ -61,6 +62,7 @@ def initialize_owner(owner):
             FROM intelligence_sources s CROSS JOIN LATERAL generate_series(0,GREATEST(0,
                 (length(COALESCE(s.payload->>'text',''))-1)/%s)) p(part)
             WHERE (s.owner_email IS NULL OR s.owner_email=%s)
+                AND s.duplicate_of_source_id IS NULL
                 AND (s.observed_at <= (SELECT seeded_at FROM knowledge_backfills WHERE user_email=%s)
                     OR s.kind IN ('chat','contact_note'))
                 AND NOT EXISTS(SELECT 1 FROM knowledge_learning j WHERE j.user_email=%s AND j.source_id=s.source_id AND j.part=p.part)
@@ -73,8 +75,10 @@ def initialize_owner(owner):
         cur.execute(
             """UPDATE knowledge_learning j SET status='pending',attempts=0,next_attempt_at=NOW()
             FROM intelligence_sources s WHERE j.user_email=%s AND j.source_id=s.source_id AND j.status='deferred'
+            AND s.duplicate_of_source_id IS NULL
             AND (EXISTS(SELECT 1 FROM intelligence_sources n WHERE n.source_id>s.source_id
                 AND (n.owner_email IS NULL OR n.owner_email=%s)
+                AND n.duplicate_of_source_id IS NULL
                 AND n.observed_at>j.next_attempt_at
                 AND ((n.kind=s.kind AND n.entity_id=s.entity_id) OR (s.kind='chat' AND n.kind='chat' AND n.payload->>'thread_id'=s.payload->>'thread_id')
                     OR (s.kind='message' AND n.kind='message' AND n.payload->>'conversation_id'=s.payload->>'conversation_id')))
@@ -91,11 +95,28 @@ def claim(owners):
         return None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT * FROM knowledge_learning WHERE user_email=ANY(%s)
-            AND ((status IN ('pending','failed') AND attempts<3 AND next_attempt_at<=NOW())
-                OR (status='running' AND lease_until<NOW()))
-            ORDER BY historical,source_id,part FOR UPDATE SKIP LOCKED LIMIT 1""",
+            "INSERT INTO knowledge_backfills(user_email) SELECT unnest(%s::text[]) ON CONFLICT DO NOTHING",
             (list(owners),),
+        )
+        cur.execute(
+            """SELECT b.* FROM knowledge_backfills b WHERE b.user_email=ANY(%s)
+            AND EXISTS(SELECT 1 FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
+                WHERE j.user_email=b.user_email AND s.duplicate_of_source_id IS NULL
+                AND ((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
+                    OR (j.status='running' AND (j.lease_until IS NULL OR j.lease_until<NOW()))))
+            ORDER BY b.last_claimed_at NULLS FIRST,b.user_email FOR UPDATE OF b SKIP LOCKED LIMIT 1""",
+            (list(owners),),
+        )
+        schedule = cur.fetchone()
+        if not schedule:
+            return None
+        cur.execute(
+            """SELECT j.* FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
+            WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL
+            AND ((status IN ('pending','failed') AND attempts<3 AND next_attempt_at<=NOW())
+                OR (status='running' AND (lease_until IS NULL OR lease_until<NOW())))
+            ORDER BY (j.historical=%s) DESC,j.source_id,j.part FOR UPDATE OF j SKIP LOCKED LIMIT 1""",
+            (schedule["user_email"], learning_fairness.history_first(schedule["current_streak"])),
         )
         row = cur.fetchone()
         if not row:
@@ -108,6 +129,7 @@ def claim(owners):
             WHERE user_email=%s AND source_id=%s AND part=%s""",
             (token, row["user_email"], row["source_id"], row["part"]),
         )
+        learning_fairness.record_claim(cur, "knowledge", row["user_email"], row["historical"])
         conn.commit()
         return {**row, "lease_token": token}
 
@@ -448,7 +470,8 @@ def index_once(owners):
 def progress(owner):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT status,COUNT(*) AS count FROM knowledge_learning WHERE user_email=%s GROUP BY status",
+            """SELECT j.status,COUNT(*) AS count FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
+            WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL GROUP BY j.status""",
             (owner,),
         )
         return {r["status"]: r["count"] for r in cur.fetchall()}
@@ -458,9 +481,10 @@ def retry_failed(owner):
     historical = intelligence.retry_failures(owner)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """UPDATE knowledge_learning SET status='pending',attempts=0,error_code=NULL,
+            """UPDATE knowledge_learning j SET status='pending',attempts=0,error_code=NULL,
             lease_token=NULL,lease_until=NULL,next_attempt_at=NOW()
-            WHERE user_email=%s AND status='failed'""",
+            FROM intelligence_sources s WHERE j.source_id=s.source_id AND s.duplicate_of_source_id IS NULL
+                AND j.user_email=%s AND j.status='failed'""",
             (owner,),
         )
         queued = cur.rowcount
@@ -606,4 +630,5 @@ def get_worker_status():
         "summary_worker_alive": bool(_SUMMARY_THREAD and _SUMMARY_THREAD.is_alive()),
         "progress_worker_alive": bool(_PROGRESS_THREAD and _PROGRESS_THREAD.is_alive()),
         "poll_seconds": 10,
+        "max_current_turns": learning_fairness.MAX_CURRENT_TURNS,
     }

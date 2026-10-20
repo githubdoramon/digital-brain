@@ -6,6 +6,7 @@ import json
 import os
 import re
 
+from knowledge_references import contact_ref
 from llm_config import get_smart_model
 from llm_context import estimate_input, request_budget
 from llm_policy import LLMRequestRejected, model_constraints
@@ -146,6 +147,13 @@ def compact_context(context, *, extraction=False, query="", anchors=()):
         rows = []
         for row in context.get(section, []):
             item = {key: compact(row[key]) for key in fields if key in row}
+            if section == "contacts":
+                item["subject_ref"] = contact_ref(row["contact_id"])
+            elif section == "people":
+                item["subject_ref"] = "identity:" + row["identity_id"]
+            elif section == "contact_relationships":
+                item["from_ref"] = contact_ref(row["from_contact_id"])
+                item["to_ref"] = contact_ref(row["to_contact_id"])
             if section == "proposals" and isinstance(item.get("payload"), dict):
                 item["payload"] = {
                     key: compact(value)

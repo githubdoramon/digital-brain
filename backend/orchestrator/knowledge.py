@@ -8,6 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 
 from db import get_conn
+from knowledge_references import contact_ref, normalize_finding
 from learning_validation import reject
 
 KINDS = {
@@ -42,8 +43,9 @@ def validate_entities(finding, context, evidence):
     """New non-person entities require a literal source label; people require resolved IDs."""
     import intelligence
 
+    finding = normalize_finding(finding, context)
     known = {"self", "general"}
-    known.update("contact:" + c["contact_id"] for c in context.get("contacts", []))
+    known.update(contact_ref(c["contact_id"]) for c in context.get("contacts", []))
     known.update("identity:" + p["identity_id"] for p in context.get("people", []))
     known.update(e["entity_ref"] for e in context.get("entities", []))
     mapping = {}
@@ -87,9 +89,9 @@ def validate_entities(finding, context, evidence):
     canonical_subjects = [mapping.get(s, s) for s in subjects]
     entities.extend(e for e in context.get("entities", []) if e["entity_ref"] in canonical_subjects)
     entities.extend(
-        {"entity_ref": "contact:" + c["contact_id"], "kind": "person", "label": c["display_name"]}
+        {"entity_ref": contact_ref(c["contact_id"]), "kind": "person", "label": c["display_name"]}
         for c in context.get("contacts", [])
-        if "contact:" + c["contact_id"] in canonical_subjects
+        if contact_ref(c["contact_id"]) in canonical_subjects
     )
     return {
         "subject_ref": mapping.get(subjects[0], subjects[0]),
@@ -319,13 +321,14 @@ def source_is_current(cur, row, owner):
 
 def ambiguous_contact(finding, context, evidence):
     """A shared first name is insufficient to attach a fact to one of several contacts."""
+    finding = normalize_finding(finding, context)
     refs = [finding.get("subject_ref", ""), *finding.get("related_subjects", [])]
     text = " ".join(e["quote"] for e in evidence).casefold()
     people = context.get("contacts", [])
     for ref in refs:
         if not ref.startswith("contact:"):
             continue
-        target = next((c for c in people if "contact:" + c["contact_id"] == ref), None)
+        target = next((c for c in people if contact_ref(c["contact_id"]) == ref), None)
         if not target:
             continue
         if any(
@@ -393,7 +396,7 @@ def accept_profession(cur, owner, proposal):
     )
     source = cur.fetchone()
     f = {
-        "subject_ref": "contact:" + proposal["contact_id"],
+        "subject_ref": contact_ref(proposal["contact_id"]),
         "predicate": "profession",
         "statement": proposal["suggested_value"],
         "status": "current",
@@ -418,7 +421,7 @@ def relink_contacts(cur, primary, duplicate):
     """Carry canonical subjects and provider links through a confirmed contact merge."""
     import intelligence
 
-    old_ref, new_ref = "contact:" + duplicate, "contact:" + primary
+    old_ref, new_ref = contact_ref(duplicate), contact_ref(primary)
     cur.execute(
         "SELECT DISTINCT k.user_email FROM intelligence_knowledge k JOIN knowledge_subjects s USING(knowledge_id) WHERE s.subject_ref=%s",
         (old_ref,),
