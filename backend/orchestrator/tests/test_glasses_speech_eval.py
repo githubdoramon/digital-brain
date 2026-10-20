@@ -1,5 +1,7 @@
 import io
+import threading
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pytest
@@ -259,3 +261,46 @@ def test_misreported_thread_count_is_not_scored_as_requested_configuration(monke
     pipe.recv.return_value = {"prepared": True, "cpuThreads": 2}
     with pytest.raises(speech.EvalFailure, match="cpu_configuration_mismatch"):
         engine.request("small.en", "prepare", threads=4)
+
+
+def test_busy_log_identifies_active_job_and_slot_is_reusable(monkeypatch, caplog):
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "true")
+    engine = speech.SpeechEvalEngine()
+    process, pipe = MagicMock(), MagicMock()
+    process.is_alive.return_value = True
+    engine.process, engine.pipe, engine.threads = process, pipe, 4
+    downloading, finish = threading.Event(), threading.Event()
+    polls = 0
+
+    def poll(timeout):
+        nonlocal polls
+        polls += 1
+        if polls == 2:
+            downloading.set()
+            assert finish.wait(10)
+        return True
+
+    pipe.poll.side_effect = poll
+    pipe.recv.side_effect = [
+        {"event": "stage", "stage": "model_download"},
+        {"prepared": True, "cpuThreads": 4},
+        {"prepared": True, "cpuThreads": 4},
+    ]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(engine.request, "large-v3", "prepare", threads=4)
+        try:
+            assert downloading.wait(5)
+            with caplog.at_level("WARNING", logger="glasses_speech_eval"):
+                with pytest.raises(speech.EvalFailure, match="server_busy"):
+                    engine.request("medium.en", "prepare", threads=4)
+            assert (
+                "active_model=large-v3 active_operation=prepare active_stage=model_download"
+                in caplog.text
+            )
+            assert "active_threads=4 active_elapsed_ms=" in caplog.text
+        finally:
+            finish.set()
+        assert pending.result(timeout=5)["prepared"]
+    assert engine.active is None
+    assert engine.request("medium.en", "prepare", threads=4)["prepared"]
+    assert engine.active is None

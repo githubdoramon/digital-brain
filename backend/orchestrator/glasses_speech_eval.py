@@ -267,6 +267,8 @@ def _engine(pipe, cache: str, threads: int) -> None:
 class SpeechEvalEngine:
     def __init__(self):
         self.lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.active = None
         self.process = None
         self.pipe = None
         self.threads = None
@@ -316,9 +318,28 @@ class SpeechEvalEngine:
             validate_audio(audio)
         queued = time.monotonic()
         if not self.lock.acquire(timeout=1):
-            log_rejected(key, operation, "server_busy")
+            with self.state_lock:
+                active = dict(self.active) if self.active is not None else {}
+            logger.warning(
+                "[speech_eval] rejected model=%s operation=%s reason=server_busy active_model=%s active_operation=%s active_stage=%s active_threads=%s active_elapsed_ms=%s",
+                key,
+                operation,
+                active.get("model"),
+                active.get("operation"),
+                active.get("stage"),
+                active.get("threads"),
+                round((time.monotonic() - active["started"]) * 1000) if active else None,
+            )
             raise EvalFailure("server_busy")
         stage = EvalStage.INITIALIZATION.value
+        with self.state_lock:
+            self.active = {
+                "model": key,
+                "operation": operation,
+                "stage": stage,
+                "threads": requested_threads,
+                "started": time.monotonic(),
+            }
         logger.info(
             "[speech_eval] started model=%s operation=%s cold=%s audio_bytes=%d",
             key,
@@ -366,6 +387,8 @@ class SpeechEvalEngine:
                     next_stage = result.get("stage")
                     if next_stage in {item.value for item in EvalStage}:
                         stage = next_stage
+                        with self.state_lock:
+                            self.active["stage"] = stage
                         logger.info(
                             "[speech_eval] stage model=%s operation=%s stage=%s elapsed_ms=%d",
                             key,
@@ -419,6 +442,8 @@ class SpeechEvalEngine:
             self.close()
             raise EvalFailure("engine_unavailable", stage) from None
         finally:
+            with self.state_lock:
+                self.active = None
             self.lock.release()
 
 
