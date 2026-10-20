@@ -46,9 +46,9 @@ derived knowledge is retained when a group is subsequently excluded.
 - Slot uniqueness prevents duplicate morning/evening runs. On recovery, the latest
   due slot processes all outstanding observations, rather than requiring a replay
   of every missed calendar slot.
-- Per-owner, reclaimable fifteen-minute leases serialize backlog and scheduled
-  runs across processes. Each successful batch and a periodic heartbeat renew
-  the lease. Inference failure persists only `analysis_failed` and retries after
+- Per-owner, reclaimable two-minute leases serialize backlog and scheduled
+  runs across processes. An independent heartbeat runs every 20 seconds; each
+  successful batch also renews the lease. Inference failure persists only `analysis_failed` and retries after
   five minutes.
 - Sources are split into 5,000-character parts with 400 characters of overlap;
   twelve parts form a model batch. One batch is handled per worker turn, then

@@ -132,7 +132,32 @@ transports (`LLM_TIMEOUT`, `LLM_REASONING_TIMEOUT`,
 `LLM_HIGH_REASONING_TIMEOUT`). Explicit longer timeouts remain longer. Optional
 `LLM_MAX_OUTPUT_TOKENS` caps output for known provider limits, including reasoning.
 Extraction requests up to `KNOWLEDGE_MAX_OUTPUT_TOKENS` (12,000 by default).
-Learning, summary and historical workers renew their leases during long requests.
+Learning, summary and historical workers use shared two-minute leases, renewed by
+an independent thread every 20 seconds, including during long reasoning requests.
+A dead process therefore blocks recovery for at most two minutes plus the worker's
+poll interval (10 seconds for learning, 30 seconds for intelligence). Token and
+expiry checks reject late writes from an earlier owner. Learning renewals cover
+inference through the transaction that commits findings and per-part receipts.
+There is no startup reset of other servers' live leases. On the first deployment,
+leases left by the older version may still need their original 15-minute expiry;
+subsequent claims and renewals use the shorter policy. No environment changes or
+schema migration are required.
+
+Historical chat/message learning claims up to 12 eligible parts from the same
+owner, source kind and conversation, with a 16,000-character primary-source budget.
+Known source timestamps keep each batch within 24 hours of its first message.
+Other source kinds and current chat learning retain individual claims. Each batch
+counts as one fairness turn. Primary parts retain their complete source chunk;
+at most six deduplicated neighboring parts provide supporting context. The shared
+extractor still enforces its model input budget and knowledge-only permissions.
+Every claimed part has its own receipt, retry budget and deferred identity state.
+All claimed leases are checked before applying findings atomically: losing one
+lease discards the whole result for safe retry, while extraction failure advances
+no receipt. A successful batch can commit clear facts while only ambiguous parts
+wait for clarification. Completed, delayed, exhausted and deferred parts are never
+consumed as new primary work. Start/completion logs include batch part counts,
+reclaimed part counts and bounded source sizes; worker status exposes lease,
+heartbeat and batch limits.
 
 External messages/events/documents retain their 05:00/19:00 Europe/Lisbon scheduled
 analysis and existing task/project proposal and completion contracts. Contact notes

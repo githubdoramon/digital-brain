@@ -11,9 +11,10 @@ from uuid import uuid4
 import intelligence
 import intelligence_model
 import knowledge
+import knowledge_batching
 import learning_fairness
 from db import get_conn
-from job_leases import lease_heartbeat
+from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
 from llm_policy import failure_code
 from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
@@ -90,7 +91,7 @@ def initialize_owner(owner):
         conn.commit()
 
 
-def claim(owners):
+def claim(owners, *, batched=False):
     if not owners:
         return None
     with get_conn() as conn, conn.cursor() as cur:
@@ -99,11 +100,10 @@ def claim(owners):
             (list(owners),),
         )
         cur.execute(
-            """SELECT b.* FROM knowledge_backfills b WHERE b.user_email=ANY(%s)
+            f"""SELECT b.* FROM knowledge_backfills b WHERE b.user_email=ANY(%s)
             AND EXISTS(SELECT 1 FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
                 WHERE j.user_email=b.user_email AND s.duplicate_of_source_id IS NULL
-                AND ((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
-                    OR (j.status='running' AND (j.lease_until IS NULL OR j.lease_until<NOW()))))
+                AND {knowledge_batching.ELIGIBLE_SQL})
             ORDER BY b.last_claimed_at NULLS FIRST,b.user_email FOR UPDATE OF b SKIP LOCKED LIMIT 1""",
             (list(owners),),
         )
@@ -111,10 +111,9 @@ def claim(owners):
         if not schedule:
             return None
         cur.execute(
-            """SELECT j.* FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
+            f"""SELECT j.* FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
             WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL
-            AND ((status IN ('pending','failed') AND attempts<3 AND next_attempt_at<=NOW())
-                OR (status='running' AND (lease_until IS NULL OR lease_until<NOW())))
+            AND {knowledge_batching.ELIGIBLE_SQL}
             ORDER BY (j.historical=%s) DESC,j.source_id,j.part FOR UPDATE OF j SKIP LOCKED LIMIT 1""",
             (schedule["user_email"], learning_fairness.history_first(schedule["current_streak"])),
         )
@@ -122,16 +121,19 @@ def claim(owners):
         if not row:
             return None
         row = dict(row)
+        rows = knowledge_batching.select(cur, row) if batched else [row]
         token = uuid4().hex
-        cur.execute(
-            """UPDATE knowledge_learning SET status='running',attempts=attempts+1,
-            lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes',started_at=NOW()
-            WHERE user_email=%s AND source_id=%s AND part=%s""",
-            (token, row["user_email"], row["source_id"], row["part"]),
-        )
+        for item in rows:
+            cur.execute(
+                f"""UPDATE knowledge_learning SET status='running',attempts=attempts+1,
+                lease_token=%s,lease_until=NOW()+{LEASE_INTERVAL_SQL},started_at=NOW()
+                WHERE user_email=%s AND source_id=%s AND part=%s""",
+                (token, item["user_email"], item["source_id"], item["part"]),
+            )
         learning_fairness.record_claim(cur, "knowledge", row["user_email"], row["historical"])
         conn.commit()
-        return {**row, "lease_token": token}
+        claimed = [{**item, "lease_token": token} for item in rows]
+        return claimed if batched else claimed[0]
 
 
 def source_batch(job):
@@ -192,22 +194,30 @@ def _finish(job, status, error=None):
         conn.commit()
 
 
-def _heartbeat(job, *, summary=False):
+def _heartbeat(job, *, summary=False, jobs=None):
+    jobs = jobs or [job]
+
     def renew():
         with get_conn() as conn, conn.cursor() as cur:
             if summary:
                 cur.execute(
-                    """UPDATE knowledge_summaries SET lease_until=NOW()+INTERVAL '15 minutes'
+                    f"""UPDATE knowledge_summaries SET lease_until=NOW()+{LEASE_INTERVAL_SQL}
                     WHERE user_email=%s AND subject_ref=%s AND lease_token=%s AND lease_until>NOW()""",
                     (job["user_email"], job["subject_ref"], job["lease_token"]),
                 )
             else:
-                cur.execute(
-                    """UPDATE knowledge_learning SET lease_until=NOW()+INTERVAL '15 minutes'
-                    WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s
-                    AND status='running' AND lease_until>NOW()""",
-                    (job["user_email"], job["source_id"], job["part"], job["lease_token"]),
-                )
+                renewed = 0
+                for item in jobs:
+                    cur.execute(
+                        f"""UPDATE knowledge_learning SET lease_until=NOW()+{LEASE_INTERVAL_SQL}
+                        WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s
+                        AND status='running' AND lease_until>NOW()""",
+                        (item["user_email"], item["source_id"], item["part"], item["lease_token"]),
+                    )
+                    renewed += cur.rowcount
+                if renewed != len(jobs):
+                    conn.rollback()
+                    return False
             conn.commit()
             return bool(cur.rowcount)
 
@@ -216,81 +226,103 @@ def _heartbeat(job, *, summary=False):
 
 @traced_intelligence_run()
 def process_once(owners):
-    job = claim(owners)
-    if not job:
+    jobs = claim(owners, batched=True)
+    if not jobs:
         return False
+    job = jobs[0]
     logger.info(
-        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d",
+        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d parts=%d recovered=%d",
         job["user_email"],
         job["source_id"],
         job["part"],
         job["historical"],
         job["attempts"] + 1,
+        len(jobs),
+        sum(item["status"] == "running" for item in jobs),
     )
     try:
-        with _heartbeat(job):
-            batch = source_batch(job)
+        with _heartbeat(job, jobs=jobs):
+            batch = knowledge_batching.sources(jobs, source_batch)
+            logger.info(
+                "[knowledge] batch_prepared primary_parts=%d supporting_parts=%d source_chars=%d",
+                len(jobs),
+                len(batch) - len(jobs),
+                sum(len(row["text"]) for row in batch),
+            )
             context, findings = intelligence_model.analyze(
                 job["user_email"], batch, knowledge_only=True
             )
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT 1 FROM knowledge_learning WHERE user_email=%s AND source_id=%s
-                AND part=%s AND lease_token=%s AND lease_until>NOW() FOR UPDATE""",
-                (job["user_email"], job["source_id"], job["part"], job["lease_token"]),
-            )
-            if not cur.fetchone():
-                return True
-            current = {
-                r["source_id"] for r in batch if intelligence._current(cur, r, job["user_email"])
-            }
-            contacts_changed = False
-            effects = Counter()
-            for f in findings:
-                if all(e["source_id"] in current for e in f["evidence"]):
-                    if f["kind"] == "knowledge":
-                        effects[intelligence._save_knowledge(cur, job["user_email"], f)] += 1
-                    elif f["kind"] == "contact_change":
-                        import contact_learning
+            with get_conn() as conn, conn.cursor() as cur:
+                for item in jobs:
+                    cur.execute(
+                        """SELECT 1 FROM knowledge_learning WHERE user_email=%s AND source_id=%s
+                        AND part=%s AND lease_token=%s AND lease_until>NOW() FOR UPDATE""",
+                        (item["user_email"], item["source_id"], item["part"], item["lease_token"]),
+                    )
+                    if not cur.fetchone():
+                        logger.warning(
+                            "[knowledge] batch_discarded reason=lease_lost parts=%d", len(jobs)
+                        )
+                        return True
+                current = {
+                    r["source_id"]
+                    for r in batch
+                    if intelligence._current(cur, r, job["user_email"])
+                }
+                contacts_changed = False
+                effects = Counter()
+                for f in findings:
+                    if all(e["source_id"] in current for e in f["evidence"]):
+                        if f["kind"] == "knowledge":
+                            effects[intelligence._save_knowledge(cur, job["user_email"], f)] += 1
+                        elif f["kind"] == "contact_change":
+                            import contact_learning
 
-                        outcome = contact_learning.save(cur, job["user_email"], f)
-                        effects[outcome] += 1
-                        contacts_changed |= outcome == "contact_changes_applied"
-                else:
-                    effects["stale_source_skipped"] += 1
-            deferred = set(context.get("deferred_refs", []))
-            status = "deferred" if f"{job['source_id']}:{job['part']}" in deferred else "done"
-            if status == "deferred" and contacts_changed:
-                status = "pending"
-            cur.execute(
-                """UPDATE knowledge_learning SET status=%s,lease_until=NULL,lease_token=NULL,
-                    error_code=NULL,next_attempt_at=NOW(),last_success_at=NOW(),
-                    attempts=CASE WHEN %s THEN 0 ELSE attempts END
-                WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s""",
-                (
-                    status,
-                    status == "pending",
-                    job["user_email"],
-                    job["source_id"],
-                    job["part"],
-                    job["lease_token"],
-                ),
-            )
-            conn.commit()
+                            outcome = contact_learning.save(cur, job["user_email"], f)
+                            effects[outcome] += 1
+                            contacts_changed |= outcome == "contact_changes_applied"
+                    else:
+                        effects["stale_source_skipped"] += 1
+                deferred = set(context.get("deferred_refs", []))
+                statuses = []
+                for item in jobs:
+                    status = (
+                        "deferred" if f"{item['source_id']}:{item['part']}" in deferred else "done"
+                    )
+                    if status == "deferred" and contacts_changed:
+                        status = "pending"
+                    cur.execute(
+                        """UPDATE knowledge_learning SET status=%s,lease_until=NULL,lease_token=NULL,
+                            error_code=NULL,next_attempt_at=NOW(),last_success_at=NOW(),
+                            attempts=CASE WHEN %s THEN 0 ELSE attempts END
+                        WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s""",
+                        (
+                            status,
+                            status == "pending",
+                            item["user_email"],
+                            item["source_id"],
+                            item["part"],
+                            item["lease_token"],
+                        ),
+                    )
+                    statuses.append(status)
+                conn.commit()
         diagnostic(
             "knowledge_learning_committed",
             owner=job["user_email"],
             source_ref=f"{job['source_id']}:{job['part']}",
             historical=job["historical"],
             findings=findings,
-            status=status,
+            status=statuses,
+            source_refs=[f"{item['source_id']}:{item['part']}" for item in jobs],
             effects=dict(effects),
         )
         logger.info(
-            "[knowledge] learning_completed historical=%s findings=%d deferred=%s",
+            "[knowledge] learning_completed historical=%s findings=%d parts=%d deferred=%d",
             job["historical"],
             len(findings),
-            status == "deferred",
+            len(jobs),
+            statuses.count("deferred"),
         )
     except Exception as exc:
         code = (
@@ -298,7 +330,8 @@ def process_once(owners):
             if isinstance(exc, intelligence_model.InvalidModelOutput)
             else failure_code(exc)
         )
-        _finish(job, "failed", code)
+        for item in jobs:
+            _finish(item, "failed", code)
         diagnostic(
             "knowledge_learning_failed",
             owner=job["user_email"],
@@ -336,7 +369,7 @@ def summarize_once(owners):
         row = dict(row)
         row["lease_token"] = uuid4().hex
         cur.execute(
-            """UPDATE knowledge_summaries SET lease_token=%s,lease_until=NOW()+INTERVAL '15 minutes',started_at=NOW()
+            f"""UPDATE knowledge_summaries SET lease_token=%s,lease_until=NOW()+{LEASE_INTERVAL_SQL},started_at=NOW()
             WHERE user_email=%s AND subject_ref=%s""",
             (row["lease_token"], row["user_email"], row["subject_ref"]),
         )
@@ -630,5 +663,9 @@ def get_worker_status():
         "summary_worker_alive": bool(_SUMMARY_THREAD and _SUMMARY_THREAD.is_alive()),
         "progress_worker_alive": bool(_PROGRESS_THREAD and _PROGRESS_THREAD.is_alive()),
         "poll_seconds": 10,
+        "historical_batch_parts": knowledge_batching.MAX_PARTS,
+        "historical_batch_text_chars": knowledge_batching.MAX_TEXT_CHARS,
+        "lease_seconds": LEASE_SECONDS,
+        "heartbeat_seconds": HEARTBEAT_SECONDS,
         "max_current_turns": learning_fairness.MAX_CURRENT_TURNS,
     }

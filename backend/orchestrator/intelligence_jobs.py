@@ -11,7 +11,7 @@ import intelligence
 import intelligence_model
 import learning_fairness
 from db import get_conn
-from job_leases import lease_heartbeat
+from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
 from llm_policy import LLMRequestRejected, failure_code
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_intelligence_run
@@ -110,10 +110,16 @@ def claim_run(owners):
         run = dict(cur.fetchone())
         token = uuid4().hex
         cur.execute(
-            """UPDATE intelligence_runs SET status='running', lease_token=%s,
-            lease_until=NOW() + INTERVAL '15 minutes', error_code=NULL,started_at=NOW() WHERE run_id=%s""",
+            f"""UPDATE intelligence_runs SET status='running', lease_token=%s,
+            lease_until=NOW() + {LEASE_INTERVAL_SQL}, error_code=NULL,started_at=NOW() WHERE run_id=%s""",
             (token, run["run_id"]),
         )
+        if run["status"] == "running":
+            logger.info(
+                "[intelligence] run_recovered run_id=%s previous_lease_until=%s",
+                run["run_id"],
+                run["lease_until"],
+            )
         learning_fairness.record_claim(
             cur, "intelligence", run["user_email"], run["knowledge_only"]
         )
@@ -191,7 +197,7 @@ def _heartbeat(run):
     def renew():
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                """UPDATE intelligence_runs SET lease_until=NOW() + INTERVAL '15 minutes'
+                f"""UPDATE intelligence_runs SET lease_until=NOW() + {LEASE_INTERVAL_SQL}
                 WHERE run_id=%s AND lease_token=%s AND status='running' AND lease_until>NOW()""",
                 (run["run_id"], run["lease_token"]),
             )
@@ -296,6 +302,8 @@ def get_worker_status():
         "time_local": [f"{hour:02d}:00" for hour in HOURS],
         "timezone_name": TIMEZONE,
         "poll_seconds": POLL_SECONDS,
+        "lease_seconds": LEASE_SECONDS,
+        "heartbeat_seconds": HEARTBEAT_SECONDS,
         "max_current_turns": learning_fairness.MAX_CURRENT_TURNS,
         "batches_per_turn": learning_fairness.INTELLIGENCE_BATCHES_PER_TURN,
     }

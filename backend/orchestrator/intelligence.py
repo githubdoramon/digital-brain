@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from psycopg.types.json import Jsonb
 
 from db import get_conn
+from job_leases import LEASE_INTERVAL_SQL
 from knowledge_references import contact_ref, normalize_finding
 from observability.logger import get_runtime_logger
 
@@ -633,8 +634,8 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
             )
             counts["parts_processed"] += cur.rowcount
         cur.execute(
-            """UPDATE intelligence_runs SET batches = batches + 1,
-            lease_until = NOW() + INTERVAL '15 minutes', reviewed=reviewed OR %s WHERE run_id = %s""",
+            f"""UPDATE intelligence_runs SET batches = batches + 1,
+            lease_until = NOW() + {LEASE_INTERVAL_SQL}, reviewed=reviewed OR %s WHERE run_id = %s""",
             (review, run["run_id"]),
         )
         conn.commit()
