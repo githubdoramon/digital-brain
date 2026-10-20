@@ -61,3 +61,7 @@ backend/orchestrator/storage/glasses-commands/
 backend/orchestrator/storage/whatsapp/
 
 backend/orchestrator/storage/telegram/
+
+# Local decision benchmark configuration and generated reports
+backend/orchestrator/decision_benchmark/models.local.json
+backend/orchestrator/storage/decision-benchmarks/

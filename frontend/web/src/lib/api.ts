@@ -254,7 +254,8 @@ export type StreamEvent =
   | { type: "error"; message: string };
 
 export type LinkedItem = {
-  entity_type: "event" | "document" | "contact" | "place" | "conversation";
+  entity_type: "event" | "document" | "contact" | "place" | "conversation" | "message";
+  source_url?: string | null;
   entity_id: string;
   title: string;
   subtitle?: string | null;

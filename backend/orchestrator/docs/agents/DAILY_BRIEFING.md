@@ -100,7 +100,7 @@ This document captures behavior and quality rules for the daily briefing profile
 
 - Daily briefing prompt calls inject both:
   - self identity context (display name, known emails, aliases, ownership guardrail), and
-  - relevant user facts (`get_user_facts_context`).
+  - relevant user facts (`get_user_context`).
 - This applies across event research/synthesis, core markdown generation, news-section generation, and rewrite prompts.
 
 ## Validation Pipeline

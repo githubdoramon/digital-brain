@@ -66,7 +66,7 @@ def refresh_backlog(owner):
                 JOIN intelligence_state st ON st.user_email=r.user_email
                 CROSS JOIN LATERAL generate_series(0, GREATEST(0,
                     (length(COALESCE(s.payload->>'text','')) - 1) / %s)) part(part)
-                WHERE (s.owner_email IS NULL OR s.owner_email=r.user_email)
+                WHERE s.kind IN ('message','event','document') AND (s.owner_email IS NULL OR s.owner_email=r.user_email)
                 AND (s.historical OR s.observed_at < st.started_at
                     OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE))
                 AND NOT EXISTS (SELECT 1 FROM intelligence_processed p WHERE p.user_email=r.user_email

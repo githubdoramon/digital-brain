@@ -422,45 +422,6 @@ DAILY_BRIEFING_NEWS_CURATION_RESPONSE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-FACT_EXTRACTION_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "facts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string"},
-                    "category": {"type": "string"},
-                    "importance": {"type": "integer"},
-                    "fact_mode": {"type": "string"},
-                    "rule_type": {"type": ["string", "null"]},
-                    "rule_scope": STRING_ARRAY_SCHEMA,
-                    "rule_payload": {
-                        "type": "object",
-                        "additionalProperties": True,
-                    },
-                    "action": {"type": "string"},
-                    "target_fact_id": {"type": ["string", "null"]},
-                },
-                "required": [
-                    "content",
-                    "category",
-                    "importance",
-                    "fact_mode",
-                    "rule_type",
-                    "rule_scope",
-                    "rule_payload",
-                    "action",
-                    "target_fact_id",
-                ],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["facts"],
-    "additionalProperties": False,
-}
 
 DOCUMENT_DATE_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",

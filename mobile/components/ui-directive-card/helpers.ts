@@ -66,7 +66,8 @@ export function parseValueToDate(value: string | undefined, mode: PickerMode): D
   }
 
   if (mode === 'date') {
-    const parsed = new Date(`${value.trim()}T00:00:00`);
+    const input = value.trim();
+    const parsed = new Date(`${input.startsWith('--') ? `2000${input.slice(1)}` : input}T00:00:00`);
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   }
 
@@ -84,7 +85,7 @@ export function displayValueForField(field: UiDirectiveField, rawValue: string) 
   if (field.kind === 'date') {
     const parsed = parseValueToDate(rawValue, 'date');
     return parsed.toLocaleDateString(undefined, {
-      year: 'numeric',
+      ...(rawValue.startsWith('--') ? {} : { year: 'numeric' as const }),
       month: 'short',
       day: 'numeric',
     });
@@ -118,4 +119,3 @@ export function keyboardTypeForFieldKind(kind: string) {
   if (kind === 'url') return 'url' as const;
   return 'default' as const;
 }
-

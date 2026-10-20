@@ -3,10 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 import contact_enrichment_proposals
 import intelligence
 from auth import get_current_user
+
+
+class ContactProposalAcceptance(BaseModel):
+    contact_resolutions: dict[str, str] = Field(default_factory=dict, max_length=10)
 
 
 def _user_email(user: dict[str, Any]) -> str:
@@ -29,9 +34,18 @@ def create_proposals_router() -> APIRouter:
         }
 
     @router.post("/mobile/proposals/{proposal_id}/accept")
-    def accept_mobile_proposal(proposal_id: str, user: dict = Depends(get_current_user)):
+    def accept_mobile_proposal(
+        proposal_id: str,
+        body: ContactProposalAcceptance | None = None,
+        user: dict = Depends(get_current_user),
+    ):
         result = (
-            intelligence.resolve_proposal(_user_email(user), proposal_id, accept=True)
+            intelligence.resolve_proposal(
+                _user_email(user),
+                proposal_id,
+                accept=True,
+                contact_resolutions=body.contact_resolutions if body else None,
+            )
             if proposal_id.startswith("intel_")
             else contact_enrichment_proposals.accept_proposal(_user_email(user), proposal_id)
         )
@@ -43,6 +57,8 @@ def create_proposals_router() -> APIRouter:
                 "task_changed": "This task has changed. Review the task before accepting a suggestion.",
                 "related_item_changed": "A related person or project has changed. Review this suggestion again.",
                 "already_resolved": "This suggestion has already been handled.",
+                "contact_changed": "This contact has changed. Review the latest details before accepting.",
+                "contact_resolution_required": "Choose the person for each suggested contact change.",
             }.get(result.get("reason"), "This suggestion is no longer available.")
             raise HTTPException(status_code=409, detail=detail)
         return result

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "local-chat",
+      "protocol": "openai",
+      "model": "your-instruct-model",
+      "url": "http://127.0.0.1:11434/v1/chat/completions",
+      "structured_output": "json_schema",
+      "timeout_seconds": 120,
+      "request_options": {"temperature": 0, "max_tokens": 512}
+    },
+    {
+      "id": "hosted-chat",
+      "protocol": "openai",
+      "model": "your-hosted-model",
+      "url": "https://inference.example/v1/chat/completions",
+      "api_key_env": "BENCH_CHAT_API_KEY",
+      "request_options": {"max_tokens": 1024}
+    },
+    {
+      "id": "jev",
+      "protocol": "jev",
+      "model": "jev-latest",
+      "url": "https://api.typesafe.ai/v1/systemone",
+      "api_key_env": "BENCH_JEV_API_KEY"
+    },
+    {
+      "id": "this-that",
+      "protocol": "this_that",
+      "model": "flock-io/this-that-model-1.2",
+      "url": "http://127.0.0.1:8765/decide",
+      "timeout_seconds": 120
+    }
+  ]
+}

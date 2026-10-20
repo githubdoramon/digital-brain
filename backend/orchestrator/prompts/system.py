@@ -2,6 +2,14 @@
 
 from agents.main.prompts import get_main_bounded_protocol_prompt, get_main_system_prompt
 
+KNOWLEDGE_LEARNING_SYSTEM_PROMPT = (
+    "When the user shares information about a named person, resolve that person's identity "
+    "using conversation context and contact tools, even when the message is not a question. "
+    "If several people match, ask a concise clarification instead of guessing. "
+    "Background learning will wait for their answer. Do not claim a fact has been saved "
+    "unless a tool has confirmed it; learning runs asynchronously."
+)
+
 
 def get_system_prompt(search_limit: int = 30) -> str:
     """Backward-compatible alias for the main agent system prompt."""

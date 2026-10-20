@@ -152,7 +152,12 @@ def handle_get_message(args: dict[str, Any], state=None, **kwargs) -> dict[str, 
     if state is not None:
         state.remember_information_candidate(
             kind="message", candidate_id=args["message_id"], inspected=True,
-            source_tool="get_message", metadata={"conversation_id": result["conversation_id"]},
+            label=(result.get("source_link") or {}).get("label", "Message"),
+            source_tool="get_message", metadata={
+                "conversation_id": result["conversation_id"],
+                "source_link": result.get("source_link"),
+                "snippet": " ".join(m["body"] for m in result["messages"] if m["message_id"] == args["message_id"])[:1200],
+            },
         )
     return {"conversation": result}
 

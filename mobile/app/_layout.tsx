@@ -233,6 +233,8 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     >
       <StatusBar style="dark" backgroundColor="#f7f2ec" />
       <Stack initialRouteName="home">
+        <Stack.Screen name="knowledge/index" options={{ headerShown: false }} />
+        <Stack.Screen name="knowledge/[entityRef]/index" options={{ headerShown: false }} />
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen
           name="home"

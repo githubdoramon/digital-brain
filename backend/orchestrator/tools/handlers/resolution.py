@@ -154,6 +154,7 @@ def handle_lookup_contact(
             search_by=search_by,
             fuzzy_threshold=fuzzy_threshold,
             limit=limit,
+            **({"user_email": kwargs["user_email"]} if kwargs.get("user_email") else {}),
         )
 
         if kwargs.get("user_email"):

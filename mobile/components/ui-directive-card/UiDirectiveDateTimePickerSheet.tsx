@@ -66,7 +66,10 @@ export function UiDirectiveDateTimePickerSheet({
         <Text style={styles.title}>{title}</Text>
         <Pressable
           onPress={() => {
-            onConfirm(formatValueForMode(draftDate, mode));
+            const nextValue = formatValueForMode(draftDate, mode);
+            onConfirm(
+              mode === 'date' && value?.startsWith('--') ? `--${nextValue.slice(5)}` : nextValue,
+            );
           }}
           style={({ pressed }) => [styles.headerAction, pressed && styles.actionPressed]}
           accessibilityRole="button"

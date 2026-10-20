@@ -1,9 +1,19 @@
 # Scheduled memory analysis
 
+Shared storage, Brain chat learning, summaries, deletion and the versioned all-source
+revisit are described in [KNOWLEDGE.md](KNOWLEDGE.md). Scheduled task/project effects
+retain the contracts below.
+
 The orchestrator's `intelligence_jobs.py` worker runs analysis at **05:00 and
 19:00 Europe/Lisbon**, following local daylight-saving changes. It is independent
 of briefing generation. There is no silence timer or per-message inference worker.
 Results are quiet: knowledge updates, Proposed items, and evidenced task completion.
+The shared extractor also emits connected contact creation, birthday and relationship
+changes. Current high-confidence changes with resolved identities and no conflicts
+apply automatically; uncertain changes go to Proposed items. The historical
+knowledge-only lane includes these personal details, while preserving the prohibition
+on historical task/project actions. See the structured contact changes contract in
+[KNOWLEDGE.md](KNOWLEDGE.md).
 
 ## Activation and evidence
 
@@ -114,7 +124,7 @@ becoming new work after it has already been accomplished.
 - Existing mobile Proposed items includes task/project/change suggestions with
   reasons, assignees, dates and inspectable evidence, alongside contact suggestions.
 - Task details expose assignment, project and analysis evidence.
-- `/mobile/intelligence/knowledge`, `/projects`, `/sources/{id}` and `/status` use
+- `/mobile/knowledge`, `/mobile/rules` and intelligence `/projects`, `/sources/{id}` and `/status` use
   existing authenticated frontend proxy routing. Knowledge corrections use PATCH.
   No message-sending or external-action execution endpoint is introduced.
 

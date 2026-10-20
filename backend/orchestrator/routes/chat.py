@@ -48,7 +48,9 @@ _ask_runs: dict[str, dict[str, Any]] = {}
 _detached_ask_tasks: set[asyncio.Task[Any]] = set()
 
 
-def _track_detached_ask_task(task: asyncio.Task[Any], *, run_id: str, thread_id: str | None) -> None:
+def _track_detached_ask_task(
+    task: asyncio.Task[Any], *, run_id: str, thread_id: str | None
+) -> None:
     _detached_ask_tasks.add(task)
     logger.info(
         "[ask/stream] tracking detached producer run=%s thread=%s active_detached=%s",
@@ -60,12 +62,16 @@ def _track_detached_ask_task(task: asyncio.Task[Any], *, run_id: str, thread_id:
     def _discard(done_task: asyncio.Task[Any]) -> None:
         _detached_ask_tasks.discard(done_task)
         if done_task.cancelled():
-            logger.info("[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id)
+            logger.info(
+                "[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id
+            )
             return
         try:
             exc = done_task.exception()
         except asyncio.CancelledError:
-            logger.info("[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id)
+            logger.info(
+                "[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id
+            )
             return
         if exc:
             logger.warning(
@@ -76,7 +82,9 @@ def _track_detached_ask_task(task: asyncio.Task[Any], *, run_id: str, thread_id:
                 exc_info=exc,
             )
         else:
-            logger.info("[ask/stream] detached producer finished run=%s thread=%s", run_id, thread_id)
+            logger.info(
+                "[ask/stream] detached producer finished run=%s thread=%s", run_id, thread_id
+            )
 
     task.add_done_callback(_discard)
 
@@ -225,7 +233,9 @@ def create_chat_router() -> APIRouter:
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        staged_media_attachments, command_user_metadata = _prepare_command_media(payload, user_email)
+        staged_media_attachments, command_user_metadata = _prepare_command_media(
+            payload, user_email
+        )
 
         try:
             command_payload = handle_pending_event(
@@ -260,7 +270,9 @@ def create_chat_router() -> APIRouter:
                 command_result, command_thread_id, command_ui_directives = command_payload
                 from commands.storage import get_pending_event
 
-                pending_event_id = get_pending_event(event_pending_key(user_email, command_thread_id))
+                pending_event_id = get_pending_event(
+                    event_pending_key(user_email, command_thread_id)
+                )
                 return AskOut(
                     question=payload.question,
                     answer=_command_response_text(command_result),
@@ -300,7 +312,9 @@ def create_chat_router() -> APIRouter:
 
         ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
         if ctx.is_new_session:
-            logger.info("[session] new session started session=%s user=%s", ctx.session_id, user_email)
+            logger.info(
+                "[session] new session started session=%s user=%s", ctx.session_id, user_email
+            )
 
         if ctx.is_reset_only:
             logger.info("[ask] session reset session=%s user=%s", ctx.session_id, user_email)
@@ -323,10 +337,10 @@ def create_chat_router() -> APIRouter:
             preview,
         )
 
-        def _schedule_fact_extraction(**kwargs):
-            from fact_extraction import maybe_extract_facts
+        def _schedule_explicit_rules(**kwargs):
+            from knowledge_jobs import capture_explicit_rules
 
-            background_tasks.add_task(maybe_extract_facts, **kwargs)
+            background_tasks.add_task(capture_explicit_rules, **kwargs)
 
         def _schedule_thread_title(**kwargs):
             background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
@@ -345,7 +359,7 @@ def create_chat_router() -> APIRouter:
                 if payload.ui_submission
                 else None,
                 visual_attachments=staged_media_attachments,
-                on_exchange_persisted=_schedule_fact_extraction,
+                on_exchange_persisted=_schedule_explicit_rules,
                 on_thread_title_needed=_schedule_thread_title,
             )
         except LLMUnavailableError as exc:
@@ -369,7 +383,9 @@ def create_chat_router() -> APIRouter:
 
         from commands.storage import get_pending_event
 
-        bundle["pending_event_id"] = get_pending_event(event_pending_key(user_email, ctx.session_id))
+        bundle["pending_event_id"] = get_pending_event(
+            event_pending_key(user_email, ctx.session_id)
+        )
         return AskOut(**bundle)
 
     @router.post("/ask/stream")
@@ -383,7 +399,9 @@ def create_chat_router() -> APIRouter:
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        staged_media_attachments, command_user_metadata = _prepare_command_media(payload, user_email)
+        staged_media_attachments, command_user_metadata = _prepare_command_media(
+            payload, user_email
+        )
         run_id = _create_ask_run(user_email, payload.thread_id or payload.session_id)
         is_main_session_request = not (payload.thread_id or payload.session_id)
 
@@ -541,7 +559,9 @@ def create_chat_router() -> APIRouter:
                     try:
                         while True:
                             try:
-                                event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                                event = await asyncio.wait_for(
+                                    queue.get(), timeout=heartbeat_seconds
+                                )
                             except asyncio.TimeoutError:
                                 yield ": keep-alive\n\n"
                                 continue
@@ -605,7 +625,9 @@ def create_chat_router() -> APIRouter:
 
         ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
         if ctx.is_new_session:
-            logger.info("[session] new session started session=%s user=%s", ctx.session_id, user_email)
+            logger.info(
+                "[session] new session started session=%s user=%s", ctx.session_id, user_email
+            )
 
         if ctx.is_reset_only:
             _touch_ask_run(run_id, thread_id=ctx.session_id)
@@ -655,10 +677,10 @@ def create_chat_router() -> APIRouter:
             preview,
         )
 
-        def _schedule_fact_extraction(**kwargs):
-            from fact_extraction import maybe_extract_facts
+        def _schedule_explicit_rules(**kwargs):
+            from knowledge_jobs import capture_explicit_rules
 
-            background_tasks.add_task(maybe_extract_facts, **kwargs)
+            background_tasks.add_task(capture_explicit_rules, **kwargs)
 
         def _schedule_thread_title(**kwargs):
             background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
@@ -682,7 +704,7 @@ def create_chat_router() -> APIRouter:
                         if payload.ui_submission
                         else None,
                         visual_attachments=staged_media_attachments,
-                        on_exchange_persisted=_schedule_fact_extraction,
+                        on_exchange_persisted=_schedule_explicit_rules,
                         on_thread_title_needed=_schedule_thread_title,
                     ):
                         if event.get("type") == "done":
@@ -777,7 +799,9 @@ def create_chat_router() -> APIRouter:
                     try:
                         while True:
                             try:
-                                event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                                event = await asyncio.wait_for(
+                                    queue.get(), timeout=heartbeat_seconds
+                                )
                             except asyncio.TimeoutError:
                                 yield ": keep-alive\n\n"
                                 continue
@@ -932,7 +956,9 @@ def create_chat_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Conversation thread not found")
         generated_title = llm.generate_thread_title_from_messages(thread.get("messages") or [])
         if not generated_title:
-            raise HTTPException(status_code=503, detail="Could not generate a thread title right now.")
+            raise HTTPException(
+                status_code=503, detail="Could not generate a thread title right now."
+            )
         updated_thread = conversations.update_thread_title(thread_id, user_email, generated_title)
         if not updated_thread:
             raise HTTPException(status_code=404, detail="Conversation thread not found")

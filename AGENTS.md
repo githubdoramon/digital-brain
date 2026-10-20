@@ -34,6 +34,20 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile glasses media convention**: Original Mentra Live photos/videos sync through native event-driven WorkManager work, triggered by capture/button/video signals, readiness, and Sync now. Prefer a reachable gallery over existing Wi-Fi; use a scoped glasses hotspot connection otherwise, never bind the whole process or persist/export hotspot credentials. Keep gallery discovery and downloads out of JavaScript, use bounded streaming and account-scoped atomic queue records, and release app-owned hotspot requests after a run. Upload originals via the frontend `/mobile/glasses/media` proxy in resumable one-MiB chunks, including over cellular. Retain phone and glasses copies until Digital Brain confirms a readable Immich asset, membership in the configured existing album, and a durable per-user receipt. Use idempotent v3 acknowledgement where supported, with checked legacy deletion fallback. Phone tombstones and backend checksum/capture receipts prevent retained/restored media from uploading again. Attach an existing nearest user-scoped phone location within ten minutes when available; do not request new GPS fixes. Keep the media UI to pending count, status, transfer connection, and Sync now; the connection card shows the glasses-reported Wi-Fi name/IP and hotspot state. Wait briefly for the gallery server after hotspot joining; accept the health endpoint’s `healthy` status separately from gallery `success` envelopes, tolerate absent optional capture timestamps, and expose safe failure stages without exporting credentials or network identifiers in diagnostics. No firmware changes are part of this flow. Export debug logs saves connection diagnostics and a persistent 250-event native media trail with phases, safe HTTP endpoint/status metadata, run outcomes, and bounded WorkManager states to the selected Digital Brain Exports folder. Never include raw errors, media identifiers, request bodies, credentials, SSIDs or IP addresses in the media trail. Clean production prebuilds explicitly permit cleartext HTTP for the glasses gallery through expo-build-properties; gallery sockets check Android’s effective HTTP policy before connecting. Glasses gallery network diagnostics distinguish connection refusal, missing routes, Android cleartext policy blocks, and timeouts using bounded cause inspection; raw platform exception text is never exported. Upload failures display and log only allow-listed backend completion rejection reasons. After an unsuccessful station probe with a reported Wi-Fi IP, request persistent LAN gallery enablement through the SDK’s acknowledged BLE command, wait briefly, and retry station access before hotspot fallback. Enablement has a five-second timeout; unsupported firmware falls back safely. This user-approved setting exposes unauthenticated HTTP access on the joined network; idle battery impact is unmeasured. See `mobile/GLASSES_MEDIA.md`.
 
+**Shared knowledge**: Migration 0079 extends the evidence-backed knowledge store with
+multi-entity links, inferred origin, revisions/deletion boundaries and derived summaries.
+Brain user messages queue durable asynchronous learning transactionally; assistant text
+is never evidence. `knowledge_jobs` uses the shared intelligence extractor for chat and
+an all-source, knowledge-only historical revisit. Ambiguous person facts wait for
+clarification/new context; clear facts still commit. Contact notes remain manual notes;
+learned facts and summaries live separately. Explicit hard rules retain their controlled
+path. Migration 0080 adds shared typed contact creation, birthday and reciprocal
+relationship changes: confident current changes with resolved identities and no
+conflicts apply atomically; uncertain changes enter Proposed items with identity
+choices and checked acceptance. Unknown birth years remain unknown (`--MM-DD`).
+Historical knowledge-only learning includes contact structuring, never historical
+task/project actions. See `backend/orchestrator/docs/architecture/KNOWLEDGE.md`.
+
 ## Architecture Documentation
 
 **Mirador AI observability**: The Python orchestrator exports privacy-conscious
@@ -180,8 +194,8 @@ backend/orchestrator/
 ├── microsoft_calendar_sync_jobs.py # Microsoft Calendar polling and weekly reconciliation
 ├── contacts.py                 # Contact management
 ├── retrieval.py                # Vector search
-├── user_facts.py               # User facts/preferences (persistent)
-├── fact_extraction.py          # Background fact extraction pipeline
+├── user_rules.py               # Explicit scoped interpretation instructions
+├── knowledge_jobs.py           # Durable shared knowledge learning
 ├── skills.py                   # Skill management
 ├── auth.py                     # Authentication
 └── db.py                       # Database helpers
@@ -323,20 +337,20 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Accent-insensitive text matching is mandatory**: any code that compares, searches, or fuzzy-matches user-provided text (names, titles, tags, comments, or any free-text field) must strip diacritics before comparison. Use `normalize_search_text()` from `search_normalization.py` for Python-side comparisons and PostgreSQL `unaccent()` for SQL queries. Never use raw `.lower()` or `LOWER()` alone for text matching — "Jordan" must match "José", "São Paulo" must match "Sao Paulo". The `unaccent` extension is installed in the database schema (`init.sql`).
 - **Pre-resolution results must be surfaced to the agent loop**: when the controller runs `pre_resolve_contacts` before the tool loop, the outcome (whether contacts were found or not) must be injected into the LLM context via `build_contact_scope_context()`. This includes the "no matches found" case — otherwise the LLM will redundantly call `resolve_contacts` again for the same names.
 - **High-confidence contact identity answers may use pre-resolution evidence**: for contact name/identity questions, the goal validator may accept a final answer that contains the display name of a high-confidence pre-resolved contact without requiring another retrieval call. Contact details such as phone, email, and address still require retrieval.
-- **Fact extraction is router-gated**: `IntentClassification.should_generate_facts` is `false` for deterministic request/command routes; LLM routing sets it to `true` only for durable first-person facts. An explicit false skips the extraction task, true bypasses only the short-message heuristic, and an absent value preserves the legacy heuristic.
+- **Knowledge learning is independent of routing**: every persisted Brain user message queues durable `knowledge_jobs` learning transactionally. Assistant text is never evidence. The response callback captures only explicit interpretation rules through `user_rules.py`.
 - **New-thread titles are generated asynchronously**: schedule title generation after exchange persistence and update the database only if the title remains a default, so title inference never delays the answer or overwrites a user rename.
 - **Readable fetched pages should proceed directly to synthesis**: `fetch_web_page` coverage is deterministic and must not spend a separate LLM validation call. Once readable content is marked satisfied, the controller's next model turn has tools disabled and synthesizes from that page.
 - **Contacts + personal-document routing should stay memory-first**: queries about a named relative/contact plus artifacts like prescriptions, lab results, glasses specs, reports, invoices, IDs, or "a doc/document/file" should prefer `memory_search`, not `web_search`, and should usually pre-resolve the referenced contact before retrieval.
 - **Contact-resolution hot path must stay minimal**: controller pre-resolution and model-invoked `resolve_contacts` should use the resolver's minimal mode (extract mentions, resolve contacts/selectors, surface ambiguity) and skip enrichment like profession inference or relationship suggestion generation. Reserve full enrichment for flows that actually consume it (for example event/entity creation).
-- **Inferred contact enrichment is asynchronous and review-only**: profession inference and inferred relationship-pair/type analysis run in the durable `contact_enrichment` worker after a confirmed event, accepted location-generated event proposal, or contact command. Persist results as typed proposals for the shared mobile Proposed inbox; never write inferred professions or relationships until the user accepts them. Keep nested relationship lookup and contact ambiguity resolution synchronous because they determine participant identity. Explicit `/contact` relationship changes remain in their existing confirmation flow.
+- **Contact enrichment uses shared asynchronous learning**: event/contact enrichment queues the shared learner. Confident current contact creation, birthdays and reciprocal relationships apply atomically after controller identity/conflict checks; uncertain changes enter Proposed items. Explicit `/contact` changes retain their confirmation flow.
 - **Contact extraction before lookup**: contact mention extraction is LLM-only and feeds deterministic DB/rule lookup. Single-candidate lookup results resolve directly; multi-candidate ambiguity may use LLM disambiguation according to policy.
-- **User facts are persistent cross-conversation knowledge**: the `user_facts` table stores atomic personal facts (preferences, traits, habits, opinions, constraints, goals) that don't belong in contacts, events, places, todos, or documents. Facts are automatically extracted from conversations via a background pipeline (`fact_extraction.py`) and injected into LLM prompts via `get_user_facts_context()`.
-- **User facts injection policy**: any LLM call site that produces user-facing content, resolves user intent, or makes decisions influenced by user preferences MUST inject user context via `get_user_facts_context(user_email, query, scope=...)`. The context is split into (1) **hard rules** (`fact_mode=hard_rule`) that are deterministic and scope-aware (for example entity alias mapping in contact resolution), and (2) **soft facts** (`fact_mode=soft`) that are relevance-ranked hints. Hard rules should be applied in deterministic controller/handler logic before LLM disambiguation when possible; soft facts remain prompt guidance. Utility LLM calls (title generation, tag suggestion, translation, validation) do NOT need facts. When adding a new LLM call site, ask: "Would knowing user preferences/traits/aliases change this output?" — if yes, inject facts.
-- **Rule-scope enum policy**: do not use ad-hoc scope strings for hard rules. Use `RuleScope` values from `backend/orchestrator/user_fact_rules.py` (for example `RuleScope.CONTACT_RESOLUTION`, `RuleScope.EVENT_COMMAND`, `RuleScope.AGENT_GLOBAL`) in runtime code and prompt builders.
-- **User facts extraction boundary**: the extraction pipeline must NOT extract information that belongs in other entities (relationships → contacts, specific events → events, tasks → todos, locations → places). The extraction prompt includes the user's existing contacts as context to prevent duplication.
-- **User facts vs AgentState.known_facts**: these are completely different. `AgentState.known_facts` is transient per-request working memory (tool result summaries). `user_facts` is persistent long-term memory across all conversations. They occupy different positions in the prompt and serve different purposes.
-- **User facts retrieval scoring**: facts are ranked by a composite score: `0.5 * semantic_similarity + 0.25 * (importance/10) + 0.25 * recency_decay`. Recency uses exponential decay based on `last_accessed_at` with a ~30-day half-life.
-- **User facts extraction runs as BackgroundTask**: triggered after conversation persistence in `llm.py` via callbacks from `routes/chat.py`. It must never block or crash user-facing responses. The router can skip extraction for questions/requests; short/trivial messages and slash commands still skip unless routing explicitly marked a durable fact.
+- **Knowledge and instructions have separate owners**: `knowledge.py` owns persistent facts, preferences, experiences, evidence and corrections. `user_rules.py` owns explicit scoped interpretation instructions. The retired fact extractor, fact service and fact endpoints are removed.
+- **User context injection policy**: user-facing reasoning and contact/event decisions use `get_user_context(user_email, query, scope=...)`. Explicit scoped instructions apply before disambiguation. Derived archive knowledge remains attributed evidence, never executable instructions. Utility calls such as title/tag generation need no user context.
+- **Rule-scope enum policy**: use `RuleScope` from `backend/orchestrator/user_rules.py` in runtime code and prompt builders. Explicit instructions and scope validation live in that one module.
+- **Knowledge linkage**: useful facts may concern any entity. Attach canonical subjects and supporting source evidence; structured contacts, birthdays and relationships use the shared typed contact-change path.
+- **Knowledge vs AgentState.known_facts**: the shared knowledge store is durable across conversations; `AgentState.known_facts` contains transient tool-result working memory for one request.
+- **Knowledge retrieval**: use the shared `knowledge.py` retrieval path and preserve attribution, uncertainty and applicability dates. Prompt evidence formatting is shared by agents and contact resolution.
+- **Learning ownership**: `knowledge_jobs` owns durable background extraction from transactionally captured evidence. Chat response callbacks capture only explicit scoped rules; router fact hints do not gate learning.
 
 ### Limits & Safety
 
@@ -380,9 +394,10 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 
 ### User Facts
 
-- `GET /user/facts` – List all known facts about the user
-- `PUT /user/facts/{id}` – Update/correct a fact
-- `DELETE /user/facts/{id}` – Delete a fact
+- `GET /mobile/knowledge` – Retrieve learned knowledge, optionally filtered by subject/query
+- `PATCH /mobile/knowledge/{id}` – Correct a knowledge item
+- `DELETE /mobile/knowledge/{id}` – Delete knowledge with a retained boundary
+- `GET /mobile/rules` and `DELETE /mobile/rules/{id}` – Inspect/remove explicit instructions
 
 ### Mobile Settings
 
@@ -623,8 +638,8 @@ HackerNews? If no, anonymize.
 | Model routing policy            | `backend/orchestrator/agent/model_routing.py`            |
 | Planner/verifier policy         | `backend/orchestrator/agent/planning_policy.py`          |
 | Vector search                   | `backend/orchestrator/retrieval.py`                      |
-| User facts service              | `backend/orchestrator/user_facts.py`                     |
-| Fact extraction pipeline        | `backend/orchestrator/fact_extraction.py`                |
+| Explicit user instructions      | `backend/orchestrator/user_rules.py`                     |
+| Shared knowledge learning       | `backend/orchestrator/knowledge_jobs.py`                 |
 | News feed aggregation           | `backend/orchestrator/news_feeds.py`                     |
 | Daily briefing agent            | `backend/orchestrator/agents/daily_briefing/executor.py` |
 | Frontend API client             | `frontend/web/src/lib/api.ts`                            |

@@ -61,10 +61,10 @@ internal object SpeechEvalStore {
     return out.toByteArray()
   }
   fun import(c: Context, owner: String, folderUri: String, candidates: List<String>, repeats: Int): JSONObject {
-    require(candidates.isNotEmpty() && candidates.size <= 24 && candidates.distinct().size == candidates.size)
+    require(candidates.isNotEmpty() && candidates.size <= 48 && candidates.distinct().size == candidates.size)
     require(repeats in 1..5)
     val allowed = models(c).map { "local:" + it.getString("id") } + listOf("server:base.en", "server:small.en", "server:medium.en", "server:large-v3", "server:large-v3-turbo")
-    require(candidates.all { it in allowed }) { "Choose a supported model" }
+    require(candidates.all { it in allowed || SpeechEvalServerCandidate.parse(it) != null }) { "Choose a supported model" }
     val folder = checkNotNull(DocumentFile.fromTreeUri(c, Uri.parse(folderUri)))
     val manifest = bytes(c, checkNotNull(folder.findFile("dataset.json")) { "Place dataset.json in the selected folder" }, 1024 * 1024)
     val dataset = JSONObject(String(manifest, Charsets.UTF_8))
@@ -122,7 +122,8 @@ internal object SpeechEvalStore {
         val times = ok.map { it.getLong("totalMs") }
         val words = ok.sumOf { it.optInt("referenceWords") }
         mapOf("candidate" to candidate, "mode" to mode.key, "count" to rows.size, "completed" to ok.size,
-          "failures" to rows.count { it.optString("status") != SpeechEvalResult.COMPLETE.key }, "correct" to correct,
+          "failures" to rows.count { it.optString("status") != SpeechEvalResult.COMPLETE.key },
+          "failureReasons" to SpeechEvalFailures.counts(rows), "correct" to correct,
           "positives" to positives, "negatives" to negatives, "missed" to missed, "wrong" to wrong,
           "falseAccepts" to falseAccepts, "accuracy" to if (ok.isEmpty()) null else correct.toDouble() / ok.size,
           "wer" to if (words == 0) null else ok.sumOf { it.optInt("wordErrors") }.toDouble() / words,
@@ -150,7 +151,7 @@ internal object SpeechEvalStore {
     val export = JSONObject(value.toString()).put("summary", JSONArray(summary(value)))
     writeExport("speech-$id.json", "application/json", export.toString(2).toByteArray())
     val rows = array(value.getJSONArray("results"))
-    val columns = listOf("candidate", "sample", "mode", "repeat", "status", "error", "correct", "expectedCommand", "command", "totalMs", "modelLoadMs", "inferenceMs", "roundTripMs", "wordErrors", "referenceWords", "text")
+    val columns = listOf("candidate", "sample", "mode", "repeat", "status", "error", "failureStage", "httpStatus", "upstreamHttpStatus", "preparationDurationMs", "correct", "expectedCommand", "command", "totalMs", "modelLoadMs", "inferenceMs", "inferenceCpuMs", "cpuThreads", "roundTripMs", "wordErrors", "referenceWords", "text")
     fun cell(value: String): String {
       val safe = if (value.trimStart().firstOrNull() in listOf('=', '+', '-', '@', '\t', '\r')) "'" + value else value
       return "\"" + safe.replace("\"", "\"\"") + "\""

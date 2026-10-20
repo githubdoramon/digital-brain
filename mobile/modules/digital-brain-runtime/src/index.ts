@@ -253,6 +253,7 @@ export type SpeechTestSummary = {
   missed: number;
   wrong: number;
   falseAccepts: number;
+  failureReasons?: Record<string, number>;
   accuracy: number | null;
   wer: number | null;
   medianMs: number | null;

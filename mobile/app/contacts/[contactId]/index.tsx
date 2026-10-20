@@ -1,3 +1,4 @@
+import { KnowledgeFacts } from '@/components/knowledge/KnowledgeFacts';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { DateType } from 'react-native-ui-datepicker';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -9,6 +10,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -24,7 +26,7 @@ import { Avatar } from '@/components/Avatar';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
-import { ArchiveEvidence, type ArchiveSource } from '@/components/ArchiveEvidence';
+import { type ArchiveSource } from '@/components/ArchiveEvidence';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
@@ -33,6 +35,7 @@ import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
 import { formatDateOnlyLocal } from '@/utils/date';
 import { normalizeRouteParam } from '@/utils/text';
+import { birthdayPickerValue, formatBirthday } from '@/utils/birthdays';
 
 type Relationship = {
   relationship_id: string;
@@ -140,6 +143,7 @@ export default function ContactDetailScreen() {
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [includeBirthYear, setIncludeBirthYear] = useState(true);
   const [draftDate, setDraftDate] = useState<Date | null>(null);
 
   const heroOpacity = useRef(new Animated.Value(0)).current;
@@ -250,7 +254,7 @@ export default function ContactDetailScreen() {
   const birthdayValue = draft?.birthday ?? '';
   const pickerDate = useMemo(() => {
     if (!birthdayValue) return new Date();
-    const parsed = new Date(`${birthdayValue}T00:00:00`);
+    const parsed = new Date(`${birthdayPickerValue(birthdayValue)}T00:00:00`);
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   }, [birthdayValue]);
   const activePickerDate = draftDate ?? pickerDate;
@@ -350,6 +354,7 @@ export default function ContactDetailScreen() {
 
   const handleOpenDatePicker = () => {
     setDraftDate(pickerDate);
+    setIncludeBirthYear(!birthdayValue.startsWith('--'));
     setShowDatePicker(true);
   };
 
@@ -360,7 +365,11 @@ export default function ContactDetailScreen() {
 
   const handleConfirmDate = () => {
     if (draftDate && draft) {
-      setDraft({ ...draft, birthday: formatIsoDate(draftDate) });
+      const value = formatIsoDate(draftDate);
+      setDraft({
+        ...draft,
+        birthday: includeBirthYear ? value : `--${value.slice(5)}`,
+      });
     }
     handleCloseDatePicker();
   };
@@ -518,7 +527,7 @@ export default function ContactDetailScreen() {
             style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
           >
             <Text style={birthdayValue ? styles.dateFieldText : styles.dateFieldPlaceholder}>
-              {birthdayValue || 'YYYY-MM-DD'}
+              {formatBirthday(birthdayValue) || 'YYYY-MM-DD'}
             </Text>
             <Ionicons name="calendar" size={18} color={theme.colors.accentDeep} />
           </Pressable>
@@ -563,60 +572,8 @@ export default function ContactDetailScreen() {
           />
         </Card>
 
-        {contact?.knowledge?.length ? (
-          <Card style={styles.section}>
-            <Text style={styles.sectionTitle}>Known about this person</Text>
-            {contact.knowledge.map((item) => (
-              <View key={item.knowledge_id} style={{ gap: 8, marginBottom: 16 }}>
-                <TextInput
-                  multiline
-                  style={[styles.input, styles.textArea]}
-                  value={item.statement}
-                  onChangeText={(statement) =>
-                    setContact((current) =>
-                      current
-                        ? {
-                            ...current,
-                            knowledge: current.knowledge?.map((row) =>
-                              row.knowledge_id === item.knowledge_id ? { ...row, statement } : row,
-                            ),
-                          }
-                        : current,
-                    )
-                  }
-                />
-                <Text>
-                  {item.status === 'current'
-                    ? 'Current'
-                    : item.status === 'historical'
-                      ? 'Historical'
-                      : item.status === 'conflicted'
-                        ? 'Conflicting information'
-                        : 'Uncertain'}
-                </Text>
-                <ArchiveEvidence sources={item.evidence} />
-                <Button
-                  label="Save correction"
-                  variant="secondary"
-                  onPress={async () => {
-                    try {
-                      await apiFetch(
-                        `/mobile/intelligence/knowledge/${encodeURIComponent(item.knowledge_id)}`,
-                        {
-                          token,
-                          method: 'PATCH',
-                          body: JSON.stringify({ statement: item.statement }),
-                        },
-                      );
-                      showSuccess('Correction saved.');
-                    } catch {
-                      showError('Could not save this correction.');
-                    }
-                  }}
-                />
-              </View>
-            ))}
-          </Card>
+        {contact && !isCreating ? (
+          <KnowledgeFacts subject={`contact:${contact.contact_id}`} />
         ) : null}
 
         {!isCreating ? (
@@ -665,6 +622,17 @@ export default function ContactDetailScreen() {
           >
             <Text style={styles.datePickerDoneText}>Done</Text>
           </Pressable>
+        </View>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 16,
+          }}
+        >
+          <Text style={styles.dateFieldText}>Include birth year</Text>
+          <Switch value={includeBirthYear} onValueChange={setIncludeBirthYear} />
         </View>
         <LightDateTimePicker
           mode="single"

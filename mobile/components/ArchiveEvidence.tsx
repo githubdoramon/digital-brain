@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Linking, ScrollView, Text, View } from 'react-native';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -24,19 +24,34 @@ export function ArchiveEvidence({ sources }: { sources: ArchiveSource[] }) {
     sent_at?: string;
     current?: boolean;
     speaker?: string | null;
+    source_link?: { url: string; label: string; target: 'message' | 'conversation' } | null;
   } | null>(null);
   const [error, setError] = React.useState(false);
+  const [linkError, setLinkError] = React.useState(false);
 
-  async function open(id: number, part = 0) {
+  async function open(id: number, part = 0, original = false) {
     setSource(null);
     setError(false);
+    setLinkError(false);
     setLoading(true);
-    setVisible(true);
+    setVisible(!original);
     try {
       const result = await apiFetch(`/mobile/intelligence/sources/${id}?part=${part}`, { token });
       setSource(result as typeof source);
+      const link = (result as NonNullable<typeof source>).source_link;
+      if (original && link) {
+        try {
+          await Linking.openURL(link.url);
+          return;
+        } catch {
+          // Retain the archived evidence when the original app cannot be opened.
+          setLinkError(true);
+        }
+      }
+      setVisible(true);
     } catch {
       setError(true);
+      setVisible(true);
     } finally {
       setLoading(false);
     }
@@ -50,10 +65,17 @@ export function ArchiveEvidence({ sources }: { sources: ArchiveSource[] }) {
           <Button
             label={
               item.sent_at
-                ? `View source · ${new Date(item.sent_at).toLocaleDateString()}`
-                : 'View source'
+                ? `Open source · ${new Date(item.sent_at).toLocaleDateString()}`
+                : 'Open source'
             }
             variant="secondary"
+            disabled={loading}
+            onPress={() => void open(item.source_id, item.part, true)}
+          />
+          <Button
+            label="View archived source"
+            variant="secondary"
+            disabled={loading}
             onPress={() => void open(item.source_id, item.part)}
           />
         </View>
@@ -68,10 +90,24 @@ export function ArchiveEvidence({ sources }: { sources: ArchiveSource[] }) {
             <Text>Could not load this source.</Text>
           ) : (
             <>
+              {linkError ? (
+                <Text>
+                  Could not open the original conversation. The archived source is available below.
+                </Text>
+              ) : null}
               {source?.current === false ? (
                 <Text>This source has changed since this information was learned.</Text>
               ) : null}
               <Text style={{ color: theme.colors.ink }}>{source?.text}</Text>
+              {source?.source_link ? (
+                <Button
+                  label={source.source_link.label}
+                  variant="secondary"
+                  onPress={() =>
+                    void Linking.openURL(source.source_link!.url).catch(() => setLinkError(true))
+                  }
+                />
+              ) : null}
             </>
           )}
           <Button label="Close" variant="secondary" onPress={() => setVisible(false)} />

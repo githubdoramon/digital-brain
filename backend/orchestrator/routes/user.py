@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 
 import devices as devices_service
-import user_facts
 import user_locations
 from auth import check_user_allowed, get_current_user, verify_google_token
 from notifications.preferences import (
@@ -25,8 +24,6 @@ from schemas import (
     NotificationTypeChannelsUpdateIn,
     NotificationTypeSettingsOut,
     PushNotificationsUpdateIn,
-    UserFactOut,
-    UserFactUpdateIn,
     UserLocationOut,
     UserLocationUpdateIn,
 )
@@ -299,60 +296,5 @@ def create_user_router() -> APIRouter:
         if not location:
             raise HTTPException(status_code=404, detail="Location not found near capture time")
         return {"location": location}
-
-    @router.get("/user/facts", response_model=list[UserFactOut])
-    @router.get("/mobile/user/facts", response_model=list[UserFactOut])
-    def list_user_facts(user: dict = Depends(get_current_user)):
-        user_email = user.get("email")
-        if not user_email:
-            raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        facts = user_facts.get_user_facts(user_email)
-        return [UserFactOut(**f) for f in facts]
-
-    @router.put("/user/facts/{fact_id}", response_model=UserFactOut)
-    @router.put("/mobile/user/facts/{fact_id}", response_model=UserFactOut)
-    def update_user_fact(
-        fact_id: str,
-        payload: UserFactUpdateIn,
-        user: dict = Depends(get_current_user),
-    ):
-        user_email = user.get("email")
-        if not user_email:
-            raise HTTPException(status_code=400, detail="Authenticated user email missing")
-
-        existing = user_facts.get_fact(fact_id)
-        if not existing or existing.get("user_email") != user_email:
-            raise HTTPException(status_code=404, detail="Fact not found")
-
-        try:
-            updated = user_facts.update_fact(
-                fact_id,
-                content=payload.content,
-                category=payload.category,
-                importance=payload.importance,
-                fact_mode=payload.fact_mode,
-                rule_type=payload.rule_type,
-                rule_scope=payload.rule_scope,
-                rule_payload=payload.rule_payload,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not updated:
-            raise HTTPException(status_code=404, detail="Fact not found")
-        return UserFactOut(**updated)
-
-    @router.delete("/user/facts/{fact_id}", status_code=204)
-    @router.delete("/mobile/user/facts/{fact_id}", status_code=204)
-    def delete_user_fact(fact_id: str, user: dict = Depends(get_current_user)):
-        user_email = user.get("email")
-        if not user_email:
-            raise HTTPException(status_code=400, detail="Authenticated user email missing")
-
-        existing = user_facts.get_fact(fact_id)
-        if not existing or existing.get("user_email") != user_email:
-            raise HTTPException(status_code=404, detail="Fact not found")
-
-        user_facts.delete_fact(fact_id)
-        return Response(status_code=204)
 
     return router

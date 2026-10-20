@@ -13,7 +13,9 @@ Examples:
 - `/mobile/ask/stream`
 - `/mobile/threads`
 - `/mobile/threads/{id}`
-- `/mobile/intelligence/*` (knowledge, corrections, projects, source evidence and analysis status)
+- `/mobile/knowledge/*` (knowledge, corrections, summaries and learning progress)
+- `/mobile/rules/*` (explicit user instructions)
+- `/mobile/intelligence/*` (projects, source evidence and analysis status)
 - `/mobile/commands/event/confirm`
 - `/mobile/glasses/commands` (fixed gate intents; no transcript or LLM)
 - `/mobile/glasses/speech-eval/*` (explicit replay experiments; authenticated bounded audio)

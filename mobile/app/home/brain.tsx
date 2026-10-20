@@ -74,7 +74,7 @@ import {
 } from '@/chat/threads';
 import { getUnreadThreadIds, markThreadRead } from '@/chat/threadNotifications';
 import type { GeneratedFile } from '@/chat/generatedFiles';
-import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
+import { externalMessageUrl, routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
   CommandResolvedMeta,
   CommandResult as ThreadCommandResult,
@@ -2659,11 +2659,16 @@ export function ChatConversationScreen({
 
   const handleLinkedItemPress = useCallback(
     (item: LinkedItem) => {
+      const external = externalMessageUrl(item);
+      if (external) {
+        void Linking.openURL(external).catch(() => showError('Could not open this conversation.'));
+        return;
+      }
       const route = routeForLinkedItem(item);
       if (!route) return;
       router.push(route);
     },
-    [router],
+    [router, showError],
   );
 
   const handleGeneratedFilePress = useCallback(

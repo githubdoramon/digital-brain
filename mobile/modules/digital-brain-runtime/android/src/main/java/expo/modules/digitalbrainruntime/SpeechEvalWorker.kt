@@ -74,15 +74,18 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
           val unfinished = samples.any { sample -> (0..value.getInt("repeats")).any { repetition -> "$candidate:${sample.getInt("index")}:$repetition" !in existing } }
           if (!unfinished) continue
           guard()
-          value.put("message", "Preparing ${candidate.removePrefix("local:").removePrefix("server:")}")
+          val candidateLabel = SpeechEvalServerCandidate.parse(candidate)?.label ?: candidate.removePrefix("local:")
+          value.put("message", "Preparing $candidateLabel")
           persist(value)
-          var preparationError: String? = null
+          var preparationError: Exception? = null
+          val preparationStarted = SystemClock.elapsedRealtime()
           var model: File? = null
           try {
             if (candidate.startsWith("local:")) model = download(candidate)
             else request(candidate, "prepare")
           } catch (e: CancellationException) { throw e }
-          catch (_: Exception) { guard(); preparationError = "preparation_failed" }
+          catch (error: Exception) { guard(); preparationError = error }
+          val preparationMs = SystemClock.elapsedRealtime() - preparationStarted
           for (sample in samples) for (repetition in 0..value.getInt("repeats")) {
             val key = "$candidate:${sample.getInt("index")}:$repetition"
             if (key in existing) continue
@@ -97,7 +100,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
               .put("tags", sample.optJSONArray("tags") ?: JSONArray())
             val started = SystemClock.elapsedRealtime()
             try {
-              check(preparationError == null) { preparationError ?: "preparation_failed" }
+              preparationError?.let { throw it }
               val audio = File(SpeechEvalStore.root(c, owner), "$runId/${sample.getInt("index")}.wav").readBytes()
               require(SpeechEvalStore.hash(audio) == sample.getString("sha256")) { "audio_changed" }
               val pcm = SpeechEvalPolicy.pcm(audio)
@@ -151,9 +154,10 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
               guard()
-              val allowed = setOf("preparation_failed", "insufficient_memory", "warm_context_lost", "inference_timeout", "audio_changed", "server_busy", "server_timeout", "evaluation_disabled", "inference_failed", "engine_unavailable")
-              row.put("status", SpeechEvalResult.FAILED.key).put("error", e.message?.takeIf { it in allowed } ?: "evaluation_failed")
+              row.put("status", SpeechEvalResult.FAILED.key)
                 .put("attemptDurationMs", SystemClock.elapsedRealtime() - started)
+              SpeechEvalFailures.annotate(row, e)
+              if (preparationError != null) row.put("preparationDurationMs", preparationMs)
               bridge?.release(); loaded = null
             } catch (_: OutOfMemoryError) {
               row.put("status", SpeechEvalResult.FAILED.key).put("error", "insufficient_memory")
@@ -263,8 +267,8 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
     val token = checkNotNull(RuntimeGoogleIdTokenProvider.getFreshIdToken(c, config.googleWebClientId))
     guard()
     val authMs = SystemClock.elapsedRealtime() - authStart
-    val model = candidate.removePrefix("server:")
-    val http = URL("${config.apiBaseUrl.trimEnd('/')}/mobile/glasses/speech-eval/$operation?model=$model&cold=$cold").openConnection() as HttpURLConnection
+    val selection = checkNotNull(SpeechEvalServerCandidate.parse(candidate))
+    val http = URL("${config.apiBaseUrl.trimEnd('/')}/mobile/glasses/speech-eval/$operation?${selection.query}&cold=$cold").openConnection() as HttpURLConnection
     connection = http
     try {
       http.requestMethod = "POST"; http.instanceFollowRedirects = false
@@ -277,15 +281,13 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
       val uploadMs = SystemClock.elapsedRealtime() - uploadStart
       val responseStart = SystemClock.elapsedRealtime()
       if (http.responseCode !in 200..299) {
-        val safeReasons = setOf("server_busy", "server_timeout", "evaluation_disabled", "inference_failed", "engine_unavailable", "invalid_audio", "invalid_model")
-        val reason = runCatching { JSONObject(String(readResponse(http.errorStream), Charsets.UTF_8)).optString("detail") }.getOrNull()
-        val failure = reason?.takeIf { it in safeReasons } ?: when (http.responseCode) {
-          429 -> "server_busy"; 504 -> "server_timeout"; else -> "evaluation_failed"
-        }
-        throw IllegalStateException(failure)
+        val body = runCatching { JSONObject(String(readResponse(http.errorStream), Charsets.UTF_8)) }.getOrNull()
+        throw SpeechEvalFailures.http(http.responseCode, body)
       }
       val bytes = readResponse(http.inputStream)
-      guard(); return JSONObject(String(bytes, Charsets.UTF_8)).put("authMs", authMs)
+      val response = JSONObject(String(bytes, Charsets.UTF_8))
+      SpeechEvalFailures.validateCpuResponse(response, selection.threads)
+      guard(); return response.put("authMs", authMs)
         .put("requestWriteMs", uploadMs).put("responseWaitMs", SystemClock.elapsedRealtime() - responseStart)
     } finally { http.disconnect(); connection = null }
   }

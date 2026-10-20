@@ -39,6 +39,34 @@ function percent(value: number | null) {
   return value == null ? '—' : `${(value * 100).toFixed(1)}%`;
 }
 
+function failureMessage(reason: string) {
+  switch (reason) {
+    case 'server_update_required':
+      return 'Update your server, then start a new comparison.';
+    case 'cpu_configuration_mismatch':
+      return 'The server could not use the selected settings. Check your server and try again.';
+    case 'auth_rejected':
+      return 'Sign in again, then retry the comparison.';
+    case 'evaluation_disabled':
+      return 'Enable speech comparisons on your server, then try again.';
+    case 'network_unavailable':
+    case 'network_timeout':
+    case 'server_timeout':
+    case 'tls_failed':
+    case 'endpoint_unavailable':
+    case 'upstream_unavailable':
+      return 'Could not reach your server. Check the connection and try again.';
+    case 'server_busy':
+      return 'Your server is busy. Try again when it is available.';
+    case 'insufficient_memory':
+      return 'There was not enough memory. Try a smaller model.';
+    case 'cache_storage_full':
+      return 'There was not enough storage. Free some space and try again.';
+    default:
+      return 'Some samples could not be processed. Export the results for details.';
+  }
+}
+
 export default function SpeechComparisonScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -52,6 +80,7 @@ export default function SpeechComparisonScreen() {
   ]);
   const [folder, setFolder] = React.useState<string | null>(null);
   const [repeats, setRepeats] = React.useState(2);
+  const [serverThreads, setServerThreads] = React.useState<number[]>([2]);
   const [status, setStatus] = React.useState<SpeechTestStatus | null>(null);
   const [busy, setBusy] = React.useState(false);
   const busyRef = React.useRef(false);
@@ -183,6 +212,31 @@ export default function SpeechComparisonScreen() {
               ))}
           </Card>
         ))}
+        {selected.some((id) => id.startsWith('server:')) && (
+          <Card style={styles.card}>
+            <Text style={styles.title}>Server CPU threads</Text>
+            <Text style={styles.body}>
+              Each selected server model runs separately at every selected thread count.
+            </Text>
+            {[2, 4, 8].map((count) => (
+              <View key={count} style={styles.row}>
+                <Text style={styles.label}>{count} threads</Text>
+                <Switch
+                  accessibilityLabel={`Compare ${count} server CPU threads`}
+                  disabled={busy || active}
+                  value={serverThreads.includes(count)}
+                  onValueChange={(enabled) =>
+                    setServerThreads((current) =>
+                      enabled
+                        ? [...current, count].sort((a, b) => a - b)
+                        : current.filter((value) => value !== count),
+                    )
+                  }
+                />
+              </View>
+            ))}
+          </Card>
+        )}
         <Card style={styles.card}>
           <Text style={styles.title}>Repetitions</Text>
           <Text style={styles.body}>
@@ -206,7 +260,13 @@ export default function SpeechComparisonScreen() {
           </View>
           <Button
             label="Start new comparison"
-            disabled={busy || active || !folder || selected.length === 0}
+            disabled={
+              busy ||
+              active ||
+              !folder ||
+              selected.length === 0 ||
+              (selected.some((id) => id.startsWith('server:')) && serverThreads.length === 0)
+            }
             loading={busy}
             onPress={() =>
               void run(async () => {
@@ -214,7 +274,12 @@ export default function SpeechComparisonScreen() {
                   await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
                   );
-                await glassesNative().startGlassesSpeechTest(folder!, selected, repeats);
+                const candidates = selected.flatMap((id) =>
+                  id.startsWith('server:')
+                    ? serverThreads.map((threads) => `${id}@threads=${threads}`)
+                    : [id],
+                );
+                await glassesNative().startGlassesSpeechTest(folder!, candidates, repeats);
               })
             }
           />
@@ -268,7 +333,10 @@ export default function SpeechComparisonScreen() {
           .map((row) => (
             <Card key={`${row.candidate}:${row.mode}`} style={styles.card}>
               <Text style={styles.title}>
-                {row.candidate.replace('local:', 'Phone · ').replace('server:', 'Server · ')}
+                {row.candidate
+                  .replace('local:', 'Phone · ')
+                  .replace('server:', 'Server · ')
+                  .replace(/@threads=(\d+)/, ' · $1 threads')}
               </Text>
               <Text style={styles.label}>
                 {row.mode === 'cold' ? 'Fresh model' : 'Model ready'}
@@ -277,6 +345,13 @@ export default function SpeechComparisonScreen() {
                 Correct: {row.correct}/{row.completed} ({percent(row.accuracy)}) · Failed:{' '}
                 {row.failures}
               </Text>
+              {Array.from(new Set(Object.keys(row.failureReasons ?? {}).map(failureMessage))).map(
+                (message) => (
+                  <Text key={message} style={styles.body}>
+                    {message}
+                  </Text>
+                ),
+              )}
               <Text style={styles.body}>
                 Missed: {row.missed}/{row.positives} · Wrong command: {row.wrong}/{row.positives}
               </Text>

@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import re
 import threading
 import time
 from typing import Any
 
 import async_jobs
-import contacts as contacts_service
-from agents.contacts.resolver import resolve_contacts_from_text
-from contact_enrichment_proposals import (
-    create_profession_proposal,
-    create_relationship_proposal,
-)
 from observability.logger import get_runtime_logger
 from scheduled_jobs import CONTACT_ENRICHMENT
 
@@ -36,7 +29,9 @@ def enqueue_contact_enrichment(
     cleaned_email = str(user_email or "").strip()
     cleaned_key = str(source_key or "").strip()
     cleaned_text = str(source_text or "").strip()
-    cleaned_contact_ids = list(dict.fromkeys(str(value).strip() for value in contact_ids if str(value).strip()))
+    cleaned_contact_ids = list(
+        dict.fromkeys(str(value).strip() for value in contact_ids if str(value).strip())
+    )
     if not cleaned_email or not cleaned_key or not cleaned_text or not cleaned_contact_ids:
         return None
 
@@ -158,59 +153,17 @@ def analyze_contact_enrichment(
     if not text or not target_ids:
         return {"relationship_proposals": 0, "profession_proposals": 0}
 
-    result = resolve_contacts_from_text(
-        text,
-        user_email,
-        include_enrichment=True,
-    )
-    relationship_count = 0
-    for suggestion in result.get("suggested_relationships") or []:
-        if not isinstance(suggestion, dict):
-            continue
-        from_id = str(suggestion.get("from_contact_id") or "").strip()
-        to_id = str(suggestion.get("to_contact_id") or "").strip()
-        if from_id not in target_ids or to_id not in target_ids:
-            continue
-        if create_relationship_proposal(
-            user_email=user_email,
-            contact_id=from_id,
-            related_contact_id=to_id,
-            relationship_type=str(suggestion.get("type") or ""),
-            reciprocal_type=str(suggestion.get("other_type") or "") or None,
-            source_event_id=source_event_id,
-            confidence="medium",
-            evidence=str(suggestion.get("relationship_hint") or "") or None,
-        ):
-            relationship_count += 1
+    import knowledge_jobs
 
-    profession_count = 0
-    try:
-        self_contact = contacts_service.find_self_contact(user_email)
-    except Exception:
-        logger.warning("[contact_enrichment_jobs] self-contact lookup unavailable")
-        self_contact = None
-    self_contact_id = str((self_contact or {}).get("contact_id") or "").strip()
-    for contact in result.get("resolved_contacts") or []:
-        if not isinstance(contact, dict):
-            continue
-        contact_id = str(contact.get("contact_id") or "").strip()
-        profession = str(contact.get("inferred_profession") or "").strip()
-        if contact_id not in target_ids or contact_id == self_contact_id or not profession:
-            continue
-        current = contacts_service.get_contact(contact_id)
-        if not current or re.search(r"(?im)^profession:\s*", str(current.get("comments") or "")):
-            continue
-        if create_profession_proposal(
-            user_email=user_email,
-            contact_id=contact_id,
-            profession=profession,
-            source_event_id=source_event_id,
-        ):
-            profession_count += 1
-
+    # One extractor owns automatic/proposed decisions for both facts and graph changes.
+    # Retain the original event or user command as evidence, never generated suggestions.
+    if source_event_id:
+        knowledge_jobs.enqueue_event(user_email, source_event_id)
+    else:
+        knowledge_jobs.enqueue_contact_context(user_email, text, sorted(target_ids))
     return {
-        "relationship_proposals": relationship_count,
-        "profession_proposals": profession_count,
+        "relationship_proposals": 0,
+        "profession_proposals": 0,
     }
 
 

@@ -10,7 +10,7 @@ class ContactIn(BaseModel):
     contact_id: str
     display_name: str
     aliases: list[str] | None = []
-    birthday: date | None = None
+    birthday: date | str | None = None
     emails: list[str] | None = []
     phones: list[str] | None = []
     links: list[str] | None = []
@@ -18,6 +18,13 @@ class ContactIn(BaseModel):
     comments: str | None = None
     external_id: str | None = None
     relationships: list[ContactRelationshipIn] | None = []
+
+    @field_validator("birthday", mode="before")
+    @classmethod
+    def validate_birthday(cls, value):
+        from birthdays import parse_birthday
+
+        return parse_birthday(value)
 
 
 class ContactEnsureIn(BaseModel):
@@ -692,7 +699,8 @@ class UiDirectivesOut(BaseModel):
 
 
 class LinkedItemOut(BaseModel):
-    entity_type: Literal["event", "document", "contact", "place", "conversation"]
+    entity_type: Literal["event", "document", "contact", "place", "conversation", "message"]
+    source_url: str | None = None
     entity_id: str
     title: str
     subtitle: str | None = None
@@ -875,35 +883,8 @@ class NewsTopicIn(BaseModel):
     enabled: bool = True
 
 
-class UserFactOut(BaseModel):
-    """User fact as returned from the API."""
-
-    fact_id: str
-    user_email: str
-    content: str
-    category: str
-    importance: int
-    fact_mode: str = "soft"
-    rule_type: str | None = None
-    rule_scope: list[str] = Field(default_factory=list)
-    rule_payload: dict[str, Any] = Field(default_factory=dict)
-    source_thread_id: str | None = None
-    access_count: int = 0
-    last_accessed_at: datetime | str | None = None
-    created_at: datetime | str | None = None
-    updated_at: datetime | str | None = None
 
 
-class UserFactUpdateIn(BaseModel):
-    """Partial update for a user fact."""
-
-    content: str | None = None
-    category: str | None = None
-    importance: int | None = Field(default=None, ge=1, le=10)
-    fact_mode: str | None = None
-    rule_type: str | None = None
-    rule_scope: list[str] | None = None
-    rule_payload: dict[str, Any] | None = None
 
 
 class NewsTopicOut(BaseModel):

@@ -10,7 +10,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
         lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
     monkeypatch.setattr(
-        "prompts.context.get_user_facts_context",
+        "prompts.context.get_user_context",
         lambda *_args, **_kwargs: "Contact resolution rules:\n- Sage means Patricia.",
     )
 
@@ -70,7 +70,7 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
         "prompts.context.get_self_context",
         lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
-    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_user_context", lambda *_args, **_kwargs: None)
 
     def fake_call_llm_json(prompt: str, **_kwargs):
         captured["prompt"] = prompt
@@ -109,7 +109,7 @@ def test_event_follow_up_field_inference_uses_low_effort_and_self_context(monkey
         "prompts.context.get_self_context",
         lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
-    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_user_context", lambda *_args, **_kwargs: None)
 
     def fake_call_llm_json(prompt: str, **_kwargs):
         captured["prompt"] = prompt
@@ -135,7 +135,7 @@ def test_event_follow_up_field_inference_uses_low_effort_and_self_context(monkey
 def test_event_extraction_infers_immediate_past_time(monkeypatch):
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr("prompts.context.get_self_context", lambda _email: None)
-    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_user_context", lambda *_args, **_kwargs: None)
 
     fixed_now = event_handler.datetime(2026, 5, 7, 12, 30, 0)
 
@@ -178,7 +178,7 @@ def test_event_extraction_infers_immediate_past_time(monkeypatch):
 def test_event_extraction_infers_relative_past_time(monkeypatch):
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr("prompts.context.get_self_context", lambda _email: None)
-    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_user_context", lambda *_args, **_kwargs: None)
 
     fixed_now = event_handler.datetime(2026, 5, 7, 12, 30, 0)
 

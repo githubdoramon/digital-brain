@@ -105,14 +105,14 @@ def _get_daily_briefing_user_context(user_email: str | None, query: str) -> str:
     """Build user identity + facts context for daily briefing prompts."""
     if not user_email:
         return ""
-    from prompts.context import get_self_context, get_user_facts_context
+    from prompts.context import get_self_context, get_user_context
 
     parts: list[str] = []
     self_ctx = get_self_context(user_email)
     if self_ctx:
         parts.append(self_ctx)
 
-    facts_ctx = get_user_facts_context(user_email, query)
+    facts_ctx = get_user_context(user_email, query)
     if facts_ctx:
         parts.append(facts_ctx)
 
@@ -944,10 +944,10 @@ def _fetch_upcoming_birthdays(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, birthday
+            SELECT contact_id, display_name, birthday, birthday_month, birthday_day
             FROM contacts
-            WHERE birthday IS NOT NULL
-              AND (EXTRACT(MONTH FROM birthday), EXTRACT(DAY FROM birthday))
+            WHERE (birthday IS NOT NULL OR birthday_month IS NOT NULL)
+              AND (COALESCE(EXTRACT(MONTH FROM birthday),birthday_month), COALESCE(EXTRACT(DAY FROM birthday),birthday_day))
                   IN (SELECT unnest(%s::int[]), unnest(%s::int[]))
             ORDER BY display_name
             """,
@@ -960,17 +960,25 @@ def _fetch_upcoming_birthdays(
 
     results: list[dict[str, Any]] = []
     for row in rows:
-        bday: date = row["birthday"]
-        bday_this_year = bday.replace(year=local_date.year)
+        from birthdays import birthday_value
+
+        bday = row["birthday"] or date(2000, row["birthday_month"], row["birthday_day"])
+        try:
+            bday_this_year = bday.replace(year=local_date.year)
+        except ValueError:
+            continue  # A recurring leap-day birthday has no occurrence this year.
         # handle year wrap (birthday in early Jan when today is late Dec)
         if bday_this_year < local_date:
-            bday_this_year = bday.replace(year=local_date.year + 1)
+            try:
+                bday_this_year = bday.replace(year=local_date.year + 1)
+            except ValueError:
+                continue
         days_away = (bday_this_year - local_date).days
         results.append(
             {
                 "contact_id": row["contact_id"],
                 "display_name": row["display_name"],
-                "birthday": bday.isoformat(),
+                "birthday": birthday_value(row),
                 "days_away": days_away,
                 "is_today": days_away == 0,
             }

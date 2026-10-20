@@ -247,7 +247,20 @@ SCHEDULED_INTELLIGENCE = ScheduledJobSpec(
     trigger_source="backend scheduler",
 )
 
+KNOWLEDGE_LEARNING = ScheduledJobSpec(
+    job_type="knowledge_learning",
+    label="Knowledge learning",
+    worker_module="knowledge_jobs",
+    schedule_kind="polling",
+    time_utc=None,
+    poll_seconds=10,
+    retry_seconds=300,
+    description="Learns from Brain chats, revisits retained history, and refreshes entity summaries.",
+    trigger_source="persisted evidence and background worker",
+)
+
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
+    KNOWLEDGE_LEARNING,
     SCHEDULED_INTELLIGENCE,
     CONVERSATION_INDEX,
     PROPOSED_EVENTS_DAILY,
@@ -294,6 +307,13 @@ def list_scheduled_job_statuses() -> list[dict[str, Any]]:
 
 def _load_runtime_status() -> dict[str, dict[str, Any]]:
     status: dict[str, dict[str, Any]] = {}
+    try:
+        import knowledge_jobs
+
+        status[KNOWLEDGE_LEARNING.job_type] = knowledge_jobs.get_worker_status()
+    except Exception:
+        status[KNOWLEDGE_LEARNING.job_type] = {"worker_alive": False}
+
     try:
         import intelligence_jobs
 

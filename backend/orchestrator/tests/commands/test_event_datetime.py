@@ -34,8 +34,8 @@ def test_event_extraction_defaults_naive_model_time_to_client_timezone(monkeypat
 
     monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
     monkeypatch.setattr("tags_manager.MAJOR_TAGS", ["work", "personal"])
-    monkeypatch.setattr("user_facts.get_hard_rules_context", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("user_facts.get_facts_for_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("user_rules.get_rules_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_knowledge_context", lambda *_args, **_kwargs: None)
 
     result = event_handler._extract_event_entities_with_llm(
         "met at 10am",
@@ -64,8 +64,8 @@ def test_event_extraction_infers_lunch_time_from_date_only(monkeypatch):
 
     monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
     monkeypatch.setattr("tags_manager.MAJOR_TAGS", ["work", "personal"])
-    monkeypatch.setattr("user_facts.get_hard_rules_context", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("user_facts.get_facts_for_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("user_rules.get_rules_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("prompts.context.get_knowledge_context", lambda *_args, **_kwargs: None)
 
     result = event_handler._extract_event_entities_with_llm(
         "yesterday I went out for lunch at dragao",

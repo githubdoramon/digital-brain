@@ -27,6 +27,36 @@ Linked items may now include:
 - `contact`
 - `place`
 - `conversation` (thread ID plus matching message ID; inspected original messages)
+- `message` (inspected messenger evidence with a controller-generated `source_url`)
+
+Messenger destinations are derived from owner-checked archive identifiers, never
+model URLs or message text. WhatsApp phone-number identifiers open direct chats.
+Telegram channel/supergroup identifiers open specific messages with
+`t.me/c/<channel>/<message>`. Telegram direct chats use a known username or phone
+number and do not claim exact-message navigation. Unsupported destinations are
+not emitted as external message chips. The controller validates allowed URL
+patterns before emitting a chip; clients open message chips externally while
+other entity chips keep their existing internal routes.
+
+Web archive messages expose the same destination. Mobile fact/task/proposal source
+evidence opens the original when supported, with a separate archived-source action
+and saved-evidence fallback on failure. Deleted Telegram messages do not get exact
+message links; a known conversation may still be offered. Links do not grant
+access to private groups. OS/browser app-link preferences decide whether a
+universal link opens the installed application or its website.
+
+Migration `0078_messaging_source_links.sql` adds nullable conversation username and
+phone metadata. Telegram refreshes it from observed chat entities, including
+replayed recent messages, without duplicating canonical messages. Existing
+Telegram channel/supergroup and WhatsApp phone links require no reimport; Telegram
+direct-chat links appear when chat metadata is observed again. No group invite is
+created, no message is sent, and no source URLs are exported as telemetry.
+
+Validation on 2026-10-20: 1,279 backend tests passed with eight integration skips,
+including link generation, unsupported/malicious destinations, owner isolation,
+metadata refresh and controller reference tests. Web/mobile TypeScript and focused
+ESLint passed. PostgreSQL tests used a disposable database; installed-app opening
+and production deployment were not verified.
 
 ## Selection Model
 

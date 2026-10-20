@@ -41,6 +41,7 @@ def _search_mobile_contacts(
     place_ids: list[str] | None,
     event_ids: list[str] | None,
     include_voice_profile: bool = False,
+    user_email: str | None = None,
 ) -> list[dict[str, Any]]:
     filters = [
         """
@@ -50,12 +51,18 @@ def _search_mobile_contacts(
     params: list[Any] = [f"{contacts_service.EXTERNAL_CONTACT_PREFIX}%"]
     clean_query = str(query or "").strip()
 
+    knowledge_ids = []
+    if clean_query and user_email:
+        import knowledge
+
+        knowledge_ids = list(knowledge.contact_matches(user_email, clean_query))
     if clean_query:
         like = f"%{clean_query}%"
         filters.append(
             """
             (
-                unaccent(COALESCE(c.display_name, '')) ILIKE unaccent(%s)
+                c.contact_id = ANY(%s)
+                OR unaccent(COALESCE(c.display_name, '')) ILIKE unaccent(%s)
                 OR EXISTS (
                     SELECT 1
                     FROM unnest(COALESCE(c.aliases, ARRAY[]::TEXT[])) AS alias
@@ -80,7 +87,7 @@ def _search_mobile_contacts(
             )
             """
         )
-        params.extend([like, like, like, like, like, like])
+        params.extend([knowledge_ids, like, like, like, like, like, like])
 
     if contact_ids is not None:
         if not contact_ids:
@@ -154,8 +161,7 @@ def _is_mobile_request(request: Request) -> bool:
     return request.url.path.startswith("/mobile/")
 
 
-def create_contacts_router(
-) -> APIRouter:
+def create_contacts_router() -> APIRouter:
     router = APIRouter()
 
     @router.post("/ingest/contact")
@@ -187,7 +193,12 @@ def create_contacts_router(
         clean_contact_ids = _clean_id_list(contact_ids)
         clean_place_ids = _clean_id_list(place_ids)
         clean_event_ids = _clean_id_list(event_ids)
-        if query or clean_contact_ids is not None or clean_place_ids is not None or clean_event_ids is not None:
+        if (
+            query
+            or clean_contact_ids is not None
+            or clean_place_ids is not None
+            or clean_event_ids is not None
+        ):
             return {
                 "contacts": _search_mobile_contacts(
                     query=query,
@@ -195,9 +206,12 @@ def create_contacts_router(
                     place_ids=clean_place_ids,
                     event_ids=clean_event_ids,
                     include_voice_profile=include_voice_profile,
+                    user_email=user["email"],
                 )
             }
-        return {"contacts": contacts_service.list_contacts(include_voice_profile=include_voice_profile)}
+        return {
+            "contacts": contacts_service.list_contacts(include_voice_profile=include_voice_profile)
+        }
 
     @router.get("/contact-groups")
     @router.get("/mobile/contact-groups")
@@ -301,7 +315,9 @@ def create_contacts_router(
             raise HTTPException(status_code=404, detail="Contact not found")
         import intelligence
 
-        contact["knowledge"] = intelligence.knowledge_for(user.get("email") or user.get("user_email"), contact_id=contact_id)
+        contact["knowledge"] = intelligence.knowledge_for(
+            user.get("email") or user.get("user_email"), contact_id=contact_id
+        )
         return contact
 
     @router.get("/mobile/contacts/{contact_id}/places")
@@ -440,7 +456,9 @@ def create_contacts_router(
         payload_body = payload.payload
         person = payload_body.person if payload_body else None
         if not person or not person.id:
-            raise HTTPException(status_code=400, detail="Webhook payload is missing person information")
+            raise HTTPException(
+                status_code=400, detail="Webhook payload is missing person information"
+            )
 
         external_id = str(person.id)
 

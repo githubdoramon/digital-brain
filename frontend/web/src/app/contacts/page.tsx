@@ -1302,7 +1302,8 @@ export default function ContactsPage() {
                 <label style={{ display: "grid", gap: "6px" }}>
                   <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Birthday</span>
                   <input
-                    type="date"
+                    type="text"
+                    placeholder="YYYY-MM-DD or --MM-DD"
                     value={formState.birthday}
                     onChange={handleChange("birthday")}
                     style={{

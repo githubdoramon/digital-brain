@@ -20,6 +20,7 @@ import emergency_stock_jobs
 import event_tag_jobs
 import google_calendar_sync_jobs
 import intelligence_jobs
+import knowledge_jobs
 import meeting_transcript_jobs
 import microsoft_calendar_sync_jobs
 import proposed_event_jobs
@@ -47,12 +48,14 @@ from routes.glasses_media import create_glasses_media_router
 from routes.glasses_speech_eval import create_glasses_speech_eval_router
 from routes.google_calendar import create_google_calendar_router
 from routes.intelligence import create_intelligence_router
+from routes.knowledge import create_knowledge_router
 from routes.messaging import create_messaging_router
 from routes.microsoft_calendar import create_microsoft_calendar_router
 from routes.news import create_news_router
 from routes.places import create_places_router
 from routes.proposals import create_proposals_router
 from routes.proposed_events import create_proposed_events_router
+from routes.rules import create_rules_router
 from routes.system import create_system_router
 from routes.todos import create_todos_router
 from routes.user import create_user_router
@@ -103,7 +106,9 @@ def _resolve_session_context(
         try:
             thread = conversations.ensure_thread(requested_thread_id, user_email)
         except LookupError as exc:
-            raise fastapi.HTTPException(status_code=404, detail="Conversation thread not found") from exc
+            raise fastapi.HTTPException(
+                status_code=404, detail="Conversation thread not found"
+            ) from exc
         except PermissionError as exc:
             raise fastapi.HTTPException(
                 status_code=403,
@@ -172,9 +177,11 @@ async def lifespan(_app: FastAPI):
     microsoft_calendar_sync_jobs.start_worker()
     whatsapp_runtime.start_worker()
     intelligence_jobs.start_worker()
+    knowledge_jobs.start_worker()
     try:
         yield
     finally:
+        knowledge_jobs.stop_worker()
         intelligence_jobs.stop_worker()
         whatsapp_runtime.stop_worker()
         google_calendar_sync_jobs.stop_worker()
@@ -202,6 +209,8 @@ api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
 api.include_router(create_messaging_router())
 api.include_router(create_intelligence_router())
+api.include_router(create_knowledge_router())
+api.include_router(create_rules_router())
 api.include_router(create_places_router())
 api.include_router(create_proposed_events_router())
 api.include_router(create_proposals_router())

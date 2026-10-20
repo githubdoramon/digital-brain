@@ -22,7 +22,7 @@ FUTURE = datetime(2100, 1, 1, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def database(monkeypatch):
+def database(monkeypatch, request):
     dsn = os.getenv("MESSAGING_TEST_DSN")
     if not dsn:
         pytest.skip("MESSAGING_TEST_DSN must identify a disposable PostgreSQL instance")
@@ -39,8 +39,19 @@ def database(monkeypatch):
     try:
         with connect() as conn:
             conn.execute("""
+                CREATE TABLE conversation_threads(id TEXT PRIMARY KEY,user_email TEXT);
+                CREATE TABLE conversation_messages(message_id BIGSERIAL PRIMARY KEY,thread_id TEXT REFERENCES conversation_threads,
+                    role TEXT,content TEXT,created_at TIMESTAMPTZ DEFAULT NOW());
+                CREATE TABLE user_facts(fact_id TEXT PRIMARY KEY,user_email TEXT,content TEXT,category TEXT,
+                    importance SMALLINT,fact_mode TEXT DEFAULT 'soft',rule_type TEXT,rule_scope TEXT[] DEFAULT '{}',
+                    rule_payload JSONB DEFAULT '{}',source_thread_id TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ DEFAULT NOW());
+                CREATE TABLE places(place_id TEXT PRIMARY KEY,name TEXT);
                 CREATE TABLE contacts(contact_id TEXT PRIMARY KEY, display_name TEXT, phones TEXT[],
-                    tags TEXT[] DEFAULT '{}', comments TEXT, emails TEXT[] DEFAULT '{}');
+                    aliases TEXT[] DEFAULT '{}', birthday DATE, tags TEXT[] DEFAULT '{}', comments TEXT, emails TEXT[] DEFAULT '{}',
+                    links TEXT[] DEFAULT '{}', external_id TEXT, comments_embed FLOAT8[]);
+                CREATE TABLE contact_relationships(relationship_id TEXT PRIMARY KEY,
+                    from_contact_id TEXT REFERENCES contacts ON DELETE CASCADE,to_contact_id TEXT REFERENCES contacts ON DELETE CASCADE,
+                    relationship_type TEXT,reciprocal_type TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ DEFAULT NOW());
                 CREATE TABLE events(id TEXT PRIMARY KEY, title TEXT, summary TEXT, start_date TIMESTAMPTZ,
                     is_cancelled BOOLEAN DEFAULT FALSE);
                 CREATE TABLE documents(document_id TEXT PRIMARY KEY, title TEXT, description TEXT, content TEXT,
@@ -58,10 +69,29 @@ def database(monkeypatch):
                 "0075_whatsapp_history_requests.sql",
                 "0076_scheduled_intelligence.sql",
                 "0077_intelligence_failures.sql",
+                "0078_messaging_source_links.sql",
+                "0079_shared_knowledge.sql",
+                "0080_learned_contact_changes.sql",
             ):
+                if (
+                    name == "0079_shared_knowledge.sql"
+                    and getattr(request, "param", None) == "legacy"
+                ):
+                    conn.execute(
+                        "INSERT INTO user_facts(fact_id,user_email,content,category,importance,source_thread_id) VALUES('uf_old',%s,'Prefers quiet keyboards','preference',7,'old-thread')",
+                        (OWNER,),
+                    )
+                    conn.execute(
+                        "INSERT INTO user_facts(fact_id,user_email,content,category,importance,fact_mode,rule_type) VALUES('rule_old',%s,'Interpret Alex as Alex Carter','general',8,'hard_rule','entity_alias')",
+                        (OWNER,),
+                    )
                 conn.execute((root / name).read_text())
-        for module in (store, jobs, archive):
+        import knowledge
+        import knowledge_jobs
+
+        for module in (store, jobs, archive, knowledge, knowledge_jobs):
             monkeypatch.setattr(module, "get_conn", connect)
+        monkeypatch.setattr(knowledge, "vector_for", lambda text: None)
         jobs._STOP.clear()
         yield connect
     finally:
@@ -671,6 +701,7 @@ def test_failure_status_and_explicit_retry_are_private_and_owner_scoped(database
     from fastapi.testclient import TestClient
 
     from routes import intelligence as routes
+    from routes import knowledge as knowledge_routes
 
     setup_owner(database)
     setup_owner(database, OTHER)
@@ -685,7 +716,9 @@ def test_failure_status_and_explicit_retry_are_private_and_owner_scoped(database
     monkeypatch.setattr(routes, "get_conn", database)
     app = FastAPI()
     app.include_router(routes.create_intelligence_router())
+    app.include_router(knowledge_routes.create_knowledge_router())
     app.dependency_overrides[routes.get_current_user] = lambda: {"email": OTHER}
+    app.dependency_overrides[knowledge_routes.get_current_user] = lambda: {"email": OTHER}
     with TestClient(app) as client:
         assert client.get("/mobile/intelligence/status").json()["failures"] == {
             "paused": 0,
@@ -693,6 +726,7 @@ def test_failure_status_and_explicit_retry_are_private_and_owner_scoped(database
         }
         assert client.post("/mobile/intelligence/retry-failures").json() == {"retrying": 0}
         app.dependency_overrides[routes.get_current_user] = lambda: {"email": OWNER}
+        app.dependency_overrides[knowledge_routes.get_current_user] = lambda: {"email": OWNER}
         status = client.get("/mobile/intelligence/status")
         assert status.headers["cache-control"] == "no-store"
         assert status.json()["failures"] == {"paused": 1, "retrying": 0}
@@ -880,6 +914,7 @@ def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(databas
     from fastapi.testclient import TestClient
 
     from routes import intelligence as routes
+    from routes import knowledge as knowledge_routes
 
     monkeypatch.setattr(routes, "get_conn", database)
     setup_owner(database)
@@ -891,27 +926,31 @@ def test_source_inspection_and_corrections_are_owner_scoped_and_uncached(databas
     knowledge_id = store.knowledge_for(OWNER)[0]["knowledge_id"]
     app = FastAPI()
     app.include_router(routes.create_intelligence_router())
+    app.include_router(knowledge_routes.create_knowledge_router())
     # Auth configuration tests reload auth; override the callable captured by this router.
     app.dependency_overrides[routes.get_current_user] = lambda: {"email": OTHER}
+    app.dependency_overrides[knowledge_routes.get_current_user] = lambda: {"email": OTHER}
     with TestClient(app) as client:
         assert (
             client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}").status_code == 404
         )
         assert (
             client.patch(
-                f"/mobile/intelligence/knowledge/{knowledge_id}",
+                f"/mobile/knowledge/{knowledge_id}",
                 json={"statement": "A manual correction"},
             ).status_code
             == 404
         )
         app.dependency_overrides[routes.get_current_user] = lambda: {"email": OWNER}
+        app.dependency_overrides[knowledge_routes.get_current_user] = lambda: {"email": OWNER}
         response = client.get(f"/mobile/intelligence/sources/{batch[0]['source_id']}")
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
         assert response.json()["speaker"] == "You"
+        assert response.json()["source_link"]["url"] == "https://wa.me/15555550101"
         assert (
             client.patch(
-                f"/mobile/intelligence/knowledge/{knowledge_id}",
+                f"/mobile/knowledge/{knowledge_id}",
                 json={"statement": "A manual correction"},
             ).status_code
             == 200

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 from uuid import uuid4
 
-import contacts as contacts_service
 from db import get_conn
 
 
@@ -239,32 +237,9 @@ def accept_proposal(user_email: str, proposal_id: str) -> dict[str, Any] | None:
             if not raw_contact:
                 conn.commit()
                 return None
-            contact = dict(raw_contact)
-            comments = str(contact.get("comments") or "").strip()
-            existing_profession = re.search(r"(?im)^profession:\s*(.+)$", comments)
-            if existing_profession:
-                conn.commit()
-                return {"accepted": False, "reason": "profession_already_set"}
-            next_comments = "\n\n".join(
-                part for part in (comments, f"Profession: {proposal['suggested_value']}") if part
-            )
-            embedding = contacts_service._generate_contact_embedding(
-                {
-                    "contact_id": proposal["contact_id"],
-                    "display_name": contact["display_name"],
-                    "aliases": contact.get("aliases") or [],
-                    "tags": contact.get("tags") or [],
-                    "comments": next_comments,
-                }
-            )
-            cur.execute(
-                """
-                UPDATE contacts
-                SET comments = %s, comments_embed = %s
-                WHERE contact_id = %s
-                """,
-                (next_comments, embedding, proposal["contact_id"]),
-            )
+            import knowledge
+
+            knowledge.accept_profession(cur, user_email, proposal)
 
         cur.execute(
             """

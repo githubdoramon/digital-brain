@@ -1,0 +1,1316 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "match-new",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "This is a new event, not an update."
+      },
+      "expected": {
+        "intent": "create_new"
+      }
+    },
+    {
+      "id": "match-update",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "Update the existing project review with these notes."
+      },
+      "expected": {
+        "intent": "update_existing"
+      }
+    },
+    {
+      "id": "match-neutral",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "Lunch with Dana tomorrow at noon."
+      },
+      "expected": {
+        "intent": "neutral"
+      }
+    },
+    {
+      "id": "match-wrong",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "You matched the wrong event. This was a different dinner."
+      },
+      "expected": {
+        "intent": "create_new"
+      }
+    },
+    {
+      "id": "match-same",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "Yes, that is the same event. Add my notes to it."
+      },
+      "expected": {
+        "intent": "update_existing"
+      }
+    },
+    {
+      "id": "match-negated-new",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "Do not create another event; update the one we already have."
+      },
+      "expected": {
+        "intent": "update_existing"
+      }
+    },
+    {
+      "id": "match-negated-update",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "Do not update the old meeting. Record this as a separate event."
+      },
+      "expected": {
+        "intent": "create_new"
+      }
+    },
+    {
+      "id": "match-time-only",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "The meeting happened at 10:30 at The Lantern."
+      },
+      "expected": {
+        "intent": "neutral"
+      }
+    },
+    {
+      "id": "match-new-pt",
+      "task": "event_matching",
+      "language": "pt",
+      "input": {
+        "message": "Foi outro jantar. Cria um evento novo, sem alterar o anterior."
+      },
+      "expected": {
+        "intent": "create_new"
+      }
+    },
+    {
+      "id": "match-update-pt",
+      "task": "event_matching",
+      "language": "pt",
+      "input": {
+        "message": "É o mesmo evento que já existe. Atualiza os detalhes."
+      },
+      "expected": {
+        "intent": "update_existing"
+      }
+    },
+    {
+      "id": "match-neutral-pt",
+      "task": "event_matching",
+      "language": "pt",
+      "input": {
+        "message": "Almoço com a Dana amanhã ao meio-dia."
+      },
+      "expected": {
+        "intent": "neutral"
+      }
+    },
+    {
+      "id": "match-rematch",
+      "task": "event_matching",
+      "language": "en",
+      "input": {
+        "message": "The chosen event is wrong; update the other existing workshop instead."
+      },
+      "expected": {
+        "intent": "update_existing"
+      }
+    },
+    {
+      "id": "fields-location",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "It happened at The Lantern, not the office.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "where"
+        ]
+      }
+    },
+    {
+      "id": "fields-start",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Move the start to 10:30.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "when"
+        ]
+      }
+    },
+    {
+      "id": "fields-end",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "It ended at 16:00.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "end_when"
+        ]
+      }
+    },
+    {
+      "id": "fields-people",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "You forgot Robin. Add Robin as a participant.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "who"
+        ]
+      }
+    },
+    {
+      "id": "fields-title",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Rename it to Quarterly planning.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "title"
+        ]
+      }
+    },
+    {
+      "id": "fields-notes",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Add to the notes: we approved the revised budget.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "summary"
+        ]
+      }
+    },
+    {
+      "id": "fields-type",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Change its category from call to meeting.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "types"
+        ]
+      }
+    },
+    {
+      "id": "fields-two",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Move the start to 14:00 and the location to The Lantern.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "when",
+          "where"
+        ]
+      }
+    },
+    {
+      "id": "fields-duration",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "The duration was two hours.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "end_when"
+        ]
+      }
+    },
+    {
+      "id": "fields-vague",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "No, that is not right.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": []
+      }
+    },
+    {
+      "id": "fields-unchanged",
+      "task": "event_fields",
+      "language": "en",
+      "input": {
+        "message": "Keep the time and attendees. Only change the location to The Lantern.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "where"
+        ]
+      }
+    },
+    {
+      "id": "fields-location-pt",
+      "task": "event_fields",
+      "language": "pt",
+      "input": {
+        "message": "Foi no escritório, não em casa.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "where"
+        ]
+      }
+    },
+    {
+      "id": "fields-people-pt",
+      "task": "event_fields",
+      "language": "pt",
+      "input": {
+        "message": "Acrescenta a Dana aos participantes.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "who"
+        ]
+      }
+    },
+    {
+      "id": "fields-time-pt",
+      "task": "event_fields",
+      "language": "pt",
+      "input": {
+        "message": "Começou às 10h e terminou às 11h.",
+        "current_event": {
+          "title": "Planning review",
+          "when": "2026-11-03T09:00:00",
+          "end_when": "2026-11-03T10:00:00",
+          "where": "Office",
+          "who": [
+            "Alex Carter"
+          ],
+          "types": [
+            "meeting"
+          ]
+        }
+      },
+      "expected": {
+        "fields": [
+          "when",
+          "end_when"
+        ]
+      }
+    },
+    {
+      "id": "briefing-busy",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nTwo meetings today. Leave ten minutes between them.\n## Schedule\n09:00 Planning review with Dana.\n14:00 Budget workshop with Robin.\n## Event Prep\nReview the draft budget before 14:00."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-quiet",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nNo meetings are scheduled today.\n## Schedule\nYour calendar is clear.\n## Priorities\nUse the morning to finish the draft proposal due tomorrow."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-short",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nYour review starts at 11:00.\n## Schedule\n11:00 Design review with Morgan.\n## Event Prep\nRead the revised sketches before the review."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-pt",
+      "task": "briefing_quality",
+      "language": "pt",
+      "input": {
+        "content": "# Resumo diário\n## Visão do dia\nTens uma reunião às 10h.\n## Agenda\n10h: revisão do projeto com a Dana.\n## Preparação\nLê a proposta antes da reunião."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-travel",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nYour appointment is at 15:00 at The Lantern.\n## Schedule\n15:00 Contract review with Dana.\n## Preparation\nBring the marked-up contract and leave at 14:30."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-action",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nThe afternoon is clear after the 09:00 workshop.\n## Schedule\n09:00 Planning workshop.\n## Priorities\nSend the revised notes to Robin before 12:00."
+      },
+      "expected": {
+        "quality": "pass"
+      }
+    },
+    {
+      "id": "briefing-thinking",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "Let me analyze the events step by step. First I will inspect the calendar.\n# Daily briefing\n## Schedule\n09:00 Planning review."
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "briefing-meta",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "The input contains one event, so I will summarize it below.\n# Daily briefing\n## Schedule\n09:00 Planning review."
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "briefing-json",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "{\"tool_call\":\"get_events\",\"arguments\":{\"date\":\"today\"}}"
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "briefing-placeholder",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Day Overview\nYou have various things to do.\n## Schedule\n[Insert meetings here]\n## Event Prep\nPrepare for your events."
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "briefing-offer",
+      "task": "briefing_quality",
+      "language": "en",
+      "input": {
+        "content": "# Daily briefing\n## Schedule\n09:00 Planning review.\nLet me know if you would like me to help prepare."
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "briefing-filler-pt",
+      "task": "briefing_quality",
+      "language": "pt",
+      "input": {
+        "content": "Claro! Posso ajudar-te com isso. Queres que consulte primeiro a tua agenda?"
+      },
+      "expected": {
+        "quality": "fail"
+      }
+    },
+    {
+      "id": "route-memory",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "What did we decide in my planning meeting?"
+      },
+      "expected": {
+        "intent": "memory_search",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-count",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "How many meetings did I have last month?"
+      },
+      "expected": {
+        "intent": "data_query",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-contact",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "What is Dana Lewis's phone number?"
+      },
+      "expected": {
+        "intent": "contact_lookup",
+        "pre_resolve_contacts": "yes",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-web",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Search the web for the latest astronomy news."
+      },
+      "expected": {
+        "intent": "web_search",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-home",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Turn off the kitchen lights."
+      },
+      "expected": {
+        "intent": "home_control",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-skill",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Run the weekly-export skill script."
+      },
+      "expected": {
+        "intent": "skill_execution",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-system",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Show the disk usage on the server using df."
+      },
+      "expected": {
+        "intent": "system_command",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-draft",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Write a friendly birthday greeting."
+      },
+      "expected": {
+        "intent": "conversational",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-preference",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "I prefer morning meetings because I focus better then."
+      },
+      "expected": {
+        "intent": "conversational",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "yes"
+      }
+    },
+    {
+      "id": "route-contact-doc",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Find my sister's prescription in my documents."
+      },
+      "expected": {
+        "intent": "memory_search",
+        "pre_resolve_contacts": "yes",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-ranking",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Who did I meet most often last month?"
+      },
+      "expected": {
+        "intent": "data_query",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-pronoun",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "What did she say in that meeting?",
+        "conversation": [
+          {
+            "role": "user",
+            "content": "I met Dana Lewis at the planning workshop."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "memory_search",
+        "pre_resolve_contacts": "yes",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-memory-pt",
+      "task": "routing",
+      "language": "pt",
+      "input": {
+        "message": "Procura a receita médica da minha irmã nos meus documentos."
+      },
+      "expected": {
+        "intent": "memory_search",
+        "pre_resolve_contacts": "yes",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-count-pt",
+      "task": "routing",
+      "language": "pt",
+      "input": {
+        "message": "Quantas reuniões tive no mês passado?"
+      },
+      "expected": {
+        "intent": "data_query",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-fact-pt",
+      "task": "routing",
+      "language": "pt",
+      "input": {
+        "message": "Prefiro respostas curtas e diretas."
+      },
+      "expected": {
+        "intent": "conversational",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "yes"
+      }
+    },
+    {
+      "id": "route-third-party",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Dana prefers early meetings."
+      },
+      "expected": {
+        "intent": "conversational",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-transient",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "I had lunch with Robin at noon yesterday."
+      },
+      "expected": {
+        "intent": "conversational",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "route-question-not-fact",
+      "task": "routing",
+      "language": "en",
+      "input": {
+        "message": "Do I prefer morning meetings?"
+      },
+      "expected": {
+        "intent": "memory_search",
+        "pre_resolve_contacts": "no",
+        "should_generate_facts": "no"
+      }
+    },
+    {
+      "id": "contact-work",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "I met Alex, my coworker from Acme.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_work"
+      }
+    },
+    {
+      "id": "contact-family",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "My cousin Alex is joining us.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_family"
+      }
+    },
+    {
+      "id": "contact-ambiguous",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "I had lunch with Alex.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "uncertain"
+      }
+    },
+    {
+      "id": "contact-new",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "This Alex is a new contact, not either person in my address book.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "new_contact"
+      }
+    },
+    {
+      "id": "contact-alias",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Lex",
+        "message": "I called Lex.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_family"
+      }
+    },
+    {
+      "id": "contact-full",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex Carter",
+        "message": "I met Alex Carter.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_work"
+      }
+    },
+    {
+      "id": "contact-negative",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "Not my cousin; Alex from Acme.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_work"
+      }
+    },
+    {
+      "id": "contact-conflict",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "I mean Alex, my cousin who is also my Acme coworker.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "uncertain"
+      }
+    },
+    {
+      "id": "contact-work-pt",
+      "task": "contact_disambiguation",
+      "language": "pt",
+      "input": {
+        "mention": "Alex",
+        "message": "Falei com o Alex, meu colega da Acme.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_work"
+      }
+    },
+    {
+      "id": "contact-family-pt",
+      "task": "contact_disambiguation",
+      "language": "pt",
+      "input": {
+        "mention": "Alex",
+        "message": "O meu primo Alex vem ao jantar.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_family"
+      }
+    },
+    {
+      "id": "contact-new-pt",
+      "task": "contact_disambiguation",
+      "language": "pt",
+      "input": {
+        "mention": "Alex",
+        "message": "É uma pessoa nova, não está nos meus contactos.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "new_contact"
+      }
+    },
+    {
+      "id": "contact-pronoun",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "he",
+        "message": "He sent the notes.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ],
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Alex Brooks called me about the notes."
+          }
+        ]
+      },
+      "expected": {
+        "contact": "alex_family"
+      }
+    },
+    {
+      "id": "contact-rule",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alex",
+        "message": "Alex will attend.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ],
+        "user_rules": [
+          "When I say Alex without a surname, I mean Alex Carter."
+        ]
+      },
+      "expected": {
+        "contact": "alex_work"
+      }
+    },
+    {
+      "id": "contact-unknown",
+      "task": "contact_disambiguation",
+      "language": "en",
+      "input": {
+        "mention": "Alec",
+        "message": "I met Alec. I do not know his surname or relationship.",
+        "candidates": [
+          {
+            "id": "alex_work",
+            "name": "Alex Carter",
+            "aliases": [
+              "AC"
+            ],
+            "relationship": "coworker",
+            "organization": "Acme"
+          },
+          {
+            "id": "alex_family",
+            "name": "Alex Brooks",
+            "aliases": [
+              "Lex"
+            ],
+            "relationship": "cousin",
+            "organization": "Beacon"
+          }
+        ]
+      },
+      "expected": {
+        "contact": "uncertain"
+      }
+    }
+  ]
+}

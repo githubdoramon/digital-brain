@@ -530,10 +530,17 @@ Also decide whether pre-resolving contacts is beneficial when creating a answer 
      "which colleagues have I met recently?", "list everyone I met last month")
   - Aggregation or counting queries over interactions without a named person
     (e.g. "how many people did I meet this week?", "how many meetings did I have?")
-  - Web/home/system/conversational requests
+  - Web/home/system/conversational requests without specific people
   The agent can resolve contacts later during tool execution if needed.
 
-Also decide whether the user's current message contains a durable personal fact worth saving:
+For a user statement that shares useful information about a named person, set
+pre_resolve_contacts=true even when it is not a question. Resolve that person or
+ask a concise clarification before treating their identity as settled.
+
+The following should_generate_facts field is compatibility metadata; all persisted
+user messages now enter background knowledge learning. Also classify whether the
+current message contains a durable personal fact:
+
 - Set `should_generate_facts` to true only for a first-person assertion, preference, goal, habit, trait, opinion, or constraint stated by the user (for example, "I prefer morning meetings" or "I live in Lisbon").
 - Set it to false for questions, requests, instructions, third-party information, assistant-generated content, and transient details that belong in events, todos, contacts, places, or documents.
 
@@ -568,9 +575,11 @@ Respond using the required structured response. Keep reasoning brief."""
                 should_generate_facts = raw_should_generate_facts
             elif isinstance(raw_should_generate_facts, str):
                 normalized = raw_should_generate_facts.strip().lower()
-                should_generate_facts = normalized in {"1", "true", "yes"} if normalized in {
-                    "0", "1", "false", "true", "no", "yes"
-                } else None
+                should_generate_facts = (
+                    normalized in {"1", "true", "yes"}
+                    if normalized in {"0", "1", "false", "true", "no", "yes"}
+                    else None
+                )
             else:
                 should_generate_facts = None
 
@@ -627,11 +636,11 @@ Respond using the required structured response. Keep reasoning brief."""
         ):
             classification.pre_resolve_contacts = True
             if classification.reasoning:
-                classification.reasoning = (
-                    f"{classification.reasoning} Contact pre-resolution enabled for person-scoped memory lookup."
-                )
+                classification.reasoning = f"{classification.reasoning} Contact pre-resolution enabled for person-scoped memory lookup."
             else:
-                classification.reasoning = "Contact pre-resolution enabled for person-scoped memory lookup."
+                classification.reasoning = (
+                    "Contact pre-resolution enabled for person-scoped memory lookup."
+                )
         return classification
 
     def _looks_like_personal_document_memory_query(

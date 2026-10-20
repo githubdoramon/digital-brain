@@ -13,9 +13,10 @@ from prompts.context import (
     get_self_context,
     get_tag_context,
     get_time_context,
-    get_user_facts_context,
+    get_user_context,
 )
 from prompts.state_injection import build_state_message
+from prompts.system import KNOWLEDGE_LEARNING_SYSTEM_PROMPT
 
 logger = get_runtime_logger(__name__)
 
@@ -105,10 +106,11 @@ def build_main_messages(
         if self_context:
             messages.append({"role": "system", "content": self_context})
 
-        user_facts_ctx = get_user_facts_context(user_email, question)
+        user_facts_ctx = get_user_context(user_email, question)
         if user_facts_ctx:
             messages.append({"role": "system", "content": user_facts_ctx})
 
+    messages.append({"role": "system", "content": KNOWLEDGE_LEARNING_SYSTEM_PROMPT})
     messages.append({"role": "system", "content": get_time_context()})
 
     location_context = get_location_context(client_context)

@@ -202,6 +202,7 @@ def database(monkeypatch):
         conn.execute(migration.read_text())
         conn.execute(migration.with_name("0074_telegram_archive.sql").read_text())
         conn.execute(migration.with_name("0075_whatsapp_history_requests.sql").read_text())
+        conn.execute(migration.with_name("0078_messaging_source_links.sql").read_text())
         # This fixture intentionally models only archive tables. Full migration
         # 0076 and its shared-domain dependencies are exercised by test_intelligence.
         conn.execute("ALTER TABLE messaging_messages ADD COLUMN forwarded BOOLEAN NOT NULL DEFAULT TRUE")
@@ -328,6 +329,37 @@ def test_context_is_centered_on_old_match_not_latest_messages(database):
     assert len(result["messages"]) == 11
     assert hit_id in {row["message_id"] for row in result["messages"]}
     assert max(row["sent_at"].day for row in result["messages"]) == 12
+
+
+def test_source_links_are_owner_scoped_and_available_in_search_and_context(database):
+    ingest()
+    hit = archive.search(OWNER)[0]
+    expected = "https://wa.me/15550000001"
+    assert hit["source_link"]["url"] == expected
+    assert archive.message_context(OWNER, hit["message_id"])["source_link"]["url"] == expected
+    assert archive.message_link(OWNER, hit["message_id"])["url"] == expected
+    assert archive.message_link(OTHER, hit["message_id"]) is None
+
+
+def test_telegram_link_metadata_updates_without_reimporting_messages(database):
+    from messaging_normalization import Provider
+
+    account = archive.set_connection(OWNER, True, Provider.TELEGRAM)
+    item = record(sender="1234@telegram.user", chat="1234@telegram.user")
+    item.update(self_jid="5678@telegram.user", source_username="first_name",
+                source_phone="+15550000001", source_metadata_known=True)
+    archive.stage_records(account["account_id"], account["generation"], [item])
+    archive.drain_once()
+    assert archive.search(OWNER)[0]["source_link"]["url"] == "https://t.me/first_name"
+    item["source_username"] = "changed_name"
+    archive.stage_records(account["account_id"], account["generation"], [item])
+    archive.drain_once()
+    assert len(archive.search(OWNER)) == 1
+    assert archive.search(OWNER)[0]["source_link"]["url"] == "https://t.me/changed_name"
+    item.update(source_username=None, source_phone=None)
+    archive.stage_records(account["account_id"], account["generation"], [item])
+    archive.drain_once()
+    assert archive.search(OWNER)[0]["source_link"] is None
 
 
 def test_api_requires_auth_and_no_store_pairing(database, monkeypatch):

@@ -40,6 +40,7 @@ import type {
 } from '@/contact-draft/types';
 import type { EventContactOption, EventPlaceOption } from '@/components/event-draft/types';
 import { theme } from '@/theme';
+import { formatBirthday } from '@/utils/birthdays';
 import { normalizeSearch } from '@/utils/text';
 
 type Props = {
@@ -487,7 +488,7 @@ export function ContactDraftEditorScreen({ sessionId }: Props) {
                   ]}
                 >
                   <Text style={contact.birthday ? styles.dateValue : styles.datePlaceholder}>
-                    {contact.birthday || 'Add birth date'}
+                    {formatBirthday(contact.birthday || '') || 'Add birth date'}
                   </Text>
                 </Pressable>
                 {contact.birthday ? (

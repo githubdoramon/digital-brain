@@ -1532,18 +1532,18 @@ def test_resolve_contact_applies_hard_rule_before_disambiguation(monkeypatch):
     )
 
     facts_module = types.SimpleNamespace(
-        get_hard_rules_for_scope=lambda *_args, **_kwargs: [
+        get_rules_for_scope=lambda *_args, **_kwargs: [
             {
                 "fact_id": "uf_rule",
                 "rule_type": "entity_alias",
-                "rule_payload": {
+                "payload": {
                     "alias_text": "Dana",
                     "target_text": "Dana Lewis",
                 },
             }
         ]
     )
-    monkeypatch.setitem(sys.modules, "user_facts", facts_module)
+    monkeypatch.setitem(sys.modules, "user_rules", facts_module)
 
     monkeypatch.setattr(
         resolver.contacts_service,

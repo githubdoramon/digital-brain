@@ -146,6 +146,11 @@ def validate_record(record: dict) -> dict:
         )
     }
     result["conversation_kind"] = record.get("conversation_kind")
+    from messaging_links import phone, username
+
+    result["source_username"] = username(record.get("source_username"))
+    result["source_phone"] = phone(record.get("source_phone"))
+    result["source_metadata_known"] = record.get("source_metadata_known") is True
     result["forwarded"] = bool(record.get("forwarded", True))
     if result["conversation_kind"] not in (None, "direct", "group", "channel"):
         raise ValueError("unsupported_conversation_kind")
@@ -254,10 +259,13 @@ def _apply(cur, account_id: str, record: dict):
     )
     cur.execute(
         """INSERT INTO messaging_conversations
-        (conversation_id, account_id, external_id, title, kind) VALUES (%s, %s, %s, %s, %s)
+        (conversation_id, account_id, external_id, title, kind, source_username, source_phone)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (conversation_id) DO UPDATE SET
         title = COALESCE(NULLIF(messaging_conversations.title, ''), EXCLUDED.title),
-        kind = CASE WHEN %s THEN messaging_conversations.kind ELSE EXCLUDED.kind END""",
+        kind = CASE WHEN %s THEN messaging_conversations.kind ELSE EXCLUDED.kind END,
+        source_username = CASE WHEN %s THEN EXCLUDED.source_username ELSE messaging_conversations.source_username END,
+        source_phone = CASE WHEN %s THEN EXCLUDED.source_phone ELSE messaging_conversations.source_phone END""",
         (
             conversation_id,
             account_id,
@@ -265,7 +273,11 @@ def _apply(cur, account_id: str, record: dict):
             record["title"],
             record.get("conversation_kind")
             or ("group" if group_identity(record["chat"]) else "direct"),
+            record.get("source_username"),
+            record.get("source_phone"),
             is_mutation,
+            record.get("source_metadata_known", False),
+            record.get("source_metadata_known", False),
         ),
     )
     if not group_identity(record["chat"]):
@@ -477,7 +489,8 @@ def search(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT m.message_id, m.conversation_id, m.sent_at,
-            m.body, m.deleted, m.outgoing, m.attachments, m.reply_id,
+            m.body, m.deleted, m.outgoing, m.attachments, m.reply_id, m.external_id,
+            c.source_username, c.source_phone,
             i.display_name AS sender_name, i.external_id AS sender_external_id,
             i.contact_id, c.title AS conversation_title, c.external_id AS conversation_external_id, a.provider,
             COALESCE(c.context, a.context) AS context,
@@ -523,14 +536,33 @@ def search(
                 max(1, min(limit, 100)),
             ),
         )
-        return cur.fetchall()
+        from messaging_links import enrich
+
+        return [enrich(row) for row in cur.fetchall()]
+
+
+def message_link(owner: str, message_id: str):
+    from messaging_links import enrich
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT a.provider, c.external_id AS conversation_external_id,
+            c.source_username,c.source_phone,m.external_id,m.deleted
+            FROM messaging_messages m JOIN messaging_accounts a USING(account_id)
+            JOIN messaging_conversations c ON c.conversation_id=m.conversation_id
+            WHERE a.user_email=%s AND m.message_id=%s""", (owner,message_id),
+        )
+        row = cur.fetchone()
+        return enrich(row)["source_link"] if row else None
 
 
 def message_context(owner: str, message_id: str, provider: Provider | None = None) -> dict:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT m.conversation_id FROM messaging_messages m
+            """SELECT m.conversation_id, a.provider, c.external_id AS conversation_external_id,
+            c.source_username, c.source_phone FROM messaging_messages m
             JOIN messaging_accounts a USING(account_id)
+            JOIN messaging_conversations c ON c.conversation_id=m.conversation_id
             WHERE a.user_email = %s AND m.message_id = %s AND (%s::text IS NULL OR a.provider = %s)""",
             (
                 owner,
@@ -553,16 +585,20 @@ def message_context(owner: str, message_id: str, provider: Provider | None = Non
                 (SELECT m.* FROM messaging_messages m, target t
                  WHERE m.conversation_id = %s AND (m.sent_at, m.message_id) > (t.sent_at, t.message_id)
                  ORDER BY m.sent_at, m.message_id LIMIT 5))
-            SELECT n.message_id, n.sent_at, n.body, n.deleted, n.attachments,
+            SELECT n.message_id, n.external_id, n.sent_at, n.body, n.deleted, n.attachments,
                 n.outgoing, i.display_name AS sender_name, i.external_id AS sender_external_id
             FROM neighbors n JOIN messaging_identities i ON i.identity_id = n.sender_identity_id
             ORDER BY n.sent_at, n.message_id""",
             (message_id, row["conversation_id"], row["conversation_id"]),
         )
+        from messaging_links import enrich
+
+        messages = [enrich({**row, **dict(message)}) for message in cur.fetchall()]
         return {
             "message_id": message_id,
             "conversation_id": row["conversation_id"],
-            "messages": cur.fetchall(),
+            "messages": messages,
+            "source_link": next((m["source_link"] for m in messages if m["message_id"] == message_id), None),
         }
 
 

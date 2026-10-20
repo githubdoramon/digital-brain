@@ -27,6 +27,28 @@ def _build_controller(config: AgentConfig | None = None) -> AgentController:
     return AgentController(config=cfg, conversational_agent=agent)
 
 
+@pytest.mark.parametrize("inspected,url,expected", [
+    (True, "https://wa.me/15550000001", True),
+    (False, "https://wa.me/15550000001", False),
+    (True, "https://evil.example/message", False),
+])
+def test_inspected_message_evidence_gets_a_controller_checked_source_link(inspected, url, expected):
+    controller = _build_controller()
+    state = AgentState(goal="What did the supplier say about the approved quote?")
+    state.remember_information_candidate(
+        kind="message", candidate_id="message-sample", inspected=inspected,
+        label="Open in WhatsApp", source_tool="get_message",
+        metadata={"source_link": {"url": url}, "snippet": "The supplier approved the full quote yesterday."},
+    )
+    links = controller._build_linked_items(state, answer="The supplier approved the full quote yesterday.")
+    messages = [link for link in links if link["entity_type"] == "message"]
+    assert bool(messages) is expected
+    if messages:
+        from schemas import LinkedItemOut
+
+        assert LinkedItemOut(**messages[0]).source_url == url
+
+
 class TestAgentControllerInitialization:
     """Tests for AgentController initialization."""
 

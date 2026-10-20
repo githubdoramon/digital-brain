@@ -46,7 +46,7 @@ the linked implementation documents describe their current scope.
 | --- | --- | --- |
 | `conversations.py`, `conversation_search.py`, migrations 0071/0072 | Digital Brain chat threads, per-message lexical/semantic retrieval | Reuse retrieval patterns; external messaging has separate canonical storage and source types |
 | `contacts.py`, `schemas.py:ContactIn` | Contact fields and a single `external_id` | Multiple provider/scoped identities per contact without repurposing existing integration identifiers |
-| `user_facts.py`, `fact_extraction.py` | User-focused facts with ADD/UPDATE/DELETE and source thread ID; updates replace content and deletion is hard | Subject-scoped knowledge, supporting evidence, temporal revisions, and correction dependencies |
+| `knowledge.py`, `knowledge_jobs.py`, `user_rules.py` | Shared subject-linked evidence/revisions and a separate explicit instruction service | Richer knowledge exploration and conflict presentation |
 | `events.py` meeting transcript flow | Extracted action items include assignee name/email; only current-user actions become todos | One task model supporting any assignee and proposals for newly inferred work |
 | `todos.py`, `todo_contacts` | Tasks with pending/completed status and associated contacts/events/places | Explicit assignee distinct from involved contacts, primary project, and evidence |
 | `routes/proposals.py` | Mobile proposal route delegates to contact-enrichment proposals | Typed proposed items for tasks, projects, and actions, with durable resolution history |
@@ -54,6 +54,9 @@ the linked implementation documents describe their current scope.
 
 Do not silently replace existing meeting todo behavior or existing manual contact
 confirmation flows. Integration of those paths is an explicit implementation step.
+
+See [KNOWLEDGE.md](KNOWLEDGE.md) for the implemented shared knowledge model,
+Brain chat intake, inference, summaries, migration and historical revisit.
 
 ## Logical entities
 

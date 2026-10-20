@@ -58,7 +58,7 @@ from ui_dsl.clarification import (
     normalize_clarification_fields,
     normalize_need_user_input,
 )
-from user_fact_rules import RuleScope
+from user_rules import RuleScope
 
 logger = get_runtime_logger(__name__)
 
@@ -379,14 +379,14 @@ def _classify_follow_up_event_strategy(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
-    from prompts.context import get_self_context, get_time_context, get_user_facts_context
+    from prompts.context import get_self_context, get_time_context, get_user_context
 
     existing_extraction = clarification_context.get("extracted") or {}
     user_email = str(context.get("user_email") or "").strip()
     self_context = get_self_context(user_email) if user_email else None
     self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_ctx = (
-        get_user_facts_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
+        get_user_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
         if user_email
         else None
     )
@@ -767,13 +767,13 @@ def _infer_follow_up_target_fields(
     context: dict[str, Any],
 ) -> list[str]:
     from llm_helpers import call_llm_json
-    from prompts.context import get_self_context, get_time_context, get_user_facts_context
+    from prompts.context import get_self_context, get_time_context, get_user_context
 
     user_email = str(context.get("user_email") or "").strip()
     self_context = get_self_context(user_email) if user_email else None
     self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_ctx = (
-        get_user_facts_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
+        get_user_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
         if user_email
         else None
     )
@@ -1267,7 +1267,7 @@ def _extract_event_entities_with_llm(
         get_location_context,
         get_self_context,
         get_time_context,
-        get_user_facts_context,
+        get_user_context,
     )
 
     logger.info("[event_extraction] Starting extraction for: '%s'", message)
@@ -1281,7 +1281,7 @@ def _extract_event_entities_with_llm(
 
     # Get user facts for personalization (timezone, preferences, common locations, etc.)
     user_facts_ctx = (
-        get_user_facts_context(user_email, message, scope=RuleScope.EVENT_COMMAND)
+        get_user_context(user_email, message, scope=RuleScope.EVENT_COMMAND)
         if user_email
         else None
     )

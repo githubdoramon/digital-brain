@@ -45,3 +45,31 @@ Supported CPU candidates: Base English, Small English, Medium English, Large v3 
 ## Verification boundary
 
 Focused JVM tests validate audio parsing, scoring and monotonic timing. Backend tests cover authentication, upload bounds, safe errors, fixed model selection and subprocess timeout cleanup. Kotlin compilation/manifest merging, TypeScript and lint checks do not establish physical Pixel accuracy, locked-phone lifecycle behavior, memory limits, battery impact or actual server/network latency. Those require an installed native build, server deployment and labeled recordings.
+
+## Failure diagnostics
+
+The backend emits `[speech_eval]` events through the orchestrator parent logger, so they appear in System logs and container stderr. Events include request start/completion/failure, allow-listed model and operation, download/load/inference stage, durations, warm/cold state, inference process CPU time, and initial numeric CPU affinity/quota/thread configuration. Third-party child logging stays suppressed; sanitized stage messages cross IPC to the parent instead. Audio, transcripts, reference labels, file paths, URLs, tokens and raw exception messages are excluded.
+
+Failures distinguish provider HTTP errors (with numeric upstream status), unavailable downloads, timeouts, disk-full/cache-permission failures, insufficient memory, model-load/inference failure and child exit codes. A negative child exit code identifies a signal, not its underlying cause; OS/container evidence is still required to establish an OOM kill. Requests rejected by authentication or a reverse proxy before reaching this endpoint require phone HTTP status and/or gateway logs.
+
+New phone exports retain `failureStage`, safe `error`, `httpStatus`, `upstreamHttpStatus`, and `preparationDurationMs` where available. Preparation duration belongs to a shared preparation attempt, not to each subsequent skipped replay; do not sum its repeated value across rows. A failed preparation still marks dependent planned attempts failed without transcribing them. Old exports cannot recover discarded causes. CPU time is process-wide CPU consumed during inference (potentially across threads), distinct from elapsed wall time and from VM CPU utilization.
+
+## CPU thread comparison
+
+Select server models, then select 2, 4 and/or 8 under **Server CPU threads**. Start a new comparison: each server model/thread pair is a separate candidate, with its own cold/warm results, correctness and latency. Local choices are unchanged. The worker calls `prepare` and `transcribe` with `threads=2`, `threads=4` or `threads=8`; the backend restarts its isolated process when the thread configuration changes. Model/decoding settings remain fixed. The native runner rejects responses whose reported CPU thread count differs from the requested setting, including older servers that silently ignore the query parameter.
+
+Candidate keys use `server:small.en@threads=4`; legacy `server:small.en` still uses `GLASSES_SPEECH_EVAL_THREADS`. The configured default remains two threads; benchmark overrides do not change production settings. Expanded model/thread combinations count toward the 10,000-attempt limit. Reports group each configuration independently; CPU counts are also explicit in JSON/CSV. The model catalog endpoint exposes supported thread options and safe numeric CPU capacity information. Compare within the VM's allocation and record competing load; more threads need not reduce single-command latency.
+
+The current transport remains one authenticated HTTP POST per completed WAV through the frontend proxy. Uploads are not sent during live capture. A future wake-scoped streaming test needs separate connection/authentication, first-chunk, capture-end and final-result timings; a WebSocket transport alone does not turn full-utterance Whisper inference into incremental recognition. No live audio-upload behavior is changed by the CPU experiment.
+
+### Checking the deployed backend
+
+An older backend accepts unknown `threads` query parameters but omits `cpuThreads` from successful preparation responses. The phone rejects those responses before sending audio, so container logs can show only `prepare ... 200 OK` while every dependent row fails. New phone builds report `server_update_required` for missing thread confirmation, retain HTTP 200 and stage `request`, and expose safe failure counts in summaries. Existing phone builds report `cpu_configuration_mismatch` for this case. A present but different thread count remains `cpu_configuration_mismatch`; never score it as the requested configuration.
+
+On the server, inspect the actual running image without loading any model:
+
+```bash
+docker exec mem-orchestrator python -c 'import inspect, glasses_speech_eval as s; from pathlib import Path; print("Thread-aware engine:", "threads" in inspect.signature(s.engine.request).parameters); print("Speech lifecycle logs:", "[speech_eval] started" in inspect.getsource(s.SpeechEvalEngine.request)); print("Thread-aware routes:", "cpuThreadOptions" in (Path(s.__file__).parent / "routes/glasses_speech_eval.py").read_text())'
+```
+
+All three values should be `True`. False values mean the running container lacks this update; deploy an image containing the updated backend and recreate the orchestrator container. Restarting the old image does not install the new source. A new phone run is needed because completed failure rows are retained on Resume. During that run, `docker logs --since 5m -f mem-orchestrator 2>&1 | rg 'speech_eval|speech-eval'` should show parent lifecycle events and transcription requests. Preparation only downloads model files; HTTP 200 there does not establish that a model has loaded or transcribed successfully.

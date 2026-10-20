@@ -38,6 +38,7 @@ import type {
   EventPlaceOption,
 } from '@/components/event-draft/types';
 import { normalizeSearch } from '@/utils/text';
+import { formatBirthday } from '@/utils/birthdays';
 import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
 
 type ProposedEvent = {
@@ -75,7 +76,7 @@ type PlaceCandidate = {
 
 type ProposedEnrichment = {
   proposal_id: string;
-  kind: 'profession' | 'relationship' | 'task' | 'project' | 'task_change';
+  kind: 'profession' | 'relationship' | 'task' | 'project' | 'task_change' | 'contact_change';
   contact_id: string;
   contact_name: string;
   related_contact_id?: string | null;
@@ -92,6 +93,24 @@ type ProposedEnrichment = {
     assignee_name?: string | null;
     requested_status?: string;
     target_status?: string;
+    contact_changes?: {
+      people: { ref: string; display_name: string; birthday: string | null }[];
+      relationships: {
+        from_ref: string;
+        to_ref: string;
+        relationship_type: string;
+        reciprocal_type: string;
+      }[];
+    };
+    contact_plan?: {
+      choices: {
+        ref: string;
+        display_name: string;
+        can_create: boolean;
+        candidates: { contact_id: string; display_name: string }[];
+      }[];
+      review_reasons: string[];
+    };
   };
   source_evidence?: ArchiveSource[];
 };
@@ -190,6 +209,9 @@ export default function ProposedEventsScreen() {
     field: 'start' | 'end';
   } | null>(null);
   const [savingId, setSavingId] = React.useState<string | null>(null);
+  const [contactResolutions, setContactResolutions] = React.useState<
+    Record<string, Record<string, string>>
+  >({});
 
   const loadProposals = React.useCallback(async () => {
     setLoading(true);
@@ -484,6 +506,13 @@ export default function ProposedEventsScreen() {
         await apiFetch(`/mobile/proposals/${encodeURIComponent(proposal.proposal_id)}/${action}`, {
           method: 'POST',
           token,
+          ...(action === 'accept' && proposal.kind === 'contact_change'
+            ? {
+                body: JSON.stringify({
+                  contact_resolutions: contactResolutions[proposal.proposal_id] || {},
+                }),
+              }
+            : {}),
         });
         setEnrichmentProposals((current) =>
           current.filter((item) => item.proposal_id !== proposal.proposal_id),
@@ -495,7 +524,7 @@ export default function ProposedEventsScreen() {
         setSavingId(null);
       }
     },
-    [showError, showSuccess, token],
+    [showError, showSuccess, token, contactResolutions],
   );
 
   const pendingCount =
@@ -897,39 +926,53 @@ export default function ProposedEventsScreen() {
               {enrichmentProposals.map((proposal) => {
                 const isSaving = savingId === proposal.proposal_id;
                 const isRelationship = proposal.kind === 'relationship';
+                const isContactChange = proposal.kind === 'contact_change';
                 const isWork = ['task', 'project', 'task_change'].includes(proposal.kind);
+                const graph = proposal.payload?.contact_changes;
+                const choices = proposal.payload?.contact_plan?.choices || [];
+                const needsContactChoice = choices.some(
+                  (choice) => !contactResolutions[proposal.proposal_id]?.[choice.ref],
+                );
                 return (
                   <Card key={proposal.proposal_id} style={styles.enrichmentCard}>
                     <View style={styles.proposalHeader}>
                       <View style={styles.proposalIcon}>
                         <Ionicons
-                          name={isRelationship ? 'people-outline' : 'briefcase-outline'}
+                          name={
+                            isRelationship || isContactChange
+                              ? 'people-outline'
+                              : 'briefcase-outline'
+                          }
                           size={18}
                           color={theme.colors.accentDeep}
                         />
                       </View>
                       <View style={styles.proposalTitleBlock}>
                         <Text style={styles.proposalTitle}>
-                          {isWork
-                            ? proposal.suggested_value
-                            : isRelationship
-                              ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
-                              : proposal.contact_name}
+                          {isContactChange
+                            ? 'Contact changes'
+                            : isWork
+                              ? proposal.suggested_value
+                              : isRelationship
+                                ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
+                                : proposal.contact_name}
                         </Text>
                         <Text style={styles.proposalMeta}>
-                          {isWork
-                            ? `${proposal.kind === 'project' ? 'Project' : proposal.kind === 'task_change' ? (proposal.payload?.requested_status === 'cancelled' ? 'Task cancellation' : 'Task update') : 'Task'}${proposal.payload?.due_date ? ` · Due ${proposal.payload.due_date}` : ''}`
-                            : isRelationship
-                              ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
-                              : `Profession: ${proposal.suggested_value}`}
+                          {isContactChange
+                            ? graph?.people.map((person) => person.display_name).join(' · ')
+                            : isWork
+                              ? `${proposal.kind === 'project' ? 'Project' : proposal.kind === 'task_change' ? (proposal.payload?.requested_status === 'cancelled' ? 'Task cancellation' : 'Task update') : 'Task'}${proposal.payload?.due_date ? ` · Due ${proposal.payload.due_date}` : ''}`
+                              : isRelationship
+                                ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
+                                : `Profession: ${proposal.suggested_value}`}
                         </Text>
-                        {!isWork ? (
+                        {!isWork && !isContactChange ? (
                           <Text style={styles.proposalMeta}>
                             {proposal.source_event_title
                               ? `From ${proposal.source_event_title}`
                               : `${proposal.confidence} confidence`}
                           </Text>
-                        ) : proposal.kind !== 'project' ? (
+                        ) : isWork && proposal.kind !== 'project' ? (
                           <Text style={styles.proposalMeta}>
                             {proposal.payload?.assignee_kind === 'user'
                               ? 'Assigned to you'
@@ -938,6 +981,71 @@ export default function ProposedEventsScreen() {
                         ) : null}
                       </View>
                     </View>
+                    {isContactChange && graph ? (
+                      <View style={{ gap: 8 }}>
+                        {graph.people.map((person) => (
+                          <Text key={person.ref} style={styles.reasonText}>
+                            {person.ref.startsWith('new:')
+                              ? `Create or match ${person.display_name}`
+                              : person.display_name}
+                            {person.birthday
+                              ? ` · Birthday: ${formatBirthday(person.birthday)}`
+                              : ''}
+                          </Text>
+                        ))}
+                        {graph.relationships.map((rel, index) => (
+                          <Text key={index} style={styles.reasonText}>
+                            {graph.people.find((p) => p.ref === rel.from_ref)?.display_name}
+                            {' → '}
+                            {graph.people.find((p) => p.ref === rel.to_ref)?.display_name}
+                            {`: ${rel.relationship_type} / ${rel.reciprocal_type}`}
+                          </Text>
+                        ))}
+                        {choices.map((choice) => (
+                          <View key={choice.ref} style={{ gap: 6 }}>
+                            <Text style={styles.proposalMeta}>Who is {choice.display_name}?</Text>
+                            {[
+                              ...choice.candidates.map((c) => ({
+                                value: c.contact_id,
+                                label: c.display_name,
+                              })),
+                              ...(choice.can_create
+                                ? [
+                                    {
+                                      value: 'create',
+                                      label: `Create a new contact for ${choice.display_name}`,
+                                    },
+                                  ]
+                                : []),
+                            ].map((option) => {
+                              const selected =
+                                contactResolutions[proposal.proposal_id]?.[choice.ref] ===
+                                option.value;
+                              return (
+                                <Pressable
+                                  key={option.value}
+                                  accessibilityRole="radio"
+                                  accessibilityState={{ checked: selected }}
+                                  onPress={() =>
+                                    setContactResolutions((current) => ({
+                                      ...current,
+                                      [proposal.proposal_id]: {
+                                        ...current[proposal.proposal_id],
+                                        [choice.ref]: option.value,
+                                      },
+                                    }))
+                                  }
+                                >
+                                  <Text style={styles.reasonText}>
+                                    {selected ? '●' : '○'} {option.label}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
                     {proposal.evidence ? (
                       <Text style={styles.reasonText}>{proposal.evidence}</Text>
                     ) : null}
@@ -947,22 +1055,25 @@ export default function ProposedEventsScreen() {
                     <View style={styles.actions}>
                       <Button
                         label={
-                          isWork
-                            ? proposal.kind === 'project'
-                              ? 'Create project'
-                              : proposal.kind === 'task_change'
-                                ? proposal.payload?.requested_status === 'cancelled'
-                                  ? 'Cancel task'
-                                  : proposal.payload?.target_status === 'completed'
-                                    ? 'Reopen task'
-                                    : 'Update task'
-                                : 'Create task'
-                            : isRelationship
-                              ? 'Add relationship'
-                              : 'Add profession'
+                          isContactChange
+                            ? 'Apply contact changes'
+                            : isWork
+                              ? proposal.kind === 'project'
+                                ? 'Create project'
+                                : proposal.kind === 'task_change'
+                                  ? proposal.payload?.requested_status === 'cancelled'
+                                    ? 'Cancel task'
+                                    : proposal.payload?.target_status === 'completed'
+                                      ? 'Reopen task'
+                                      : 'Update task'
+                                  : 'Create task'
+                              : isRelationship
+                                ? 'Add relationship'
+                                : 'Add profession'
                         }
                         onPress={() => void updateEnrichmentProposal(proposal, 'accept')}
                         loading={isSaving}
+                        disabled={isContactChange && needsContactChoice}
                         style={styles.primaryAction}
                       />
                       <Button

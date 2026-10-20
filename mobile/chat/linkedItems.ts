@@ -1,6 +1,12 @@
 import type { Href } from 'expo-router';
 
-export type LinkedItemType = 'event' | 'document' | 'contact' | 'place' | 'conversation';
+export type LinkedItemType =
+  | 'event'
+  | 'document'
+  | 'contact'
+  | 'place'
+  | 'conversation'
+  | 'message';
 
 export type LinkedItem = {
   entity_type: LinkedItemType;
@@ -9,6 +15,7 @@ export type LinkedItem = {
   subtitle?: string | null;
   role?: string | null;
   message_id?: number | null;
+  source_url?: string | null;
 };
 
 export function routeForLinkedItem(item: LinkedItem): Href | null {
@@ -40,5 +47,14 @@ export function routeForLinkedItem(item: LinkedItem): Href | null {
 }
 
 export function isLinkedItemNavigable(item: LinkedItem): boolean {
+  if (item.entity_type === 'message') return !!externalMessageUrl(item);
   return routeForLinkedItem(item) !== null;
+}
+
+export function externalMessageUrl(item: LinkedItem): string | null {
+  return item.entity_type === 'message' &&
+    item.source_url &&
+    /^https:\/\/(?:wa\.me|t\.me)\//.test(item.source_url)
+    ? item.source_url
+    : null;
 }

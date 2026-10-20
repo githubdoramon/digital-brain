@@ -99,7 +99,7 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
             FROM intelligence_sources s CROSS JOIN intelligence_state st
             CROSS JOIN LATERAL generate_series(0,
                 GREATEST(0, (length(COALESCE(s.payload->>'text', '')) - 1) / %s)) p(part)
-            WHERE st.user_email = %s AND (s.owner_email IS NULL OR s.owner_email = %s)
+            WHERE s.kind IN ('message','event','document') AND st.user_email = %s AND (s.owner_email IS NULL OR s.owner_email = %s)
               AND s.observed_at <= %s
               AND (%s = (s.historical OR s.observed_at < st.started_at
                    OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE)))
@@ -206,16 +206,42 @@ def context_for(owner, batch, extra_text=""):
             (owner, identities, conversations, identities),
         )
         people = [dict(r) for r in cur.fetchall()]
-        contact_ids = list({r["contact_id"] for r in people} - {None})
+        contact_ids = list(
+            (
+                {r["contact_id"] for r in people}
+                | {r["payload"].get("contact_id") for r in batch}
+                | {ident for r in batch for ident in r["payload"].get("confirmed_contact_ids", [])}
+            )
+            - {None}
+        )
         # The installation's events/documents/tasks/contacts have shared access,
         # just as their existing authenticated APIs do. Private derivations do not.
         cur.execute(
-            """SELECT contact_id, display_name, tags, comments FROM contacts
+            """SELECT contact_id, display_name, aliases, birthday, birthday_month, birthday_day, tags, comments FROM contacts
             WHERE contact_id = ANY(%s) OR to_tsvector('simple', display_name) @@ to_tsquery('simple', %s)
             LIMIT 40""",
             (contact_ids, query),
         )
         contacts = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """SELECT relationship_id,from_contact_id,to_contact_id,relationship_type,reciprocal_type
+            FROM contact_relationships WHERE from_contact_id=ANY(%s) OR to_contact_id=ANY(%s)
+            ORDER BY relationship_id LIMIT 100""",
+            ([c["contact_id"] for c in contacts], [c["contact_id"] for c in contacts]),
+        )
+        contact_relationships = [dict(r) for r in cur.fetchall()]
+        related_contact_ids = list(
+            {r[k] for r in contact_relationships for k in ("from_contact_id", "to_contact_id")}
+        )
+        if related_contact_ids:
+            cur.execute(
+                """SELECT contact_id,display_name,aliases,birthday,birthday_month,birthday_day,tags,comments
+                FROM contacts WHERE contact_id=ANY(%s) ORDER BY contact_id LIMIT 100""",
+                (related_contact_ids,),
+            )
+            contacts = list(
+                {c["contact_id"]: c for c in contacts + [dict(r) for r in cur.fetchall()]}.values()
+            )
         cur.execute(
             """SELECT k.* FROM intelligence_knowledge k
             WHERE user_email = %s AND (subject_ref = ANY(%s)
@@ -305,9 +331,37 @@ def context_for(owner, batch, extra_text=""):
             (query,),
         )
         related += [dict(r) for r in cur.fetchall()]
+    import knowledge as shared_knowledge
+
+    entities = shared_knowledge.entities_for(owner, limit=150)
+    entities += [
+        {
+            "entity_ref": r["kind"] + ":" + r["id"],
+            "kind": r["kind"],
+            "label": r.get("title") or r["kind"].title(),
+        }
+        for r in related
+    ]
+    entities += [
+        {"entity_ref": "project:" + p["project_id"], "kind": "project", "label": p["title"]}
+        for p in projects
+    ]
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT place_id,name FROM places WHERE to_tsvector('simple',COALESCE(name,'')) @@ to_tsquery('simple',%s) LIMIT 20",
+            (query,),
+        )
+        entities += [
+            {"entity_ref": "place:" + p["place_id"], "kind": "place", "label": p["name"]}
+            for p in cur.fetchall()
+        ]
+
     return {
+        "entities": entities,
+        "source_context": batch,
         "people": people,
         "contacts": contacts,
+        "contact_relationships": contact_relationships,
         "knowledge": knowledge,
         "tasks": tasks,
         "proposals": proposals,
@@ -319,6 +373,11 @@ def context_for(owner, batch, extra_text=""):
 
 def _current(cur, row, owner):
     """Reject stale evidence and source deletions/monitoring changes during inference."""
+    import knowledge
+
+    current = knowledge.source_is_current(cur, row, owner)
+    if current is not None:
+        return current
     if row["kind"] == "message":
         cur.execute(
             """SELECT md5(intelligence_message_payload(m)::text) AS fingerprint,
@@ -385,6 +444,7 @@ def evidence_for(finding, batch):
                 "kind": row["kind"],
                 "entity_id": row["entity_id"],
                 "sent_at": row["payload"].get("sent_at"),
+                "effective_at": row["payload"].get("effective_at"),
             }
         )
     return result
@@ -403,18 +463,30 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
     refs = {r["source_id"]: r for r in batch}
     validated = []
     for f in findings:
-        if f.get("kind") not in {"knowledge", "task", "project", "task_change", "complete"}:
+        if f.get("kind") not in {
+            "knowledge",
+            "task",
+            "project",
+            "task_change",
+            "complete",
+            "contact_change",
+        }:
             raise ValueError("invalid_kind")
         e = evidence_for(f, batch)
-        if f["kind"] != "knowledge" and (
+        if f["kind"] not in {"knowledge", "contact_change"} and (
             knowledge_only or not any(refs[x["source_id"]]["actionable"] for x in e)
         ):
             # Old imports are valid knowledge evidence but never actionable work.
             continue
-        if f.get("subject_ref") not in subjects:
+        if f.get("subject_ref") not in subjects and f["kind"] != "knowledge":
             raise ValueError("invalid_subject")
         if not isinstance(f.get("statement"), str) or not 3 <= len(f["statement"]) <= 2000:
             raise ValueError("invalid_statement")
+        if f["kind"] == "contact_change":
+            import contact_learning
+
+            validated.append({**contact_learning.validate(f, context, e), "evidence": e})
+            continue
         if f.get("project_id") and f["project_id"] not in projects:
             raise ValueError("invalid_project")
         if f.get("existing_id"):
@@ -428,6 +500,16 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
         if f["kind"] == "task_change" and known_tasks[f["existing_id"]].get("is_proposal"):
             continue
         if f["kind"] == "knowledge":
+            import knowledge
+
+            if knowledge.ambiguous_contact(f, context, e):
+                context.setdefault("deferred_refs", []).extend(x["ref"] for x in f["evidence"])
+                continue
+            f = {**f, **knowledge.validate_entities(f, context, e)}
+            if f.get("inferred") and not f.get("inference_reason"):
+                raise ValueError("invalid_analysis")
+            if f.get("category", "general") not in knowledge.CATEGORIES:
+                raise ValueError("invalid_analysis")
             if f.get("status") not in {"current", "historical", "uncertain", "conflicted"}:
                 raise ValueError("invalid_knowledge_status")
             if not isinstance(f.get("predicate"), str) or not re.fullmatch(
@@ -465,6 +547,8 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
             "tasks_completed",
             "proposals_expired",
             "findings_skipped",
+            "contact_changes_applied",
+            "contact_changes_supported",
         ),
         0,
     )
@@ -485,11 +569,30 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
                 continue
             if f["kind"] == "knowledge":
                 outcome = _save_knowledge(cur, owner, f)
+            elif f["kind"] == "contact_change":
+                import contact_learning
+
+                outcome = contact_learning.save(cur, owner, f)
             elif f["kind"] == "complete":
                 outcome = _complete_task(cur, owner, f, tasks[f["existing_id"]], batch, context)
             else:
                 outcome = _save_proposal(cur, owner, f)
             counts[outcome or "findings_skipped"] += 1
+        for ref in context.get("deferred_refs", []):
+            row = next((r for r in batch if r["ref"] == ref), None)
+            if row:
+                cur.execute(
+                    """INSERT INTO knowledge_learning(user_email,source_id,part,status,historical)
+                    VALUES(%s,%s,%s,%s,TRUE) ON CONFLICT(user_email,source_id,part)
+                    DO UPDATE SET status=EXCLUDED.status,next_attempt_at=NOW(),
+                        attempts=CASE WHEN EXCLUDED.status='pending' THEN 0 ELSE knowledge_learning.attempts END""",
+                    (
+                        owner,
+                        row["source_id"],
+                        row["part"],
+                        "pending" if counts["contact_changes_applied"] else "deferred",
+                    ),
+                )
         for r in batch:
             cur.execute(
                 """DELETE FROM intelligence_failures WHERE user_email=%s AND source_id=%s
@@ -547,14 +650,58 @@ def defer_batch(owner, run, batch, code, *, review=False):
 
 
 def _save_knowledge(cur, owner, f):
+    import knowledge
+
+    # Serialize writes from scheduled analysis, chat learning and manual corrections.
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("knowledge:" + owner,))
+    outcome = _save_knowledge_base(cur, owner, f)
+    knowledge.decorate(cur, owner, f, outcome)
+    return outcome
+
+
+def _save_knowledge_base(cur, owner, f):
     ident = f.get("existing_id") or key(owner, f["subject_ref"], f["predicate"])
     cur.execute(
         """SELECT * FROM intelligence_knowledge WHERE user_email = %s
-        AND (knowledge_id = %s OR (subject_ref = %s AND predicate = %s)) FOR UPDATE""",
-        (owner, ident, f["subject_ref"], f["predicate"]),
+        AND ((%s::text IS NOT NULL AND knowledge_id = %s) OR (%s::text IS NULL AND subject_ref = %s AND predicate = %s)) FOR UPDATE""",
+        (
+            owner,
+            f.get("existing_id"),
+            ident,
+            f.get("existing_id"),
+            f["subject_ref"],
+            f["predicate"],
+        ),
     )
     old = cur.fetchone()
-    if old and (old["manual"] or old["subject_ref"] != f["subject_ref"]):
+    import knowledge
+
+    if not knowledge.permits_relearning(old, f["evidence"]):
+        return "facts_protected"
+    if old and old.get("legacy_fact_id") and not old["manual"]:
+        # Reclassification may improve links without rewriting an imported current
+        # statement from older evidence. Observation time is not applicability time.
+        dates = [datetime.fromisoformat(e["sent_at"]) for e in f["evidence"] if e.get("sent_at")]
+        if not dates or max(dates) <= old["updated_at"]:
+            f = {**f, "statement": old["statement"], "status": old["status"]}
+    if (
+        old
+        and old.get("legacy_fact_id")
+        and not old["manual"]
+        and old["subject_ref"] != f["subject_ref"]
+    ):
+        cur.execute(
+            "INSERT INTO intelligence_knowledge_revisions(knowledge_id,snapshot) VALUES(%s,%s)",
+            (old["knowledge_id"], json_value(dict(old))),
+        )
+        cur.execute(
+            "UPDATE intelligence_knowledge SET subject_ref=%s,predicate=%s WHERE knowledge_id=%s",
+            (f["subject_ref"], f["predicate"], old["knowledge_id"]),
+        )
+        old = {**old, "subject_ref": f["subject_ref"]}
+    if old and (
+        (old["manual"] and not old.get("deleted_at")) or old["subject_ref"] != f["subject_ref"]
+    ):
         return "facts_protected"
     if old and old["status"] == "current" and f["status"] in {"uncertain", "historical"}:
         # A possible future change or a historical statement cannot replace a
@@ -595,7 +742,9 @@ def _save_knowledge(cur, owner, f):
             return "facts_supported"
         cur.execute(
             """UPDATE intelligence_knowledge SET statement = %s, status = %s,
-            applicable_at = %s, valid_from=%s, valid_until=%s, evidence = %s, updated_at = NOW() WHERE knowledge_id = %s""",
+            applicable_at = %s, valid_from=%s, valid_until=%s, evidence = %s, embedding=NULL,
+            manual=CASE WHEN deleted_at IS NOT NULL THEN FALSE ELSE manual END,
+            deleted_at=NULL, updated_at = NOW() WHERE knowledge_id = %s""",
             (
                 f["statement"],
                 f["status"],
@@ -738,7 +887,7 @@ def list_proposals(owner):
                 **dict(r),
                 "payload": {**r["payload"], "assignee_name": r["assignee_name"]},
                 "suggested_value": r["payload"]["statement"],
-                "confidence": "high",
+                "confidence": r["payload"].get("confidence", "high"),
                 "contact_name": r["payload"].get("subject_ref"),
                 "evidence": r["reason"],
                 "source_evidence": r["evidence"],
@@ -747,7 +896,7 @@ def list_proposals(owner):
         ]
 
 
-def resolve_proposal(owner, proposal_id, *, accept):
+def resolve_proposal(owner, proposal_id, *, accept, contact_resolutions=None):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM intelligence_proposals WHERE user_email = %s AND proposal_id = %s FOR UPDATE",
@@ -778,6 +927,15 @@ def resolve_proposal(owner, proposal_id, *, accept):
                 ):
                     return {"accepted": False, "reason": "source_changed"}
             f = row["payload"]
+            if row["kind"] == "contact_change":
+                import contact_learning
+
+                try:
+                    result = contact_learning.accept(cur, owner, row, contact_resolutions)
+                except ValueError:
+                    return {"accepted": False, "reason": "contact_changed"}
+                conn.commit()
+                return result
             if f.get("project_id"):
                 cur.execute(
                     "SELECT 1 FROM intelligence_projects WHERE project_id=%s AND user_email=%s FOR SHARE",
@@ -866,38 +1024,31 @@ def resolve_proposal(owner, proposal_id, *, accept):
 
 
 def knowledge_for(owner, *, contact_id=None, query=None, limit=40):
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """SELECT k.*, CASE WHEN status='current' AND valid_until < NOW()
-                    THEN 'historical' ELSE status END AS status
-            FROM intelligence_knowledge k WHERE k.user_email = %s
-            AND (%s::text IS NULL OR k.subject_ref = 'contact:' || %s OR k.subject_ref IN (
-                SELECT 'identity:' || i.identity_id FROM messaging_identities i
-                JOIN messaging_accounts a USING(account_id) WHERE a.user_email = %s AND i.contact_id = %s)
-                OR (k.subject_ref='self' AND EXISTS (SELECT 1 FROM contacts c,
-                    unnest(c.emails) address WHERE c.contact_id=%s AND lower(address)=lower(%s))))
-            AND (%s::text IS NULL OR to_tsvector('simple', k.statement) @@ to_tsquery('simple', %s))
-            ORDER BY updated_at DESC LIMIT %s""",
-            (
-                owner,
-                contact_id,
-                contact_id,
-                owner,
-                contact_id,
-                contact_id,
-                owner,
-                query,
-                _query(query or ""),
-                limit,
-            ),
-        )
-        return [dict(r) for r in cur.fetchall()]
+    import knowledge
+
+    subject = "contact:" + contact_id if contact_id else None
+    result = knowledge.list_items(owner, query=query, subject=subject, limit=limit)
+    if contact_id:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM contacts, unnest(emails) address WHERE contact_id=%s AND lower(address)=lower(%s)",
+                (contact_id, owner),
+            )
+            if cur.fetchone():
+                result = list(
+                    {
+                        r["knowledge_id"]: r
+                        for r in result
+                        + knowledge.list_items(owner, query=query, subject="self", limit=limit)
+                    }.values()
+                )[:limit]
+    return result
 
 
 def briefing_digest(owner):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT statement, status FROM intelligence_knowledge WHERE user_email=%s
+            """SELECT statement, status FROM intelligence_knowledge WHERE user_email=%s AND deleted_at IS NULL
             AND updated_at >= NOW() - INTERVAL '1 day' AND status <> 'historical'
             AND (valid_until IS NULL OR valid_until >= NOW())
             ORDER BY updated_at DESC LIMIT 5""",

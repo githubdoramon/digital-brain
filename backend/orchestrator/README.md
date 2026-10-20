@@ -61,6 +61,10 @@ documented in `backend/env.template`.
 
 ## Development
 
+For a standalone latency and correctness comparison of decision models, see the
+[decision benchmark](decision_benchmark/README.md). It supports independently
+configured OpenAI-compatible, Jev, and local THIS/THAT HTTP endpoints.
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt

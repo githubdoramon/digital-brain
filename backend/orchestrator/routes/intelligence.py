@@ -1,13 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
 
 import intelligence
+import messaging_archive
 from auth import get_current_user
 from db import get_conn
-
-
-class KnowledgeCorrection(BaseModel):
-    statement: str = Field(min_length=3, max_length=2000)
 
 
 def create_intelligence_router():
@@ -19,39 +15,6 @@ def create_intelligence_router():
         tags=["intelligence"],
         dependencies=[Depends(private_response)],
     )
-
-    @router.get("/knowledge")
-    def knowledge(
-        contact_id: str | None = None, query: str | None = None, user=Depends(get_current_user)
-    ):
-        return {
-            "knowledge": intelligence.knowledge_for(
-                user["email"], contact_id=contact_id, query=query
-            )
-        }
-
-    @router.patch("/knowledge/{knowledge_id}")
-    def correct(knowledge_id: str, payload: KnowledgeCorrection, user=Depends(get_current_user)):
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM intelligence_knowledge WHERE user_email=%s AND knowledge_id=%s FOR UPDATE",
-                (user["email"], knowledge_id),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(404, "Knowledge not found")
-            cur.execute(
-                "INSERT INTO intelligence_knowledge_revisions(knowledge_id, snapshot) VALUES (%s,%s)",
-                (knowledge_id, intelligence.json_value(dict(row))),
-            )
-            cur.execute(
-                """UPDATE intelligence_knowledge SET statement=%s, manual=TRUE,
-                status='current', applicable_at=NULL, valid_from=NULL, valid_until=NULL,
-                updated_at=NOW() WHERE knowledge_id=%s""",
-                (payload.statement, knowledge_id),
-            )
-            conn.commit()
-        return {"ok": True}
 
     @router.get("/projects")
     def projects(user=Depends(get_current_user)):
@@ -93,6 +56,9 @@ def create_intelligence_router():
                 )
             return {
                 "kind": row["kind"],
+                "source_link": messaging_archive.message_link(user["email"], row["entity_id"])
+                if row["kind"] == "message"
+                else None,
                 "entity_id": row["entity_id"],
                 "current": intelligence._current(cur, row, user["email"]),
                 "speaker": actor,

@@ -229,14 +229,14 @@ def _llm_extract_contact_changes(
     llm_request_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
-    from prompts.context import get_self_context, get_user_facts_context
-    from user_fact_rules import RuleScope
+    from prompts.context import get_self_context, get_user_context
+    from user_rules import RuleScope
 
     need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=False)
     self_context = get_self_context(user_email) if user_email else None
     self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_ctx = (
-        get_user_facts_context(user_email, message, scope=RuleScope.CONTACT_RESOLUTION)
+        get_user_context(user_email, message, scope=RuleScope.CONTACT_RESOLUTION)
         if user_email
         else None
     )
@@ -257,7 +257,7 @@ Interpret one or more contact graph updates.
 
 Supported updates:
 - create or update contacts
-- birth dates
+- birth dates (YYYY-MM-DD, or --MM-DD when the birth year is unknown; never invent a year)
 - emails, phones, aliases, links, profession, notes/comments
 - relationship edges between contacts
 - place creation or matching for a contact
@@ -321,6 +321,13 @@ def _parse_birth_date(raw_value: str | None) -> tuple[str | None, str | None]:
     raw = str(raw_value or "").strip()
     if not raw:
         return None, None
+    if re.fullmatch(r"--\d{2}-\d{2}", raw):
+        from birthdays import parse_birthday
+
+        try:
+            return parse_birthday(raw), None
+        except ValueError:
+            return None, "I couldn't parse that birthday. Please check its month and day."
     iso_match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", raw)
     if iso_match:
         return raw, None
@@ -330,7 +337,10 @@ def _parse_birth_date(raw_value: str | None) -> tuple[str | None, str | None]:
         second = int(slash_match.group(2))
         year = int(slash_match.group(3))
         if first <= 12 and second <= 12:
-            return None, "I found a birth date but the format is ambiguous. Please use YYYY-MM-DD or spell the month."
+            return (
+                None,
+                "I found a birth date but the format is ambiguous. Please use YYYY-MM-DD or spell the month.",
+            )
         parsed = date(year, second, first)
         return parsed.isoformat(), None
     try:

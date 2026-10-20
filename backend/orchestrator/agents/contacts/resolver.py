@@ -64,7 +64,7 @@ from ui_dsl.clarification import (
     build_need_user_input,
     clarification_fields_from_ambiguous_contacts,
 )
-from user_fact_rules import RuleScope, RuleType
+from user_rules import RuleScope, RuleType
 
 logger = get_runtime_logger(__name__)
 
@@ -108,7 +108,9 @@ _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS = {
     "sister",
 }
 _BARE_USER_SCOPED_RELATIONSHIP_PATTERN = re.compile(
-    r"\b(?:" + "|".join(sorted(_USER_SCOPED_FAMILY_RELATIONSHIP_TERMS, key=len, reverse=True)) + r")\b",
+    r"\b(?:"
+    + "|".join(sorted(_USER_SCOPED_FAMILY_RELATIONSHIP_TERMS, key=len, reverse=True))
+    + r")\b",
     re.IGNORECASE,
 )
 _FIRST_PERSON_PARTICIPANT_PATTERN = re.compile(
@@ -210,7 +212,9 @@ _LIST_WITH_CONTEXT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _LIST_SPLIT_PATTERN = re.compile(r"\s*(?:,|&|\band\b|\bplus\b)\s*", re.IGNORECASE)
-_PRECEDING_PLACE_PREPOSITION_PATTERN = re.compile(r"(?:^|\s)(?:at|in|near|inside)\s*$", re.IGNORECASE)
+_PRECEDING_PLACE_PREPOSITION_PATTERN = re.compile(
+    r"(?:^|\s)(?:at|in|near|inside)\s*$", re.IGNORECASE
+)
 _LEADING_SUBJECT_PERSON_PATTERN = re.compile(
     rf"^\s*(?P<subject>(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})\s+(?:(?i:is|was)\s+(?:going|meeting|visiting|calling|seeing|having|joining|attending|heading)\b|(?i:went|met|visited|called|saw|joined|attended|headed|left|came|had)\b)"
 )
@@ -257,7 +261,9 @@ def use_contact_resolution_model(model: str | None):
 
 @contextmanager
 def use_contact_resolution_timeout(timeout_seconds: int | None):
-    normalized_timeout = timeout_seconds if isinstance(timeout_seconds, int) and timeout_seconds > 0 else None
+    normalized_timeout = (
+        timeout_seconds if isinstance(timeout_seconds, int) and timeout_seconds > 0 else None
+    )
     token = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.set(normalized_timeout)
     try:
         yield
@@ -293,12 +299,16 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
             model_override,
         )
     if timeout_override:
-        logger.debug("[contact_resolver] Using timeout override for LLM call: %ss", timeout_override)
+        logger.debug(
+            "[contact_resolver] Using timeout override for LLM call: %ss", timeout_override
+        )
     try:
         return call_llm_json(prompt, **kwargs)
     except Exception as exc:
         response_format = kwargs.get("response_format") or {}
-        json_schema = response_format.get("json_schema") if isinstance(response_format, dict) else None
+        json_schema = (
+            response_format.get("json_schema") if isinstance(response_format, dict) else None
+        )
         schema_name = str((json_schema or {}).get("name") or "structured_output").strip()
         schema = (json_schema or {}).get("schema") if isinstance(json_schema, dict) else None
         if not isinstance(schema, dict):
@@ -358,7 +368,10 @@ def _coerce_contact_disambiguation_result(result: Any) -> dict[str, Any]:
 
     decision = result.get("decision")
     if not decision:
-        if result.get("resolved") is True or str(result.get("status") or "").strip().lower() == "resolved":
+        if (
+            result.get("resolved") is True
+            or str(result.get("status") or "").strip().lower() == "resolved"
+        ):
             decision = "resolved"
         else:
             decision = "cannot_decide"
@@ -371,7 +384,13 @@ def _coerce_contact_disambiguation_result(result: Any) -> dict[str, Any]:
     if confidence is None:
         confidence_score = result.get("confidence_score")
         if isinstance(confidence_score, (int, float)):
-            confidence = "high" if confidence_score >= 0.85 else "medium" if confidence_score >= 0.6 else "low"
+            confidence = (
+                "high"
+                if confidence_score >= 0.85
+                else "medium"
+                if confidence_score >= 0.6
+                else "low"
+            )
         else:
             confidence = "low"
 
@@ -390,7 +409,9 @@ def _coerce_contact_disambiguation_result(result: Any) -> dict[str, Any]:
     }
     try:
         normalized["candidate_number"] = (
-            int(normalized["candidate_number"]) if normalized["candidate_number"] is not None else None
+            int(normalized["candidate_number"])
+            if normalized["candidate_number"] is not None
+            else None
         )
     except (TypeError, ValueError):
         normalized["candidate_number"] = None
@@ -476,9 +497,9 @@ def _get_hard_rule_rows(request_context: dict[str, Any] | None) -> list[dict[str
     cached = request_context.get("hard_rule_rows", _REQUEST_CACHE_MISS)
     if cached is _REQUEST_CACHE_MISS:
         try:
-            import user_facts
+            import user_rules
 
-            request_context["hard_rule_rows"] = user_facts.get_hard_rules_for_scope(
+            request_context["hard_rule_rows"] = user_rules.get_rules_for_scope(
                 str(request_context.get("user_email") or ""),
                 scope=RuleScope.CONTACT_RESOLUTION,
                 rule_type=RuleType.ENTITY_ALIAS,
@@ -504,20 +525,22 @@ def _get_contact_resolution_user_facts_context(
     if not user_email:
         return None
 
+    from prompts.context import get_knowledge_context
+
     sections: list[str] = []
     try:
-        import user_facts
+        import user_rules
 
         if request_context is not None:
             cached_hard = request_context.get("hard_rules_context", _REQUEST_CACHE_MISS)
             if cached_hard is _REQUEST_CACHE_MISS:
-                request_context["hard_rules_context"] = user_facts.get_hard_rules_context(
+                request_context["hard_rules_context"] = user_rules.get_rules_context(
                     user_email,
                     scope=RuleScope.CONTACT_RESOLUTION,
                 )
             hard_rules_context = request_context.get("hard_rules_context")
         else:
-            hard_rules_context = user_facts.get_hard_rules_context(
+            hard_rules_context = user_rules.get_rules_context(
                 user_email,
                 scope=RuleScope.CONTACT_RESOLUTION,
             )
@@ -529,12 +552,14 @@ def _get_contact_resolution_user_facts_context(
                 soft_cache = request_context.setdefault("soft_facts_context", {})
                 cache_key = normalize_search_text(query)
                 if cache_key not in soft_cache:
-                    soft_cache[cache_key] = user_facts.get_facts_for_context(user_email, query)
+                    soft_cache[cache_key] = get_knowledge_context(
+                        user_email, query, subject="self", limit=8
+                    )
                 facts_text = soft_cache.get(cache_key)
             else:
-                facts_text = user_facts.get_facts_for_context(user_email, query)
+                facts_text = get_knowledge_context(user_email, query, subject="self", limit=8)
             if facts_text:
-                sections.append(f"Known facts about this user:\n{facts_text}")
+                sections.append(facts_text)
     except Exception as exc:
         logger.warning("[contact_resolver] Failed to get user facts context: %s", exc)
 
@@ -1373,6 +1398,7 @@ _VAGUE_CROWD_SELECTOR_PATTERN = re.compile(
     r"(?:\s+there)?$"
 )
 
+
 def _selector_has_explicit_collective_intent(
     *,
     text: str,
@@ -1954,6 +1980,7 @@ def resolve_contact(
         search_by="any",
         fuzzy_threshold=75,
         limit=15,
+        user_email=user_email,
     )
 
     if len(matches) == 0:
@@ -2118,7 +2145,9 @@ def resolve_contacts_from_text(
     logger.info("[contact_resolver] RESOLVING CONTACTS FROM TEXT")
     logger.debug("[contact_resolver] Text: '%s'", text)
     logger.debug("[contact_resolver] User: %s", user_email)
-    resolution_mode = mode if mode in {MINIMAL_RESOLUTION_MODE, FULL_RESOLUTION_MODE} else FULL_RESOLUTION_MODE
+    resolution_mode = (
+        mode if mode in {MINIMAL_RESOLUTION_MODE, FULL_RESOLUTION_MODE} else FULL_RESOLUTION_MODE
+    )
     if request_context is None:
         request_context = _build_request_context(
             user_email=user_email,
@@ -2276,7 +2305,9 @@ def resolve_contacts_from_text(
         # Opportunistic relationship/profession analysis is only enabled by the
         # background enrichment worker. The request path still resolves people,
         # but does not wait for speculative graph inference.
-        logger.info("[contact_resolver] Background enrichment: inferring professions and relationships")
+        logger.info(
+            "[contact_resolver] Background enrichment: inferring professions and relationships"
+        )
         profession_candidates = new_contacts + resolved_contacts
         with ThreadPoolExecutor(max_workers=2) as executor:
             profession_future = executor.submit(
@@ -2751,12 +2782,12 @@ def _resolve_contact_via_hard_rules(
     rules = _get_hard_rule_rows(request_context)
     if not rules:
         try:
-            import user_facts
+            import user_rules
         except Exception:
             return None
 
         try:
-            rules = user_facts.get_hard_rules_for_scope(
+            rules = user_rules.get_rules_for_scope(
                 user_email,
                 scope=RuleScope.CONTACT_RESOLUTION,
                 rule_type=RuleType.ENTITY_ALIAS,
@@ -2777,7 +2808,7 @@ def _resolve_contact_via_hard_rules(
 
     matching_targets: list[str] = []
     for rule in rules:
-        payload = rule.get("rule_payload") or {}
+        payload = rule.get("payload") or {}
         alias_text = str(payload.get("alias_text") or "").strip()
         alias_norm = normalize_search_text(alias_text)
         if alias_norm and alias_norm == mention_norm:
@@ -2880,7 +2911,9 @@ def _has_exact_name_or_alias_match(match: dict[str, Any], target_text: str) -> b
 
 
 def _is_alias_plus_name_tokens_match(match: dict[str, Any], target_text: str) -> bool:
-    query_tokens = [token for token in re.findall(r"[a-z0-9']+", normalize_search_text(target_text)) if token]
+    query_tokens = [
+        token for token in re.findall(r"[a-z0-9']+", normalize_search_text(target_text)) if token
+    ]
     if len(query_tokens) < 2:
         return False
 
@@ -2925,7 +2958,9 @@ def _select_unique_alias_plus_name_match(
     matches: list[dict[str, Any]],
     target_text: str,
 ) -> dict[str, Any] | None:
-    matching_candidates = [match for match in matches if _is_alias_plus_name_tokens_match(match, target_text)]
+    matching_candidates = [
+        match for match in matches if _is_alias_plus_name_tokens_match(match, target_text)
+    ]
     if len(matching_candidates) == 1:
         return matching_candidates[0]
     return None
@@ -2941,7 +2976,10 @@ def _select_unique_multi_token_name_match(
 
     matching_candidates: list[dict[str, Any]] = []
     for match in matches:
-        candidate_names = [str(match.get("display_name") or "").strip(), *(match.get("aliases") or [])]
+        candidate_names = [
+            str(match.get("display_name") or "").strip(),
+            *(match.get("aliases") or []),
+        ]
         for candidate_name in candidate_names:
             candidate_tokens = set(
                 re.findall(r"[a-z0-9']+", normalize_search_text(str(candidate_name or "")))
@@ -3919,7 +3957,9 @@ def _should_attempt_profession_inference(
         rf"\b{escaped_person}\s*,\s*(?:the\s+)?(?:doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\b",
         rf"\b(?:doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\s+{escaped_person}\b",
     )
-    return any(re.search(pattern, full_text_raw, flags=re.IGNORECASE) for pattern in contextual_patterns)
+    return any(
+        re.search(pattern, full_text_raw, flags=re.IGNORECASE) for pattern in contextual_patterns
+    )
 
 
 def _normalize_relationship_type(value: Optional[str]) -> Optional[str]:
@@ -4290,10 +4330,14 @@ def _suggest_missing_relationships(
 
         person_contact_id = person_resolution.get("contact_id")
         anchor_contact_id = anchor_resolution.get("contact_id")
-        if person_contact_id and anchor_contact_id and _relationship_exists_cached(
-            person_contact_id,
-            anchor_contact_id,
-            relationship_edges=relationship_edges,
+        if (
+            person_contact_id
+            and anchor_contact_id
+            and _relationship_exists_cached(
+                person_contact_id,
+                anchor_contact_id,
+                relationship_edges=relationship_edges,
+            )
         ):
             continue
 

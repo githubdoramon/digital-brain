@@ -37,6 +37,11 @@ type Conversation = {
   analysis_excluded: boolean;
 };
 type Message = {
+  source_link?: {
+    url: string;
+    label: string;
+    target: "message" | "conversation";
+  } | null;
   message_id: string;
   conversation_title?: string;
   conversation_external_id?: string;
@@ -106,6 +111,15 @@ function MessageBody({
         <p className={styles.muted}>Deleted in {providerName}</p>
       )}
       <p className={styles.body}>{message.body}</p>
+      {message.source_link && (
+        <a
+          href={message.source_link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {message.source_link.label}
+        </a>
+      )}
       {message.attachments.map((a, i) => (
         <p key={i} className={styles.muted}>
           {a.filename || a.type} · Find in {providerName}

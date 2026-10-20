@@ -2472,7 +2472,7 @@ class AgentController:
                 continue
             entity_type = str(candidate.get("kind") or "").strip().lower()
             entity_id = str(candidate.get("candidate_id") or "").strip()
-            if entity_type not in {"event", "document", "contact", "place", "conversation"} or not entity_id:
+            if entity_type not in {"event", "document", "contact", "place", "conversation", "message"} or not entity_id:
                 continue
 
             payload = self._linked_item_entity_payload(
@@ -2653,6 +2653,18 @@ class AgentController:
                 "searchable_text": " ".join(str(part) for part in searchable_parts if part),
             }
 
+        if entity_type == "message":
+            from messaging_links import trusted_url
+
+            link = metadata.get("source_link") or {}
+            if not candidate.get("inspected") or not isinstance(link, dict) or not trusted_url(link.get("url")):
+                return None
+            return {
+                **base_payload,
+                "source_url": link["url"],
+                "searchable_text": f"{label} {metadata.get('snippet') or ''}",
+            }
+
         if entity_type == "conversation":
             if not candidate.get("inspected"):
                 return None
@@ -2796,6 +2808,8 @@ class AgentController:
         }
         if candidate.get("entity_type") == "conversation":
             payload["message_id"] = candidate.get("message_id")
+        if candidate.get("entity_type") == "message":
+            payload["source_url"] = candidate.get("source_url")
         return payload
 
     def _linked_item_tokens(self, text: str) -> set[str]:
