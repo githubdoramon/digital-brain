@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from typing import Any, Optional
 
 import httpx
@@ -22,6 +23,13 @@ from llm_config import (
     get_ollama_api_base_url,
     is_ollama_base_url,
     resolve_chat_model,
+)
+from llm_policy import (
+    LLMRequestRejected,
+    apply_constraints,
+    remember_constraint,
+    request_rejection,
+    request_timeout,
 )
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_llm_request
@@ -35,7 +43,7 @@ _REASONING_EFFORT_ALIASES = {
 # LLM Configuration
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
+LLM_TIMEOUT = request_timeout({})
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 LLM_WARM_KEEP_ALIVE = os.getenv("LLM_WARM_KEEP_ALIVE", "15m")
@@ -56,6 +64,10 @@ def use_llm_keep_alive(keep_alive: str | int | None):
 
 class LLMUnavailableError(RuntimeError):
     """Raised when the LLM service cannot be reached on a critical path."""
+
+
+class LLMEmptyContentError(ValueError):
+    """No usable answer was emitted, including reasoning-only completions."""
 
 
 def _get_required_setting(name: str, fallback: str | None = None) -> str:
@@ -152,6 +164,25 @@ def build_json_schema_response_format(
     ).strip("_")
     if not normalized_name:
         normalized_name = "json_response"
+    schema = deepcopy(schema)
+    if strict:
+
+        def normalize(node):
+            if isinstance(node, dict):
+                node.pop("default", None)
+                if node.get("type") == "object" and "properties" in node:
+                    node["required"] = list(node["properties"])
+                    node["additionalProperties"] = False
+                for key in ("properties", "$defs", "definitions", "patternProperties"):
+                    for value in node.get(key, {}).values():
+                        normalize(value)
+                for key in ("items", "additionalProperties", "not", "contains"):
+                    normalize(node.get(key))
+                for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+                    for value in node.get(key, []):
+                        normalize(value)
+
+        normalize(schema)
     return {
         "type": "json_schema",
         "json_schema": {
@@ -235,10 +266,15 @@ def build_chat_payload(
     if top_p is not None:
         payload["top_p"] = top_p
 
-    normalized_reasoning_effort = str(
-        reasoning_effort if reasoning_effort is not None else _default_reasoning_effort(resolved_model)
-        or ""
-    ).strip().lower()
+    normalized_reasoning_effort = (
+        str(
+            reasoning_effort
+            if reasoning_effort is not None
+            else _default_reasoning_effort(resolved_model) or ""
+        )
+        .strip()
+        .lower()
+    )
     normalized_reasoning_effort = _REASONING_EFFORT_ALIASES.get(
         normalized_reasoning_effort,
         normalized_reasoning_effort,
@@ -259,6 +295,7 @@ def build_chat_payload(
         payload.update(extra_body)
 
     _maybe_attach_keep_alive(payload)
+    apply_constraints(payload)
 
     return payload
 
@@ -298,9 +335,7 @@ def warm_chat_model(
 
 
 @traced_llm_request
-def _post_chat_model_warmup(
-    payload: dict[str, Any], *, timeout: int
-) -> dict[str, Any]:
+def _post_chat_model_warmup(payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
     """Trace the small Ollama chat request used to warm a configured model."""
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     response = requests.post(
@@ -372,22 +407,26 @@ def _raise_for_llm_error(data: dict[str, Any]) -> None:
 
 def is_llm_unavailable_error(exc: BaseException) -> bool:
     """Return True when an exception means the LLM service is unavailable."""
-    return isinstance(
-        exc,
-        (
-            LLMUnavailableError,
-            requests.ConnectionError,
-            requests.Timeout,
-            httpx.ConnectError,
-            httpx.ConnectTimeout,
-            httpx.ReadTimeout,
-        ),
-    ) or (
-        isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
-        and getattr(getattr(exc, "response", None), "status_code", 0) in {429}
-    ) or (
-        isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
-        and int(getattr(getattr(exc, "response", None), "status_code", 0) or 0) >= 500
+    return (
+        isinstance(
+            exc,
+            (
+                LLMUnavailableError,
+                requests.ConnectionError,
+                requests.Timeout,
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+            ),
+        )
+        or (
+            isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
+            and getattr(getattr(exc, "response", None), "status_code", 0) in {429}
+        )
+        or (
+            isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
+            and int(getattr(getattr(exc, "response", None), "status_code", 0) or 0) >= 500
+        )
     )
 
 
@@ -411,7 +450,7 @@ def _post_chat_completion(
     sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
-    resolved_timeout = timeout or LLM_TIMEOUT
+    resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
     last_exception: Exception | None = None
     model_name = str(payload.get("model") or "").strip() or "(unset)"
     messages = payload.get("messages")
@@ -493,8 +532,9 @@ def _post_chat_completion(
             response = getattr(exc, "response", None)
             status_code = response.status_code if response is not None else "unknown"
             elapsed_ms = (time.perf_counter() - started_at) * 1000
+            rejected = request_rejection(response) if status_code in {400, 413, 422} else None
             logger.error(
-                "[llm_helpers] LLM HTTP error status=%s model=%s elapsed=%.1fms timeout=%ss messages=%d attempt=%d/%d response=%s",
+                "[llm_helpers] LLM HTTP error status=%s model=%s elapsed=%.1fms timeout=%ss messages=%d attempt=%d/%d reason=%s output_limit=%s response=%s",
                 status_code,
                 model_name,
                 elapsed_ms,
@@ -502,8 +542,12 @@ def _post_chat_completion(
                 message_count,
                 attempt,
                 LLM_MAX_RETRIES,
+                rejected.code if rejected else "http_error",
+                rejected.limit if rejected else None,
                 _preview_response_text(response),
             )
+            if rejected:
+                raise rejected from None
             if is_llm_unavailable_error(exc):
                 raise _wrap_llm_unavailable(exc) from exc
             raise
@@ -563,7 +607,7 @@ def _post_chat_completion_stream(
     timeout: Optional[int] = None,
 ) -> dict[str, Any]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
-    resolved_timeout = timeout or LLM_TIMEOUT
+    resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
     request_url = f"{base_url}/chat/completions"
     accumulated_content = ""
     accumulated_reasoning = ""
@@ -595,6 +639,8 @@ def _post_chat_completion_stream(
         timeout=resolved_timeout,
         stream=True,
     )
+    if response.status_code in {400, 413, 422}:
+        raise request_rejection(response) from None
     response.raise_for_status()
 
     for raw_line in response.iter_lines(decode_unicode=True):
@@ -651,7 +697,11 @@ def _post_chat_completion_stream(
                     "role": "assistant",
                     "content": accumulated_content,
                     **({"reasoning": accumulated_reasoning} if accumulated_reasoning else {}),
-                    **({"tool_calls": list(accumulated_tool_calls.values())} if accumulated_tool_calls else {}),
+                    **(
+                        {"tool_calls": list(accumulated_tool_calls.values())}
+                        if accumulated_tool_calls
+                        else {}
+                    ),
                 },
                 "finish_reason": "tool_calls" if accumulated_tool_calls else "stop",
             }
@@ -659,7 +709,10 @@ def _post_chat_completion_stream(
     }
     if accumulated_usage is not None:
         content["usage"] = accumulated_usage
-    logger.info("[llm_helpers] LLM response (stream final sync): %s", json.dumps(content, ensure_ascii=False))
+    logger.info(
+        "[llm_helpers] LLM response (stream final sync): %s",
+        json.dumps(content, ensure_ascii=False),
+    )
     return content
 
 
@@ -707,7 +760,7 @@ def _call_llm_raw(
         "[llm_helpers] LLM request model=%s stream=%s timeout=%s",
         payload.get("model"),
         stream,
-        timeout,
+        request_timeout(payload, timeout or LLM_TIMEOUT),
     )
     if not sensitive_payload:
         logger.info(
@@ -715,7 +768,9 @@ def _call_llm_raw(
             json.dumps(payload.get("messages"), ensure_ascii=False),
         )
         logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
-        logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
+        logger.info(
+            "[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False)
+        )
 
     content = (
         _post_chat_completion_stream(payload, timeout=timeout)
@@ -807,9 +862,13 @@ async def stream_llm_chat(
         "[llm_helpers] LLM input (stream): %s",
         json.dumps(payload.get("messages"), ensure_ascii=False),
     )
-    logger.info("[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False))
-    logger.info("[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False))
-    resolved_timeout = timeout or LLM_TIMEOUT
+    logger.info(
+        "[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False)
+    )
+    logger.info(
+        "[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False)
+    )
+    resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
     request_url = f"{base_url}/chat/completions"
     logger.info(
         "[llm_helpers] LLM outbound request (stream): %s",
@@ -882,6 +941,8 @@ async def stream_llm_chat(
 
                     if response.status_code >= 400:
                         error_preview = await _response_error_preview(response)
+                        if response.status_code in {400, 413, 422}:
+                            raise request_rejection(response) from None
                         logger.error(
                             "[llm_helpers] LLM stream request rejected status=%s response=%s",
                             response.status_code,
@@ -984,7 +1045,7 @@ def call_llm(
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
     if not content:
-        raise RuntimeError(f"LLM returned empty content: {data}")
+        raise LLMEmptyContentError("LLM returned empty content")
 
     return content
 
@@ -1123,23 +1184,47 @@ def call_llm_json(
         requests.HTTPError: If the API request fails
         json.JSONDecodeError: If the response is not valid JSON
     """
-    content = call_llm(
-        prompt,
-        system_prompt=system_prompt,
-        model=model,
-        use_fast_model=use_fast_model,
-        timeout=timeout,
-        stream=stream,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        reasoning_effort=reasoning_effort,
-        response_format=response_format,
-        extra_body=extra_body,
-        sensitive_payload=sensitive_payload,
-    )
-
-    return parse_llm_json_content(content)
+    adapted = set()
+    while True:
+        try:
+            content = call_llm(
+                prompt,
+                system_prompt=system_prompt,
+                model=model,
+                use_fast_model=use_fast_model,
+                timeout=timeout,
+                stream=stream,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                reasoning_effort=reasoning_effort,
+                response_format=response_format,
+                extra_body=extra_body,
+                sensitive_payload=sensitive_payload,
+            )
+            return parse_llm_json_content(content)
+        except LLMRequestRejected as exc:
+            if exc.code in adapted:
+                raise
+            if (
+                exc.code == "output_limit_exceeded"
+                and exc.limit
+                and max_tokens
+                and exc.limit < max_tokens
+            ):
+                max_tokens = exc.limit
+            elif (
+                exc.code == "unsupported_response_format"
+                and response_format
+                and response_format.get("type") == "json_schema"
+            ):
+                # Parsing and caller-side controller validation remain mandatory.
+                response_format = {"type": "json_object"}
+            else:
+                raise
+            adapted.add(exc.code)
+            remember_constraint(resolve_chat_model(model=model, use_fast_model=use_fast_model), exc)
+            logger.info("[llm_helpers] structured_request_adapted reason=%s", exc.code)
 
 
 def call_llm_json_agentic(

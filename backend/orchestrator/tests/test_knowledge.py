@@ -98,7 +98,9 @@ def test_multi_entity_fact_is_visible_from_either_entity(database):
     assert len(knowledge.list_items(OWNER, subject=fs[0]["subject_ref"])) == 1
     assert len(knowledge.list_items(OWNER, query="Slate")) == 1
     assert knowledge.list_items(OTHER) == []
-    assert knowledge.list_items(OWNER, subject="self", profile=True) == []  # About me remains the selected profile view.
+    assert (
+        knowledge.list_items(OWNER, subject="self", profile=True) == []
+    )  # About me remains the selected profile view.
 
 
 def test_delete_blocks_old_evidence_but_new_events_can_relearn(database):
@@ -302,6 +304,161 @@ def test_summary_cannot_publish_after_concurrent_correction(database, monkeypatc
         conn.execute("UPDATE knowledge_summaries SET next_attempt_at=NOW()")
     assert jobs.summarize_once([OWNER])
     assert knowledge.summary_for(OWNER, "self")["summary"] is None
+
+
+def test_summary_claim_excludes_concurrent_workers_and_repairs_bad_shape(database, monkeypatch):
+    save(database)
+    with database() as conn:
+        conn.execute("UPDATE knowledge_summaries SET next_attempt_at=NOW()")
+    calls = []
+
+    def summarize(*args, **kwargs):
+        calls.append(kwargs)
+        assert not jobs.summarize_once([OWNER])
+        return {"summary": None} if len(calls) == 1 else {"summary": "The quote was sent."}
+
+    monkeypatch.setattr("llm_helpers.call_llm_json", summarize)
+    assert jobs.summarize_once([OWNER])
+    assert len(calls) == 2 and calls[0]["timeout"] == 300
+    assert knowledge.summary_for(OWNER, "self")["summary"] == "The quote was sent."
+    with database() as conn:
+        row = conn.execute("SELECT * FROM knowledge_summaries WHERE subject_ref='self'").fetchone()
+        assert row["lease_token"] is row["lease_until"] is row["error_code"] is None
+
+
+def test_summary_failure_preserves_pending_version_and_private_reason(
+    database, monkeypatch, caplog
+):
+    from llm_policy import LLMRequestRejected
+
+    save(database)
+    with database() as conn:
+        conn.execute("UPDATE knowledge_summaries SET next_attempt_at=NOW()")
+    monkeypatch.setattr(
+        "llm_helpers.call_llm_json",
+        lambda *a, **k: (_ for _ in ()).throw(LLMRequestRejected("invalid_request")),
+    )
+    assert jobs.summarize_once([OWNER])
+    with database() as conn:
+        row = conn.execute("SELECT * FROM knowledge_summaries WHERE subject_ref='self'").fetchone()
+        assert row["version"] != row["rendered_version"]
+        assert row["error_code"] == "invalid_request" and row["lease_token"] is None
+        assert row["next_attempt_at"] > intelligence.utcnow()
+    assert "reason=invalid_request" in caplog.text
+
+
+def test_expired_summary_owner_cannot_publish_or_release_replacement_lease(database, monkeypatch):
+    save(database)
+    with database() as conn:
+        conn.execute("UPDATE knowledge_summaries SET next_attempt_at=NOW()")
+
+    def summarize(*args, **kwargs):
+        with database() as conn:
+            conn.execute(
+                "UPDATE knowledge_summaries SET lease_token='replacement',lease_until=NOW()+INTERVAL '15 minutes'"
+            )
+        return {"summary": "A stale result."}
+
+    monkeypatch.setattr("llm_helpers.call_llm_json", summarize)
+    assert jobs.summarize_once([OWNER])
+    with database() as conn:
+        row = conn.execute("SELECT * FROM knowledge_summaries WHERE subject_ref='self'").fetchone()
+        assert row["lease_token"] == "replacement"
+        assert row["version"] != row["rendered_version"]
+        assert row["summary"] is None
+
+
+def test_reasoning_only_summary_retries_once_without_exposing_reasoning(database, monkeypatch):
+    from llm_helpers import LLMEmptyContentError
+
+    save(database)
+    with database() as conn:
+        conn.execute("UPDATE knowledge_summaries SET next_attempt_at=NOW()")
+    calls = []
+
+    def summarize(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise LLMEmptyContentError("LLM returned empty content")
+        return {"summary": "The quote was sent."}
+
+    monkeypatch.setattr("llm_helpers.call_llm_json", summarize)
+    assert jobs.summarize_once([OWNER])
+    assert [call["reasoning_effort"] for call in calls] == ["medium", "low"]
+    assert knowledge.summary_for(OWNER, "self")["summary"] == "The quote was sent."
+
+
+def test_retry_wakes_failed_learning_and_summaries_for_owner_only(database):
+    save(database)
+    with database() as conn:
+        source = conn.execute("SELECT source_id FROM intelligence_sources LIMIT 1").fetchone()[
+            "source_id"
+        ]
+        for owner in (OWNER, OTHER):
+            conn.execute(
+                "INSERT INTO knowledge_learning(user_email,source_id,status,attempts,error_code) VALUES(%s,%s,'failed',3,'invalid_request')",
+                (owner, source),
+            )
+        conn.execute(
+            "UPDATE knowledge_summaries SET error_code='invalid_summary',next_attempt_at=NOW()+INTERVAL '1 day'"
+        )
+    assert jobs.retry_failed(OWNER) == {"queued": 1, "historical_queued": 0, "summaries_queued": 1}
+    assert jobs.progress(OWNER) == {"pending": 1}
+    assert jobs.progress(OTHER) == {"failed": 1}
+    with database() as conn:
+        assert (
+            conn.execute("SELECT error_code FROM knowledge_summaries").fetchone()["error_code"]
+            is None
+        )
+
+
+@pytest.mark.parametrize("database", ["pre_reliability"], indirect=True)
+def test_reliability_migration_requeues_failures_and_preserves_completed_evidence(database):
+    from pathlib import Path
+
+    item = save(database)
+    knowledge.change(OWNER, item["knowledge_id"], statement="The quote is still pending.")
+    for index in range(3):
+        ingest(database, ident=f"extra-{index}")
+    with database() as conn:
+        sources = conn.execute(
+            "SELECT source_id FROM intelligence_sources ORDER BY source_id"
+        ).fetchall()
+        for row, status in zip(sources, ("failed", "done", "deferred", "running"), strict=True):
+            conn.execute(
+                "INSERT INTO knowledge_learning(user_email,source_id,status,attempts) VALUES(%s,%s,%s,3)",
+                (OWNER, row["source_id"], status),
+            )
+        conn.execute(
+            "INSERT INTO intelligence_failures(user_email,source_id,part,knowledge_only,attempts,error_code,next_attempt_at) VALUES(%s,%s,0,TRUE,3,'invalid_evidence',NULL)",
+            (OWNER, sources[0]["source_id"]),
+        )
+        conn.execute(
+            "UPDATE intelligence_runs SET status='failed',knowledge_only=TRUE,cutoff='2100-01-01'"
+        )
+        receipts = conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+        migration = (
+            Path(__file__).resolve().parents[1] / "db_migrations/0081_learning_reliability.sql"
+        )
+        conn.execute(migration.read_text())
+        statuses = [
+            r["status"]
+            for r in conn.execute(
+                "SELECT status FROM knowledge_learning ORDER BY source_id"
+            ).fetchall()
+        ]
+        assert statuses == ["pending", "done", "deferred", "running"]
+        assert (
+            conn.execute("SELECT attempts FROM intelligence_failures").fetchone()["attempts"] == 0
+        )
+        assert all(
+            r["status"] == "pending" for r in conn.execute("SELECT status FROM intelligence_runs")
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"]
+            == receipts
+        )
+    assert knowledge.list_items(OWNER)[0]["statement"] == "The quote is still pending."
 
 
 def test_api_enforces_owner_scope_and_private_cache_headers(database):

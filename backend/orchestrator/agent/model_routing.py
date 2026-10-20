@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from llm_policy import request_timeout
+
 
 @dataclass(frozen=True)
 class LLMCallPolicy:
@@ -82,7 +84,7 @@ def select_llm_call_policy(
 
     return LLMCallPolicy(
         model=smart_model,
-        timeout=timeout,
+        timeout=request_timeout({"reasoning_effort": reasoning_effort}, timeout),
         profile="smart",
         rationale=f"complexity={complexity}",
         reasoning_effort=reasoning_effort,

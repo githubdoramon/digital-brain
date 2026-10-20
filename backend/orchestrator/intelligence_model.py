@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Literal
 
@@ -10,7 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 import intelligence
 from contact_learning import ContactChanges
-from llm_helpers import build_json_schema_response_format, call_llm_json
+from llm_helpers import LLMEmptyContentError, build_json_schema_response_format, call_llm_json
+from llm_policy import LLMRequestRejected
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -22,7 +24,14 @@ class StrictResponse(BaseModel):
 
 class Evidence(StrictResponse):
     ref: str
-    quote: str = Field(min_length=8, max_length=1200)
+    quote: str | None = Field(default=None, min_length=8, max_length=1200)
+    span_index: int | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def requires_citation(self):
+        if self.quote is None and self.span_index is None:
+            raise ValueError("missing_citation")
+        return self
 
 
 class EntityCandidate(StrictResponse):
@@ -148,6 +157,11 @@ Lookback/related context cannot
 be cited as newly actionable evidence. Broadcast feeds and deleted sources are excluded.
 
 Use exact quotes from provided sources, referencing their ref, for EVERY finding.
+Source text is supplied as an ordered text_spans array. Prefer citing evidence as
+{ref,span_index,quote:null}, with a zero-based index into that source's text_spans.
+The controller copies the selected span verbatim into the saved evidence. Choose
+the span that directly supports the finding; never invent a span index. You may
+instead use span_index=null and an exact quote copied from the supplied source.
 Quotes must be between eight and 1,200 characters. Use only provided existing IDs.
 Copy quotes verbatim from a single source: preserve spelling, punctuation, whitespace
 and emoji. Never correct typos, shorten with ellipses, combine fragments or paraphrase.
@@ -213,25 +227,104 @@ def _ask(payload, *, phase):
             time.monotonic() - started,
         )
         return result
-    except (ValidationError, json.JSONDecodeError):
+    except (ValidationError, json.JSONDecodeError, LLMEmptyContentError):
         raise InvalidModelOutput("invalid_schema") from None
 
 
 def _ask_validated(payload, *, phase):
-    result = call_llm_json(
-        json.dumps(payload, default=str, ensure_ascii=False),
-        system_prompt=SYSTEM + "\nPhase: " + phase,
-        use_fast_model=False,
-        temperature=0,
-        reasoning_effort="medium",
-        timeout=180,
-        max_tokens=12000,
-        sensitive_payload=True,
-        response_format=build_json_schema_response_format(
-            name="scheduled_intelligence", schema=SCHEMA
-        ),
+    budget = int(os.getenv("KNOWLEDGE_REQUEST_CHAR_BUDGET", "48000"))
+    system = SYSTEM + "\nPhase: " + phase
+    response_format = build_json_schema_response_format(
+        name="scheduled_intelligence", schema=SCHEMA
     )
-    return Analysis.model_validate(result).model_dump()
+    for attempt in range(2):
+        fitted = _fit_payload(payload, budget, system, response_format)
+        logger.info(
+            "[intelligence] request_prepared stage=%s source_parts=%d request_chars=%d budget_chars=%d",
+            "extraction" if phase.startswith("Extract") else "reconciliation",
+            len(fitted.get("sources", [])),
+            len(_json(fitted)) + len(system) + len(_json(response_format)),
+            budget,
+        )
+        try:
+            result = call_llm_json(
+                _json(fitted),
+                system_prompt=system,
+                use_fast_model=False,
+                temperature=0,
+                reasoning_effort="medium",
+                timeout=300,
+                max_tokens=int(os.getenv("KNOWLEDGE_MAX_OUTPUT_TOKENS", "12000")),
+                sensitive_payload=True,
+                response_format=response_format,
+            )
+            return Analysis.model_validate(result).model_dump()
+        except LLMRequestRejected as exc:
+            if exc.code != "context_length_exceeded" or attempt:
+                raise
+            # This is a changed request, never a blind retry of the rejected input.
+            budget //= 2
+
+
+def _json(value):
+    return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+
+
+def source_spans(text):
+    spans = [text[i : i + 1000] for i in range(0, len(text), 1000)]
+    if len(spans) > 1 and len(spans[-1]) < 8:
+        spans[-2:] = [spans[-2] + spans[-1]]
+    return spans
+
+
+def expand_citations(result, batch):
+    refs = {r["ref"]: source_spans(r["text"]) for r in batch}
+    findings = []
+    for finding in result["findings"]:
+        evidence = []
+        for item in finding["evidence"]:
+            index = item.get("span_index")
+            if index is not None:
+                spans = refs.get(item["ref"], [])
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or not 0 <= index < len(spans)
+                ):
+                    raise InvalidModelOutput("invalid_evidence")
+                quote = spans[index]
+                if item.get("quote") is not None and item["quote"] != quote:
+                    raise InvalidModelOutput("invalid_evidence")
+                item = {**item, "quote": quote}
+            evidence.append(item)
+        findings.append({**finding, "evidence": evidence})
+    return {**result, "findings": findings}
+
+
+def _fit_payload(payload, budget, system, response_format):
+    context = {k: list(v) for k, v in payload.get("context", {}).items()}
+    fitted = {**payload, "context": context}
+    fixed_size = len(system) + len(_json(response_format))
+    # Source text and candidate quotes are indivisible. Reduce retrieved context
+    # first; oversized source batches are split by analyze, never silently cut.
+    priority = (
+        "related",
+        "lookback",
+        "projects",
+        "entities",
+        "proposals",
+        "tasks",
+        "knowledge",
+        "contact_relationships",
+        "contacts",
+        "people",
+    )
+    while fixed_size + len(_json(fitted)) > budget:
+        name = next((name for name in priority if context.get(name)), None)
+        if name is None:
+            raise LLMRequestRejected("context_length_exceeded")
+        context[name].pop()
+    return fitted
 
 
 def _bounded_context(context):
@@ -270,6 +363,27 @@ def _bounded_context(context):
 
 
 def analyze(owner, batch, *, knowledge_only=False):
+    try:
+        return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
+    except LLMRequestRejected as exc:
+        if exc.code != "context_length_exceeded" or len(batch) < 2:
+            raise
+        middle = len(batch) // 2
+        logger.info(
+            "[intelligence] batch_split reason=context_length_exceeded source_parts=%d", len(batch)
+        )
+        context, findings = {}, []
+        for group in (batch[:middle], batch[middle:]):
+            ctx, fs = analyze(owner, group, knowledge_only=knowledge_only)
+            for name, rows in ctx.items():
+                existing = context.setdefault(name, [])
+                seen = {_json(row) for row in existing}
+                existing.extend(row for row in rows if _json(row) not in seen)
+            findings.extend(fs)
+        return context, findings
+
+
+def _analyze_repaired(owner, batch, *, knowledge_only=False):
     repair_hint = None
     for attempt in range(2):
         if attempt:
@@ -300,9 +414,28 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
             "ref": r["ref"],
             "kind": r["kind"],
             "entity_id": r["entity_id"],
-            "text": r["text"],
+            "text_spans": source_spans(r["text"]),
             "actionable": r["actionable"],
-            "metadata": {k: v for k, v in r["payload"].items() if k != "text"},
+            "metadata": {
+                k: v
+                for k, v in r["payload"].items()
+                if k
+                in {
+                    "identity_id",
+                    "contact_id",
+                    "confirmed_contact_ids",
+                    "thread_id",
+                    "conversation_id",
+                    "sent_at",
+                    "outgoing",
+                    "forwarded",
+                    "original_known",
+                    "title",
+                    "start_date",
+                    "document_date",
+                    "reply_to_id",
+                }
+            },
         }
         for r in eligible
     ]
@@ -320,6 +453,12 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
             "Omit unsupported findings; never invent evidence or IDs to repair a rejection.",
         }
     candidates = _ask(payload, phase="Extract supported candidates; empty findings is valid.")
+    # Repair fabricated/paraphrased quotes before spending a reconciliation call.
+    try:
+        for finding in expand_citations(candidates, eligible)["findings"]:
+            intelligence.evidence_for(finding, eligible)
+    except ValueError:
+        raise InvalidModelOutput("invalid_evidence") from None
     # A second retrieval based on candidate descriptions finds paraphrased existing
     # work that shares few words with the raw conversation.
     if candidates["findings"]:
@@ -346,7 +485,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         )
     try:
         findings = intelligence.validate_findings(
-            candidates, eligible, context, knowledge_only=knowledge_only
+            expand_citations(candidates, eligible), eligible, context, knowledge_only=knowledge_only
         )
         deferred = candidates.get("deferred_refs", [])
         if any(ref not in {r["ref"] for r in eligible} for ref in deferred):

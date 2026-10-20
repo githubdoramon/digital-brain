@@ -649,6 +649,25 @@ def defer_batch(owner, run, batch, code, *, review=False):
         conn.commit()
 
 
+def retry_failures(owner):
+    """Replay retained failures and wake completed/failed runs for this owner only."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE intelligence_failures SET attempts=0,next_attempt_at=NOW() WHERE user_email=%s",
+            (owner,),
+        )
+        count = cur.rowcount
+        cur.execute(
+            """UPDATE intelligence_runs r SET status='pending',next_attempt_at=NOW(),reviewed=FALSE
+            WHERE r.user_email=%s AND r.status IN ('failed','succeeded') AND EXISTS (
+                SELECT 1 FROM intelligence_failures f JOIN intelligence_sources s USING(source_id)
+                WHERE f.user_email=r.user_email AND f.knowledge_only=r.knowledge_only AND s.observed_at<=r.cutoff)""",
+            (owner,),
+        )
+        conn.commit()
+        return count
+
+
 def _save_knowledge(cur, owner, f):
     import knowledge
 

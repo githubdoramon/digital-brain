@@ -55,16 +55,7 @@ def create_knowledge_router():
 
     @router.post("/retry")
     def retry(user=Depends(get_current_user)):
-        from db import get_conn
-
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "UPDATE knowledge_learning SET status='pending',attempts=0,error_code=NULL,next_attempt_at=NOW() WHERE user_email=%s AND status='failed'",
-                (user["email"],),
-            )
-            count = cur.rowcount
-            conn.commit()
-        return {"queued": count}
+        return knowledge_jobs.retry_failed(user["email"])
 
     @router.patch("/{knowledge_id}")
     def correct(knowledge_id: str, payload: Correction, user=Depends(get_current_user)):

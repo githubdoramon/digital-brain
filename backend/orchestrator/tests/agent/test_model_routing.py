@@ -11,6 +11,7 @@ from agent.state import AgentState
 
 
 def test_select_llm_call_policy_prefers_smart_for_complex_questions(monkeypatch):
+    monkeypatch.setenv("LLM_HIGH_REASONING_TIMEOUT", "900")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
     monkeypatch.setenv("AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD", "3")
@@ -29,7 +30,7 @@ def test_select_llm_call_policy_prefers_smart_for_complex_questions(monkeypatch)
 
     assert policy.profile == "smart"
     assert policy.model == "smart-model"
-    assert policy.timeout >= 60
+    assert policy.timeout == 900
     assert policy.reasoning_effort == "xhigh"
 
 

@@ -39,6 +39,42 @@ Per-part receipts, leases, checked source revisions, transactional effects and
 bounded retries survive restarts. Neighbor retrieval is bounded. All model calls
 use `llm_helpers` and sensitive payload handling; logs contain counts/static codes.
 
+Migration `0081_learning_reliability.sql` requeues previously failed learning and
+paused intelligence parts once, without resetting successful receipts or ambiguous
+identity deferrals. The authenticated knowledge retry endpoint can also requeue
+learning, historical failures and failed summaries for its owner. Historical runs
+defer rejected HTTP requests per batch, allowing later sources to proceed; transient
+provider outages still back off the run. Repeated batch failures pause after three
+attempts and retain their evidence for explicit recovery.
+
+Extraction bounds the aggregate request, including instructions, response schema,
+source text, candidates and retrieved context, through
+`KNOWLEDGE_REQUEST_CHAR_BUDGET` (48,000 by default). Source text is never truncated
+to fit: context is reduced first and oversized batches are split. A provider context
+rejection retries once with a smaller context budget before splitting. Character
+size is an estimate, not a tokenizer-specific proof of fit. Raw source payload
+internals are not duplicated into model metadata. Sources expose an ordered array
+of exact text spans, without duplicating the source text. Models can select a span
+index and the controller copies its original text into the saved evidence, avoiding
+quote transcription errors. Exact quote validation runs before reconciliation,
+and rejected evidence gets one repair attempt with static feedback;
+the controller never accepts paraphrased or fabricated supporting quotes.
+
+The shared transport logs allow-listed rejection categories and bounded numeric
+output limits without logging private provider error bodies. JSON calls can adapt
+once per reported output limit or unsupported schema format, and remember those
+constraints for one hour per provider/model. Unknown HTTP 400s are not retried
+unchanged. Strict schema normalization preserves local controller validation when
+a provider requires the simpler JSON-object response format.
+
+Model read timeouts default to 180 seconds; medium reasoning has a configurable
+300-second floor and high/xhigh a 900-second floor, across synchronous and streaming
+transports (`LLM_TIMEOUT`, `LLM_REASONING_TIMEOUT`,
+`LLM_HIGH_REASONING_TIMEOUT`). Explicit longer timeouts remain longer. Optional
+`LLM_MAX_OUTPUT_TOKENS` caps output for known provider limits, including reasoning.
+Extraction requests up to `KNOWLEDGE_MAX_OUTPUT_TOKENS` (12,000 by default).
+Learning, summary and historical workers renew their leases during long requests.
+
 External messages/events/documents retain their 05:00/19:00 Europe/Lisbon scheduled
 analysis and existing task/project proposal and completion contracts. Contact notes
 are evidence, not an append target for learned facts. Event enrichment sends source
@@ -92,6 +128,11 @@ their own source dates and exact evidence links.
 Summaries derive from active subject-linked knowledge. Changes invalidate summaries;
 rapid changes coalesce. Publish compares the captured version against the current
 version, preventing stale in-flight output after corrections/deletion/relinking.
+Summary claims also carry a renewable lease token, preventing concurrent workers
+from processing the same subject. Malformed, empty or reasoning-only responses get
+one schema-focused retry at low reasoning; failures retain a static reason and a
+five-minute delay. Completion logs distinguish published output from stale output
+discarded after a concurrent change.
 Generated summaries are never sources for extraction. Known validity expiry moves
 current facts to historical and schedules a refreshed summary.
 

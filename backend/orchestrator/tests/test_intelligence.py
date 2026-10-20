@@ -72,7 +72,13 @@ def database(monkeypatch, request):
                 "0078_messaging_source_links.sql",
                 "0079_shared_knowledge.sql",
                 "0080_learned_contact_changes.sql",
+                "0081_learning_reliability.sql",
             ):
+                if (
+                    name == "0081_learning_reliability.sql"
+                    and getattr(request, "param", None) == "pre_reliability"
+                ):
+                    continue
                 if (
                     name == "0079_shared_knowledge.sql"
                     and getattr(request, "param", None) == "legacy"
@@ -467,11 +473,8 @@ def test_model_repairs_rejected_facts_with_bounded_private_feedback(database, mo
         bad["predicate"] = "café.delivery"
     else:
         bad["status"] = "open" if defect == "status" else None
-    # Bad quotes pass the shape check but fail final evidence validation.
-    replies = iter(
-        [{"findings": [bad]}] * (2 if defect == "quote" else 1)
-        + [{"findings": [valid]}, {"findings": [valid]}]
-    )
+    # Bad evidence must be repaired before the reconciliation request.
+    replies = iter([{"findings": [bad]}, {"findings": [valid]}, {"findings": [valid]}])
     calls = []
 
     def ask(prompt, **kwargs):
@@ -505,6 +508,28 @@ def test_invalid_model_output_stops_after_one_repair_without_leaking_validation_
         model.analyze(OWNER, batch)
     assert len(calls) == 2
     assert "PRIVATE_INVALID_MODEL_TEXT" not in str(error.value)
+
+
+def test_model_cites_controller_supplied_spans_without_transcribing_quotes(database, monkeypatch):
+    import json
+
+    setup_owner(database)
+    ingest(database)
+    batch = store.next_batch(OWNER, FUTURE)
+    candidate = finding(batch[0])
+    candidate["evidence"] = [{"ref": batch[0]["ref"], "span_index": 0, "quote": None}]
+
+    def ask(prompt, **kwargs):
+        sources = json.loads(prompt)["sources"]
+        assert sources[0]["text_spans"] == [batch[0]["text"]]
+        assert "text" not in sources[0]
+        return {"findings": [candidate]}
+
+    monkeypatch.setattr(model, "call_llm_json", ask)
+    ctx, fs = model.analyze(OWNER, batch)
+    assert fs[0]["evidence"][0]["quote"] == batch[0]["text"]
+    store.apply_batch(OWNER, run(database), batch, ctx, fs)
+    assert len(store.knowledge_for(OWNER)) == 1
 
 
 def test_rejected_batches_defer_without_receipts_then_pause_and_allow_other_sources(
@@ -572,6 +597,35 @@ def test_worker_continues_past_invalid_batch_without_saving_it(database, monkeyp
             conn.execute("SELECT status FROM intelligence_runs").fetchone()["status"] == "succeeded"
         )
     assert "reason=invalid_evidence" in caplog.text
+
+
+def test_http_rejected_batch_does_not_block_later_sources(database, monkeypatch):
+    from llm_policy import LLMRequestRejected
+
+    setup_owner(database)
+    ingest(database)
+    ingest(database, ident="healthy", body="The quote was received this morning.")
+    monkeypatch.setattr(store, "BATCH_SIZE", 1)
+    first = store.next_batch(OWNER, FUTURE)[0]["source_id"]
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET cutoff=%s,knowledge_only=FALSE", (FUTURE,))
+
+    def analyze(owner, batch, **kwargs):
+        if batch[0]["source_id"] == first:
+            raise LLMRequestRejected("invalid_request")
+        return {}, []
+
+    monkeypatch.setattr(model, "analyze", analyze)
+    assert jobs.process_once({OWNER})
+    with database() as conn:
+        assert conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 1
+        assert (
+            conn.execute("SELECT error_code FROM intelligence_failures").fetchone()["error_code"]
+            == "invalid_request"
+        )
+        assert (
+            conn.execute("SELECT status FROM intelligence_runs").fetchone()["status"] == "succeeded"
+        )
 
 
 def test_committed_progress_counts_actual_effects_and_redacts_content(database, caplog):

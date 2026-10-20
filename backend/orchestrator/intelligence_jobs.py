@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from contextlib import contextmanager
 from datetime import datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -11,6 +10,8 @@ from zoneinfo import ZoneInfo
 import intelligence
 import intelligence_model
 from db import get_conn
+from job_leases import lease_heartbeat
+from llm_policy import LLMRequestRejected, failure_code
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_intelligence_run
 
@@ -174,38 +175,26 @@ def process_once(owners):
     try:
         with _heartbeat(run):
             return _process_run(run)
-    except Exception:
+    except Exception as exc:
         finish_run(run, failed=True)
-        logger.warning("[intelligence] analysis batch failed; retry scheduled")
+        logger.warning(
+            "[intelligence] analysis batch failed; retry scheduled reason=%s", failure_code(exc)
+        )
         return True
 
 
-@contextmanager
 def _heartbeat(run):
-    stop = threading.Event()
-
     def renew():
-        while not stop.wait(60):
-            try:
-                with get_conn() as conn, conn.cursor() as cur:
-                    cur.execute(
-                        """UPDATE intelligence_runs SET lease_until=NOW() + INTERVAL '15 minutes'
-                        WHERE run_id=%s AND lease_token=%s AND status='running'""",
-                        (run["run_id"], run["lease_token"]),
-                    )
-                    conn.commit()
-                    if not cur.rowcount:
-                        return
-            except Exception:
-                logger.warning("[intelligence] lease renewal unavailable")
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE intelligence_runs SET lease_until=NOW() + INTERVAL '15 minutes'
+                WHERE run_id=%s AND lease_token=%s AND status='running' AND lease_until>NOW()""",
+                (run["run_id"], run["lease_token"]),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
 
-    thread = threading.Thread(target=renew, name="intelligence-lease", daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join(timeout=2)
+    return lease_heartbeat(renew)
 
 
 @traced_intelligence_run()
@@ -232,7 +221,7 @@ def _process_run(run):
                         if review_batch
                         else ({}, [])
                     )
-                except intelligence_model.InvalidModelOutput as exc:
+                except (intelligence_model.InvalidModelOutput, LLMRequestRejected) as exc:
                     intelligence.defer_batch(
                         run["user_email"], run, review_batch, exc.code, review=True
                     )
@@ -247,7 +236,7 @@ def _process_run(run):
             context, findings = intelligence_model.analyze(
                 run["user_email"], batch, knowledge_only=run["knowledge_only"]
             )
-        except intelligence_model.InvalidModelOutput as exc:
+        except (intelligence_model.InvalidModelOutput, LLMRequestRejected) as exc:
             intelligence.defer_batch(run["user_email"], run, batch, exc.code)
             logger.warning("[intelligence] batch deferred reason=%s", exc.code)
             continue
