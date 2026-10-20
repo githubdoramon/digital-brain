@@ -134,8 +134,9 @@ transports (`LLM_TIMEOUT`, `LLM_REASONING_TIMEOUT`,
 Extraction requests up to `KNOWLEDGE_MAX_OUTPUT_TOKENS` (12,000 by default).
 Learning, summary and historical workers use shared two-minute leases, renewed by
 an independent thread every 20 seconds, including during long reasoning requests.
-A dead process therefore blocks recovery for at most two minutes plus the worker's
-poll interval (10 seconds for learning, 30 seconds for intelligence). Token and
+Abandoned work becomes eligible again after at most two minutes. Polling
+(10 seconds for learning, 30 seconds for intelligence) and already active work
+can delay the next claim. Token and
 expiry checks reject late writes from an earlier owner. Learning renewals cover
 inference through the transaction that commits findings and per-part receipts.
 There is no startup reset of other servers' live leases. On the first deployment,
@@ -360,3 +361,41 @@ do not drop new tables or erase captured source data as a rollback shortcut.
 Review anonymized, manually labeled examples with the configured live model before
 claiming extraction accuracy. Deterministic fixture tests establish controller,
 storage, migration and queue behavior, not real-model quality or device acceptance.
+
+
+## Readable knowledge prose
+
+Contact, identity and entity references remain stable structured links. They do not
+belong in a learned statement or subject summary. Extraction and reconciliation
+share concise prose guidance with summarization: use supplied names, preserve
+attribution and uncertainty, keep exact quotations only in evidence, and omit
+internal IDs and related-record pointers from prose. Controller normalization
+removes ID-only annotations and replaces inline references with supplied labels;
+unknown people retain a neutral description without inventing an identity.
+
+Read paths return stored text unchanged. To repair previously learned prose, run
+`scripts/repair_knowledge_prose.py` once in the updated orchestrator container:
+
+```bash
+docker compose exec -T orchestrator python scripts/repair_knowledge_prose.py --dry-run
+docker compose exec -T orchestrator python scripts/repair_knowledge_prose.py --apply
+```
+
+The default is a dry run; JSON lines preview statement/reason changes followed by
+counts. Both commands accept `--owner reader@example.com` to restrict the repair.
+`--batch-size` controls transaction size (default 100, maximum 1,000).
+Apply preserves each original fact in `intelligence_knowledge_revisions`, cleans
+only derived statement/inference prose, increments its revision and clears changed
+statement embeddings. Normal triggers invalidate affected summaries; separately
+polluted summaries also invalidate their versions and leases for regeneration by
+the existing worker. Identity labels resolve only inside their owner's archive.
+Manual edits, deleted facts, evidence quotes and structured links are untouched.
+No LLM runs in the script. Batches commit independently; failures roll back the
+current batch, and rerunning resumes safely without revising already repaired facts.
+Dry-run and apply summary counts can differ if concurrent workers regenerate them.
+New facts and summaries retain normalization before persistence, so no recurring
+repair or read-time rewriting is needed.
+
+The mobile Knowledge screen retains search, its paginated fact list, and existing
+contact-specific navigation. The subject carousel and its entity-list request are
+removed; no replacement browsing interface is introduced.

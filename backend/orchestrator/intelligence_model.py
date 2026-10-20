@@ -16,6 +16,7 @@ from intelligence_context import compact_context as _bounded_context
 from intelligence_context import fit_payload as _fit_payload
 from intelligence_context import input_estimate, request_limits
 from intelligence_context import json_for as _json
+from knowledge_prose import PROSE_INSTRUCTIONS
 from knowledge_references import contact_ref, normalize_finding
 from learning_validation import LearningValidationError
 from llm_config import get_smart_model
@@ -284,7 +285,7 @@ def _ask(payload, *, phase):
 
 def _ask_validated(payload, *, phase):
     budget, output = request_limits()
-    system = SYSTEM + "\nPhase: " + phase
+    system = SYSTEM + "\n" + PROSE_INSTRUCTIONS + "\nPhase: " + phase
     response_format = build_json_schema_response_format(
         name="scheduled_intelligence", schema=SCHEMA
     )

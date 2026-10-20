@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from psycopg.types.json import Jsonb
 
+import knowledge_prose
 from db import get_conn
 from job_leases import LEASE_INTERVAL_SQL
 from knowledge_references import contact_ref, normalize_finding
@@ -534,6 +535,13 @@ def validate_findings(result, batch, context, *, knowledge_only=False):
                 context.setdefault("deferred_refs", []).extend(x["ref"] for x in f["evidence"])
                 continue
             f = {**f, **knowledge.validate_entities(f, context, e)}
+            labels = knowledge_prose.context_labels(context)
+            labels.update({entity["entity_ref"]: entity["label"] for entity in f["entity_records"]})
+            f["statement"] = knowledge_prose.clean(f["statement"], labels)
+            if not 3 <= len(f["statement"]) <= 2000:
+                raise ValueError("invalid_statement")
+            if f.get("inference_reason"):
+                f["inference_reason"] = knowledge_prose.clean(f["inference_reason"], labels)
             if f.get("inferred") and not f.get("inference_reason"):
                 raise ValueError("invalid_analysis")
             if f.get("category", "general") not in knowledge.CATEGORIES:
