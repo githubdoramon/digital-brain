@@ -1,11 +1,11 @@
-FROM node:24.22.1-alpine AS deps
+FROM node:26.12.0-alpine AS deps
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
-FROM node:24.22.1-alpine AS builder
+FROM node:26.12.0-alpine AS builder
 
 ARG NEXT_PUBLIC_APP_VERSION=dev
 ARG NEXT_PUBLIC_APP_BUILD_TIME=unknown
@@ -23,7 +23,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:24.22.1-alpine AS runner
+FROM node:26.12.0-alpine AS runner
 
 ARG NEXT_PUBLIC_APP_VERSION=dev
 ARG NEXT_PUBLIC_APP_BUILD_TIME=unknown
