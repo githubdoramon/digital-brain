@@ -86,7 +86,7 @@ jobs:
 
       - name: Cache patched Tryx wheel
         id: tryx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/digital-brain-tryx-wheels
           key: ${{ runner.os }}-tryx-history-py311-${{ hashFiles('backend/orchestrator/vendor/tryx/**', 'backend/orchestrator/scripts/build_tryx_history.py') }}
