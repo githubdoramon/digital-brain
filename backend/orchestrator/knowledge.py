@@ -299,6 +299,8 @@ def summary_for(owner, subject):
 
 def source_is_current(cur, row, owner):
     """Return None for existing archive kinds, otherwise validate the new source revision."""
+    if row.get("payload", {}).get("learning_owner") or row.get("payload", {}).get("origin") == "confirmed_contact_command":
+        return False
     kind = row["kind"]
     if kind not in {"chat", "contact_note", "legacy_fact", "manual_fact"}:
         return None

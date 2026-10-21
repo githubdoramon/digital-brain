@@ -13,6 +13,7 @@ The controller:
 6. Decides when to continue, ask user, or stop
 """
 
+import asyncio
 import contextlib
 import json
 import os
@@ -39,6 +40,7 @@ from observability import trace
 from observability.logger import get_runtime_logger
 from observability.mirador import record_agent_run_metrics, timed_workflow_stage, traced_agent_run
 from search_normalization import normalize_search_text
+from time_context import with_request_time
 from tools.action_enums import GetEventsAction
 
 from .contact_resolution import should_pre_resolve_contacts
@@ -265,6 +267,9 @@ class AgentController:
         self.runtime_profile = selected_interface.profile.runtime
         state.conversational_profile = selected_interface.profile.name
 
+        if state.intent == "contact_update" and user_email:
+            return classification, None, [], []
+
         if classification is not None and classification.contact_references is not None:
             # Only task-relevant references may seed automatic identity resolution.
             # Keep the actual goal/message intact for planning and validation.
@@ -467,6 +472,7 @@ class AgentController:
         return None
 
     @traced_agent_run
+    @with_request_time
     async def run(
         self,
         question: str,
@@ -516,6 +522,9 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            if state.intent == "contact_update" and user_email:
+                return await self._contact_update_bundle(question, user_email, session_id, client_context,
+                                                   conversation_history, state, run_id, total_start)
             self._append_visual_attachment_context(messages, state)
             self._log_selected_profile()
             self._initialize_execution_plan(state, question)
@@ -752,6 +761,7 @@ class AgentController:
             raise
 
     @traced_agent_run
+    @with_request_time
     async def run_stream(
         self,
         question: str,
@@ -788,6 +798,11 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            if state.intent == "contact_update" and user_email:
+                bundle = await self._contact_update_bundle(question, user_email, session_id, client_context,
+                                                     conversation_history, state, run_id, total_start)
+                yield {"type": "done", "bundle": bundle}
+                return
             self._append_visual_attachment_context(messages, state)
             self._log_selected_profile()
             self._initialize_execution_plan(state, question)
@@ -2226,6 +2241,19 @@ class AgentController:
             return "agent produced no final response after tool execution"
 
         return "agent produced empty responses"
+
+    async def _contact_update_bundle(self, question, user_email, session_id, client_context,
+                               conversation_history, state, run_id, total_start):
+        from commands.contact_flow import prepare_update
+
+        result, answer, directives = await asyncio.to_thread(
+            prepare_update, question, user_email, session_id, client_context, conversation_history
+        )
+        bundle = self._finalize(question, answer, state, run_id, session_id, total_start)
+        bundle["command_result"] = result
+        bundle["ui_directives"] = directives
+        bundle["learning_owner"] = "contact"
+        return bundle
 
     def _finalize(
         self,

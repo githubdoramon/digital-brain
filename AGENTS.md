@@ -36,7 +36,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Shared knowledge**: Migration 0079 extends the evidence-backed knowledge store with
 multi-entity links, inferred origin, revisions/deletion boundaries and derived summaries.
-Brain user messages queue durable asynchronous learning transactionally; assistant text
+Brain user messages retain timestamped evidence transactionally; explicit updates are owned
+by their preview/confirmation workflow and excluded from background learning. Assistant text
 is never evidence. `knowledge_jobs` uses the shared intelligence extractor for chat and
 an all-source, knowledge-only historical revisit. Ambiguous person facts wait for
 clarification/new context; clear facts still commit. Contact notes remain manual notes;
@@ -355,7 +356,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Accent-insensitive text matching is mandatory**: any code that compares, searches, or fuzzy-matches user-provided text (names, titles, tags, comments, or any free-text field) must strip diacritics before comparison. Use `normalize_search_text()` from `search_normalization.py` for Python-side comparisons and PostgreSQL `unaccent()` for SQL queries. Never use raw `.lower()` or `LOWER()` alone for text matching — "Jordan" must match "José", "São Paulo" must match "Sao Paulo". The `unaccent` extension is installed in the database schema (`init.sql`).
 - **Pre-resolution results must be surfaced to the agent loop**: when the controller runs `pre_resolve_contacts` before the tool loop, the outcome (whether contacts were found or not) must be injected into the LLM context via `build_contact_scope_context()`. This includes the "no matches found" case — otherwise the LLM will redundantly call `resolve_contacts` again for the same names.
 - **High-confidence contact identity answers may use pre-resolution evidence**: for contact name/identity questions, the goal validator may accept a final answer that contains the display name of a high-confidence pre-resolved contact without requiring another retrieval call. Contact details such as phone, email, and address still require retrieval.
-- **Knowledge learning is independent of routing**: every persisted Brain user message queues durable `knowledge_jobs` learning transactionally. Assistant text is never evidence. The response callback captures only explicit interpretation rules through `user_rules.py`.
+- **Learning ownership**: ordinary persisted Brain user messages queue durable `knowledge_jobs` learning transactionally. Explicit contact updates (slash commands or natural language), event commands and their clarification replies retain evidence but never enter competing background extraction, including after cancellation. Confirmed contact effects and additional reviewed facts write knowledge directly from original evidence. Assistant text is never evidence. The response callback captures only explicit interpretation rules through `user_rules.py`.
 - **New-thread titles are generated asynchronously**: schedule title generation after exchange persistence and update the database only if the title remains a default, so title inference never delays the answer or overwrites a user rename.
 - **Readable fetched pages should proceed directly to synthesis**: `fetch_web_page` coverage is deterministic and must not spend a separate LLM validation call. Once readable content is marked satisfied, the controller's next model turn has tools disabled and synthesizes from that page.
 - **Contacts + personal-document routing should stay memory-first**: queries about a named relative/contact plus artifacts like prescriptions, lab results, glasses specs, reports, invoices, IDs, or "a doc/document/file" should prefer `memory_search`, not `web_search`, and should usually pre-resolve the referenced contact before retrieval.
@@ -368,7 +369,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Knowledge linkage**: useful facts may concern any entity. Attach canonical subjects and supporting source evidence; structured contacts, birthdays and relationships use the shared typed contact-change path.
 - **Knowledge vs AgentState.known_facts**: the shared knowledge store is durable across conversations; `AgentState.known_facts` contains transient tool-result working memory for one request.
 - **Knowledge retrieval**: use the shared `knowledge.py` retrieval path and preserve attribution, uncertainty and applicability dates. Prompt evidence formatting is shared by agents and contact resolution.
-- **Learning ownership**: `knowledge_jobs` owns durable background extraction from transactionally captured evidence. Chat response callbacks capture only explicit scoped rules; router fact hints do not gate learning.
+- **Shared time context**: every model request through `llm_helpers` receives the current UTC clock and the request timezone when available (UTC fallback). Persist message timestamps/timezones, retain them in history, and resolve relative dates against the originating message, including across clarification turns and historical learning.
 
 ### Limits & Safety
 

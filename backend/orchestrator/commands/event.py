@@ -37,6 +37,7 @@ from schemas import (
     PlaceIn,
 )
 from search_normalization import normalize_search_text
+from time_context import snapshot
 
 from . import get_command_registry, parse_command
 from .state import ensure_restored_thread_exists, get_recoverable_command_data
@@ -195,6 +196,7 @@ def handle_pending_event(
         "thread_id": command_thread_id,
         "event_pending_key": key,
         "client_context": client_context,
+        "request_time": snapshot(client_context),
         "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }
@@ -211,7 +213,7 @@ def handle_pending_event(
             response_text_transform(command_response_text(command_result))
             if response_text_transform
             else command_response_text(command_result),
-            user_metadata=user_metadata,
+            user_metadata={**(user_metadata or {}), "learning_owner": command_name, "request_time": context["request_time"]},
             assistant_metadata=assistant_metadata,
         )
     except Exception as exc:

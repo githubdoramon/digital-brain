@@ -809,6 +809,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
                     "thread_id",
                     "conversation_id",
                     "sent_at",
+                    "timezone",
                     "outgoing",
                     "forwarded",
                     "original_known",

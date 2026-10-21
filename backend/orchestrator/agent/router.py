@@ -33,6 +33,7 @@ class IntentType(str, Enum):
 
     MEMORY_SEARCH = "memory_search"  # Semantic recall over memories, events, documents
     DATA_QUERY = "data_query"  # Structured counting/aggregation over the memory graph
+    CONTACT_UPDATE = "contact_update"  # Explicit contact mutation, owned by preview workflow
     CONTACT_LOOKUP = "contact_lookup"  # People, relationships
     WEB_SEARCH = "web_search"  # External information
     HOME_CONTROL = "home_control"  # Home Assistant actions
@@ -89,6 +90,7 @@ TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 INTENT_TOOL_MAP = {
     IntentType.MEMORY_SEARCH: ["memory", "resolution", "visual"],
     IntentType.DATA_QUERY: ["graph", "memory", "resolution"],
+    IntentType.CONTACT_UPDATE: [],
     IntentType.CONTACT_LOOKUP: ["resolution", "memory", "visual"],
     IntentType.WEB_SEARCH: ["web", "visual"],
     IntentType.HOME_CONTROL: ["home"],
@@ -106,6 +108,7 @@ INTENT_TOOL_MAP = {
 INTENT_PRE_RESOLVE_CONTACTS = {
     IntentType.MEMORY_SEARCH: False,
     IntentType.DATA_QUERY: False,
+    IntentType.CONTACT_UPDATE: False,
     IntentType.CONTACT_LOOKUP: True,
     IntentType.WEB_SEARCH: False,
     IntentType.HOME_CONTROL: False,
@@ -527,6 +530,7 @@ CONTACT RELEVANCE:
 INTENT TYPES:
 - memory_search: Qualitative recall over the personal memory graph: events, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
 - data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type", "list me all contacts with email @example.com"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
+- contact_update: The user explicitly asks to add, update or correct a contact, birthday, relationship, contact detail or contact place. Route requests such as "Set Alex Carter's birthday to today; born in 1987" here. This starts a controller-owned preview and confirmation flow; do not also classify it as background learning. Questions about details remain contact_lookup. Plain factual statements without a request to modify remain eligible for ordinary learning.
 - contact_lookup: Finding people, how they relate to each other, their relationships, professionss and contact's information, like phone, email, description, and more. Pick this when the question is about people's information.
 - web_search: External information from the internet that is NOT expected to live in the user's personal memory graph. Do NOT pick this for personal or contact related documents or information. This is a personal graph, so questions are usually related to it (but not always).
 - home_control: Smart home/Home Assistant actions and management
@@ -554,7 +558,7 @@ pre_resolve_contacts=true even when it is not a question. Resolve that person or
 ask a concise clarification before treating their identity as settled.
 
 The following should_generate_facts field is compatibility metadata; all persisted
-user messages now enter background knowledge learning. Also classify whether the
+user messages enter background knowledge learning except explicit updates owned by a command workflow. Also classify whether the
 current message contains a durable personal fact:
 
 - Set `should_generate_facts` to true only for a first-person assertion, preference, goal, habit, trait, opinion, or constraint stated by the user (for example, "I prefer morning meetings" or "I live in Lisbon").

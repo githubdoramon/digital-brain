@@ -41,7 +41,7 @@ def database(monkeypatch, request):
             conn.execute("""
                 CREATE TABLE conversation_threads(id TEXT PRIMARY KEY,user_email TEXT);
                 CREATE TABLE conversation_messages(message_id BIGSERIAL PRIMARY KEY,thread_id TEXT REFERENCES conversation_threads,
-                    role TEXT,content TEXT,created_at TIMESTAMPTZ DEFAULT NOW());
+                    role TEXT,content TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),metadata JSONB DEFAULT '{}');
                 CREATE TABLE user_facts(fact_id TEXT PRIMARY KEY,user_email TEXT,content TEXT,category TEXT,
                     importance SMALLINT,fact_mode TEXT DEFAULT 'soft',rule_type TEXT,rule_scope TEXT[] DEFAULT '{}',
                     rule_payload JSONB DEFAULT '{}',source_thread_id TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),updated_at TIMESTAMPTZ DEFAULT NOW());
@@ -79,7 +79,10 @@ def database(monkeypatch, request):
                 "0085_learning_fairness_note_dedup.sql",
                 "0086_learning_efficiency.sql",
                 "0087_background_learning_recovery.sql",
+                "0088_command_learning_ownership.sql",
             ):
+                if name == "0088_command_learning_ownership.sql" and getattr(request, "param", None) == "pre_command_ownership":
+                    continue
                 if name in {
                     "0086_learning_efficiency.sql",
                     "0087_background_learning_recovery.sql",

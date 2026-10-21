@@ -39,10 +39,19 @@ have been removed. No LLM extraction or embeddings run on the instruction path.
 
 ## Extraction and asynchronous execution
 
-Brain user messages capture private `chat` sources and durable learning jobs in
-the exchange transaction. Assistant text is never captured as evidence. Chat
-routing no longer decides whether a personal-fact-only extractor runs. The chat
-callback parses only explicitly stated deterministic aliases.
+Brain user messages capture private `chat` sources in the exchange transaction.
+Ordinary messages queue durable learning jobs. Explicit contact updates and event
+commands, including their clarification replies, have a persisted `learning_owner`
+and do not enter background extraction or its supporting context. Cancellation and
+expired previews do not release their text for automatic execution. Assistant text
+is never captured as evidence. The chat callback parses only explicitly stated
+deterministic aliases.
+
+All model calls through `llm_helpers` receive a trusted current clock. Request-local
+context supplies the client timezone, with UTC fallback. Chat history and source
+payloads preserve message timestamps; relative dates belong to the originating
+message, not the worker clock. Contact previews and clarification state retain the
+original request clock through midnight and process recovery.
 
 `knowledge_jobs` prioritizes new chat with bounded historical turns. It uses the same
 `intelligence_model.analyze` and controller `_save_knowledge` as scheduled analysis.
@@ -185,7 +194,22 @@ pending profession and relationship proposals remain reviewable; accepting a
 profession writes knowledge. New event/contact enrichment queues the shared learner
 instead of independently inferring a second set of relationship proposals. Confirmed
 contact commands preserve the original user text and confirmed contact references
-as private evidence, never a generated proposal or summary as evidence.
+as private evidence, never a generated proposal or summary as evidence. Contact
+confirmation no longer queues contact enrichment for a second extraction pass.
+Instead, `contact_command_knowledge.py` records the approved effects and directly
+writes evidence-linked birthday, profession, relationship, place and additional
+reviewed knowledge, refreshing the usual summary/indexing state. An immutable
+per-preview receipt prevents duplicate knowledge writes. Reviewed edits remain in
+the private receipt alongside the original evidence. Additional contact facts are
+extracted in the initial command call, require exact user quotes and resolved
+identities, and appear in the same preview; unsupported quotes are discarded.
+
+The router's `contact_update` intent enters the same registry handler and
+preview/clarification/confirmation flow as `/contact`. Lookup questions and ordinary
+factual statements retain their existing paths. Migration 0088 recovers ownership
+from persisted command metadata, revokes competing learning leases and excludes
+owned evidence from historical reseeding and progress. It does not reverse changes
+applied before the migration.
 
 ### Structured contact changes
 

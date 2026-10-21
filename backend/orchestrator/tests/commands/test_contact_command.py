@@ -306,6 +306,7 @@ def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch
         model=None,
         conversation_messages=None,
         existing_extraction=None,
+        **_kwargs,
     ):
         calls.append(
             {
@@ -350,7 +351,8 @@ def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch
 
     assert second["type"] == "contact_confirmation"
     second_history = calls[1]["conversation_messages"]
-    assert second_history == [
+    assert all(message.get("sent_at") for message in second_history)
+    assert [{key: item[key] for key in ("role", "content")} for item in second_history] == [
         {"role": "user", "content": "Bia has a birthday"},
         {"role": "assistant", "content": "What is Bia's birth date?"},
         {"role": "user", "content": "1994-05-07"},
@@ -396,6 +398,7 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
         model=None,
         conversation_messages=None,
         existing_extraction=None,
+        **_kwargs,
     ):
         calls.append(
             {
@@ -444,7 +447,7 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
 
     assert second["type"] == "contact_confirmation"
     assert calls[1]["message"] == "Rita is my physiotherapist"
-    assert calls[1]["conversation_messages"] == [
+    assert [{key: item[key] for key in ("role", "content")} for item in calls[1]["conversation_messages"]] == [
         {"role": "user", "content": "Rita is my physiotherapist"},
         {
             "role": "assistant",
@@ -795,6 +798,7 @@ def test_handle_contact_supports_independent_relationship_pairs(monkeypatch):
 
 
 def test_confirm_contact_command_applies_updates(monkeypatch):
+    monkeypatch.setattr("contact_command_knowledge.record_confirmation", lambda *args: None)
     command_data = {
         "proposal": {
             "contacts": [
@@ -950,6 +954,7 @@ def test_confirm_contact_command_applies_updates(monkeypatch):
 
 
 def test_confirm_contact_command_supports_multiple_contact_edits(monkeypatch):
+    monkeypatch.setattr("contact_command_knowledge.record_confirmation", lambda *args: None)
     command_data = {
         "proposal": {
             "contacts": [

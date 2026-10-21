@@ -14,6 +14,7 @@ from typing import Any
 import conversations
 from llm_config import get_fast_model, get_smart_model
 from observability.logger import get_runtime_logger
+from time_context import with_request_time
 
 logger = get_runtime_logger(__name__)
 
@@ -115,6 +116,7 @@ def _get_main_controller():
 # ---------------------------------------------------------------------------
 
 
+@with_request_time
 async def answer_question(
     question: str,
     search_limit: int = 30,
@@ -179,6 +181,8 @@ async def answer_question(
     if session_id and user_email and result.get("answer"):
         try:
             assistant_metadata = {}
+            if result.get("command_result"):
+                assistant_metadata["command_result"] = result["command_result"]
             if result.get("ui_directives"):
                 assistant_metadata["ui_directives"] = result["ui_directives"]
             linked_items = result.get("linked_items")
@@ -196,7 +200,7 @@ async def answer_question(
                 user_email=user_email,
                 user_message=question,
                 assistant_message=result["answer"],
-                user_metadata={},
+                user_metadata={"learning_owner": result.get("learning_owner", "")},
                 assistant_metadata=assistant_metadata,
             )
 
@@ -231,6 +235,7 @@ async def answer_question(
     return result
 
 
+@with_request_time
 async def answer_question_stream(
     question: str,
     search_limit: int = 30,
@@ -304,6 +309,8 @@ async def answer_question_stream(
     if final_bundle and session_id and user_email and final_bundle.get("answer"):
         try:
             assistant_metadata = {}
+            if final_bundle.get("command_result"):
+                assistant_metadata["command_result"] = final_bundle["command_result"]
             if final_bundle.get("ui_directives"):
                 assistant_metadata["ui_directives"] = final_bundle["ui_directives"]
             linked_items = final_bundle.get("linked_items")
@@ -321,7 +328,7 @@ async def answer_question_stream(
                 user_email=user_email,
                 user_message=question,
                 assistant_message=final_bundle["answer"],
-                user_metadata={},
+                user_metadata={"learning_owner": final_bundle.get("learning_owner", "")},
                 assistant_metadata=assistant_metadata,
             )
 

@@ -388,7 +388,9 @@ def test_initial_chat_with_large_instructions_uses_tokens_without_rewriting_them
     assert measurement["wire_bytes"] > 60000
     assert measurement["estimated_tokens"] < 30000
     assert measurement["estimator"] == "cl100k_base_with_20_percent_headroom"
-    assert sent["messages"] == messages
+    assert sent["messages"][0]["content"].startswith("Trusted time context:")
+    assert sent["messages"][0]["content"].endswith(instructions)
+    assert sent["messages"][1:] == messages[1:]
     assert result["choices"][0]["message"]["content"] == "Ready."
 
 

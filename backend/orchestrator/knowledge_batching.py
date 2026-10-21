@@ -7,7 +7,7 @@ import intelligence
 MAX_PARTS = 12
 MAX_TEXT_CHARS = 16000
 MAX_GAP_SECONDS = 24 * 60 * 60
-ELIGIBLE_SQL = """((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
+ELIGIBLE_SQL = """knowledge_source_learnable(s.payload) AND ((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
     OR (j.status='running' AND (j.lease_until IS NULL OR j.lease_until<NOW())))"""
 
 

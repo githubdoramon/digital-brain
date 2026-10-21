@@ -38,6 +38,7 @@ from schemas import (
     ThreadOut,
     ThreadUpdate,
 )
+from time_context import snapshot
 from ui_dsl import command_result_to_ui_directives
 from ui_dsl.enums import CommandResultType
 
@@ -1219,6 +1220,7 @@ def _handle_command(
         "thread_id": command_thread_id,
         "event_pending_key": pending_key,
         "client_context": client_context,
+        "request_time": snapshot(client_context),
         "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }
@@ -1235,7 +1237,7 @@ def _handle_command(
             response_text_transform(_command_response_text(command_result))
             if response_text_transform
             else _command_response_text(command_result),
-            user_metadata=user_metadata,
+            user_metadata={**(user_metadata or {}), "learning_owner": parsed_cmd.command, "request_time": context["request_time"]},
             assistant_metadata=assistant_metadata,
         )
     except Exception as exc:

@@ -43,6 +43,8 @@ def _contact_command_data_from_result(
         "proposal": copy.deepcopy(proposal),
         "original_message": exchange.get("user_message") or "",
         "thread_id": exchange.get("thread_id"),
+        "request_time": command_result.get("request_time"),
+        "conversation_messages": command_result.get("conversation_messages"),
     }
 
 
@@ -344,6 +346,10 @@ def _apply_modifications_to_proposal(
             if "comments" in mods:
                 merged["comments"] = str(mods.get("comments") or "").strip() or None
         update_item["merged"] = merged
+        if apply_detail_fields:
+            fields = update_item.setdefault("fields", {})
+            if "birth_date" in mods:
+                fields["birthday"] = merged.get("birthday")
 
     if main_ref:
         main_display_name = str(mods.get("main_display_name") or "").strip() or None
@@ -461,6 +467,8 @@ def _apply_modifications_to_proposal(
                 if field_name in raw_mod:
                     merged[field_name] = _string_list(raw_mod.get(field_name))
             update_item["merged"] = merged
+            if "birth_date" in raw_mod:
+                update_item.setdefault("fields", {})["birthday"] = merged.get("birthday")
             if display_name_override:
                 for rel in updated.get("relationships") or []:
                     if str(rel.get("from_reference") or "") == reference:
@@ -804,30 +812,12 @@ def confirm_contact_command(
                 {"contact_id": contact_id, "place_id": place_id, "role": role or ""}
             )
 
+        from contact_command_knowledge import record_confirmation
+
+        record_confirmation(user_email, payload.preview_id, command_data, proposal, contact_reference_map)
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_contact_resolved(payload.preview_id, "created")
-
-        try:
-            import contact_enrichment_jobs
-
-            contact_enrichment_jobs.enqueue_contact_enrichment(
-                user_email=user_email,
-                source_key=f"contact-command:{payload.preview_id}",
-                source_text=str(command_data.get("original_message") or ""),
-                contact_ids=list(
-                    dict.fromkeys(
-                        created_contact_ids
-                        + updated_contact_ids
-                        + list(contact_reference_map.values())
-                    )
-                ),
-            )
-        except Exception:
-            logger.warning(
-                "[contact_confirm] Could not queue post-confirmation contact enrichment",
-                exc_info=True,
-            )
 
         return ContactCommandResult(
             success=True,

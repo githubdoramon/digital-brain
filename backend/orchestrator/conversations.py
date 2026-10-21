@@ -304,6 +304,10 @@ def get_conversation_history(thread_id: str, user_email: str) -> list[dict[str, 
         content = message.get("content")
         if not role or not content:
             continue
+        clock = (message.get("metadata") or {}).get("request_time") or {}
+        sent_at = clock.get("sent_at") or message.get("created_at")
+        if sent_at:
+            content = f"[Message sent at {sent_at}; timezone: {clock.get('timezone', 'unknown')}]\n{content}"
         history.append({"role": role, "content": content})
     return history
 
@@ -449,6 +453,20 @@ def record_exchange(
 ) -> dict[str, Any]:
     if not thread_id or not user_email:
         raise ValueError("thread_id and user_email are required")
+
+    from time_context import current_context, snapshot
+
+    user_metadata = dict(user_metadata or {})
+    user_metadata.setdefault("request_time", current_context() or snapshot())
+    result = (assistant_metadata or {}).get("command_result") or {}
+    state = result.get("command_state") or {}
+    owner = state.get("command_name")
+    if result.get("type") in {"contact_confirmation", "event_confirmation"}:
+        owner = result["type"].removesuffix("_confirmation")
+    if result.get("source") in {"contact_command", "event_command"}:
+        owner = result["source"].removesuffix("_command")
+    if owner in {"contact", "event"}:
+        user_metadata["learning_owner"] = owner
 
     title_candidate = _normalize_title_candidate(user_message)
 

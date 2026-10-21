@@ -36,6 +36,7 @@ from llm_policy import (
 from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_llm_request
+from time_context import model_time_message
 
 logger = get_runtime_logger(__name__)
 
@@ -268,7 +269,7 @@ def build_chat_payload(
     resolved_model = resolve_chat_model(model=model, use_fast_model=use_fast_model)
     payload: dict[str, Any] = {
         "model": resolved_model,
-        "messages": _merge_system_messages(messages),
+        "messages": messages,
         "stream": stream,
     }
 
@@ -309,6 +310,7 @@ def build_chat_payload(
     if extra_body:
         payload.update(extra_body)
 
+    payload["messages"] = _merge_system_messages([model_time_message(), *payload["messages"]])
     _maybe_attach_keep_alive(payload)
     apply_constraints(payload)
 

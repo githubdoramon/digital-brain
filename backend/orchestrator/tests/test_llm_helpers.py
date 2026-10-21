@@ -72,6 +72,7 @@ def test_sensitive_json_request_redacts_input_output_and_reasoning(monkeypatch, 
 
 
 def test_build_chat_payload_merges_system_messages_at_the_start(monkeypatch):
+    monkeypatch.setattr(llm_helpers, "model_time_message", lambda: {"role": "system", "content": "trusted clock"})
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
 
     messages = [
@@ -87,7 +88,7 @@ def test_build_chat_payload_merges_system_messages_at_the_start(monkeypatch):
     assert payload["messages"] == [
         {
             "role": "system",
-            "content": "base instructions\n\nruntime context\n\nvalidation feedback",
+            "content": llm_helpers.model_time_message()["content"] + "\n\nbase instructions\n\nruntime context\n\nvalidation feedback",
         },
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "previous answer"},

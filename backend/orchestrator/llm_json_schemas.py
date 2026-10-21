@@ -123,6 +123,20 @@ CONTACT_UPDATE_RESPONSE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "additional_knowledge": {
+            "type": "array", "maxItems": 10,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "contact_name": {"type": "string"},
+                    "predicate": {"type": "string", "pattern": "^[a-z0-9_.-]{1,100}$"},
+                    "statement": {"type": "string", "minLength": 3, "maxLength": 2000},
+                    "quote": {"type": "string", "minLength": 8, "maxLength": 1200},
+                },
+                "required": ["contact_name", "predicate", "statement", "quote"],
+                "additionalProperties": False,
+            },
+        },
         "summary": {"type": "string"},
     },
     "required": [
@@ -131,6 +145,7 @@ CONTACT_UPDATE_RESPONSE_SCHEMA: dict[str, Any] = {
         "relationships",
         "contact_place_links",
         "summary",
+        "additional_knowledge",
     ],
     "additionalProperties": False,
 }

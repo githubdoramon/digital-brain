@@ -8,6 +8,8 @@ a central place to register new commands.
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from time_context import snapshot, use_time_context
+
 from .parser import ParsedCommand
 
 
@@ -97,7 +99,9 @@ class CommandRegistry:
         if cmd_def.requires_args and not parsed.args:
             raise ValueError(f"Command /{parsed.command} requires arguments")
 
-        return cmd_def.handler(parsed, context)
+        context.setdefault("request_time", snapshot(context.get("client_context")))
+        with use_time_context(context["request_time"]):
+            return cmd_def.handler(parsed, context)
 
 
 # Global registry instance

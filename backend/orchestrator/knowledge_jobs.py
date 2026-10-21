@@ -45,7 +45,7 @@ def initialize_owner(owner):
             cur.execute(
                 """INSERT INTO intelligence_sources(kind,entity_id,owner_email,fingerprint,payload,historical)
                 SELECT 'chat',m.message_id::text,t.user_email,md5(m.content),jsonb_build_object(
-                    'text',m.content,'thread_id',m.thread_id,'sent_at',m.created_at,'outgoing',TRUE),TRUE
+                    'text',m.content,'thread_id',m.thread_id,'sent_at',m.created_at,'outgoing',TRUE,'learning_owner',m.metadata->>'learning_owner'),TRUE
                 FROM conversation_messages m JOIN conversation_threads t ON t.id=m.thread_id
                 WHERE t.user_email=%s AND m.role='user' AND NOT EXISTS(SELECT 1 FROM intelligence_sources s
                     WHERE s.kind='chat' AND s.entity_id=m.message_id::text)""",
@@ -156,7 +156,7 @@ def source_batch(job):
                 # Operators and limits are application constants. The database bounds retrieval.
                 cur.execute(
                     f"""SELECT * FROM intelligence_sources WHERE kind=%s
-                    AND owner_email=%s AND payload->>%s=%s AND source_id {operator} %s
+                    AND owner_email=%s AND knowledge_source_learnable(payload) AND payload->>%s=%s AND source_id {operator} %s
                     ORDER BY source_id {order} LIMIT %s""",
                     (
                         original["kind"],
@@ -593,7 +593,7 @@ def progress(owner):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT j.status,COUNT(*) AS count FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
-            WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL GROUP BY j.status""",
+            WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL AND knowledge_source_learnable(s.payload) GROUP BY j.status""",
             (owner,),
         )
         return {r["status"]: r["count"] for r in cur.fetchall()}

@@ -107,6 +107,7 @@ def _learning(cur, owner):
             LEFT JOIN knowledge_backfills b ON b.user_email=%s
             LEFT JOIN intelligence_state st ON st.user_email=COALESCE(b.user_email,j.user_email)
             WHERE (s.owner_email IS NULL OR s.owner_email=%s) AND s.duplicate_of_source_id IS NULL
+                AND knowledge_source_learnable(s.payload)
                 AND (j.source_id IS NOT NULL OR (b.version>=1 AND
                     {learning_ownership.ELIGIBLE_SOURCE_SQL}))
         ) SELECT historical,status,phase,error_code,COUNT(*) AS count,

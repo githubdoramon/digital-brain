@@ -779,7 +779,7 @@ def _save_knowledge_base(cur, owner, f):
             (datetime.fromisoformat(e["sent_at"]) for e in f["evidence"] if e.get("sent_at")),
             default=earliest,
         )
-        if newest_new < newest_old:
+        if newest_new < newest_old and not f.get("user_confirmed"):
             cur.execute(
                 """INSERT INTO intelligence_knowledge_revisions(knowledge_id, snapshot)
                 VALUES (%s,%s)""",

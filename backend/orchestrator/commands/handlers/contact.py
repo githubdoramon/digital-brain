@@ -192,13 +192,21 @@ def _ambiguous_contact_field(
     return _clarification_fields([field_id])
 
 
-def _format_contact_command_conversation(messages: list[dict[str, str]] | None, fallback_message: str) -> str:
+def _format_contact_command_conversation(
+    messages: list[dict[str, str]] | None, fallback_message: str
+) -> str:
     conversation: list[dict[str, str]] = []
     for item in messages or []:
         role = str(item.get("role") or "").strip()
         content = str(item.get("content") or "").strip()
         if role in {"user", "assistant"} and content:
-            conversation.append({"role": role, "content": content})
+            conversation.append(
+                {
+                    "role": role,
+                    "content": content,
+                    **{key: item[key] for key in ("sent_at", "timezone") if key in item},
+                }
+            )
     if not conversation and str(fallback_message or "").strip():
         conversation.append({"role": "user", "content": str(fallback_message).strip()})
     return json.dumps(conversation, ensure_ascii=False)
@@ -227,6 +235,8 @@ def _llm_extract_contact_changes(
     conversation_messages: list[dict[str, str]] | None = None,
     existing_extraction: dict[str, Any] | None = None,
     llm_request_options: dict[str, Any] | None = None,
+    request_time: dict[str, Any] | None = None,
+    reference_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
     from prompts.context import get_self_context, get_user_context
@@ -243,11 +253,20 @@ def _llm_extract_contact_changes(
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
     conversation_json = _format_contact_command_conversation(conversation_messages, message)
     existing_extraction_context = _format_existing_contact_extraction(existing_extraction)
+    from time_context import snapshot
+
+    source_time = request_time or snapshot()
     prompt = f"""You need to extract a structured proposal of information about contacts and their relationships.
 
 {self_context_block}
 {user_facts_block}
 Current user message: \"{message}\"
+
+Earlier chat for reference resolution only (never replay its updates):
+{json.dumps(reference_history or [], ensure_ascii=False)}
+
+Original request time: {json.dumps(source_time)}
+Resolve today/yesterday/tomorrow in the original request against this clock, even during later clarification.
 
 Conversation messages (JSON array, most recent last):
 {conversation_json}
@@ -264,6 +283,11 @@ Supported updates:
 - contact-place role such as home or work
 
 Do NOT generate tags. Tags are generated asynchronously after contacts are saved.
+Capture other directly stated durable contact facts in additional_knowledge, with an exact quote
+from the user's current request or clarification. Return [] when there are none. Do not repeat
+birthdays, relationships, profession or any structured update there. Do not put inferred
+facts into manual comments; comments are only explicitly requested notes. Additional knowledge
+is shown for review and saved by this workflow, without a second extraction pass.
 
 If the statement is ambiguous, missing a required person, or contains an ambiguous numeric date, ask a clarification instead of guessing.
 
@@ -472,18 +496,18 @@ def _infer_forced_new_contact_resolution(
     if not _contains_explicit_new_intent(latest_detail):
         previous_user_messages = user_messages[:-1]
         prior_new_intent = next(
-            (message for message in reversed(previous_user_messages) if _contains_explicit_new_intent(message)),
+            (
+                message
+                for message in reversed(previous_user_messages)
+                if _contains_explicit_new_intent(message)
+            ),
             None,
         )
         if not prior_new_intent:
             return set(), False, latest_detail
 
         latest_assistant_before_user = next(
-            (
-                item["content"]
-                for item in reversed(transcript[:-1])
-                if item["role"] == "assistant"
-            ),
+            (item["content"] for item in reversed(transcript[:-1]) if item["role"] == "assistant"),
             "",
         )
         assistant_prompt_normalized = normalize_search_text(latest_assistant_before_user)
@@ -601,16 +625,13 @@ def _merge_comments(existing_comments: Any, updates: dict[str, Any]) -> str | No
     comment = str(updates.get("comments") or "").strip()
     if comment and normalize_search_text(comment) not in normalize_search_text(current):
         parts.append(comment)
-    profession = str(updates.get("profession") or "").strip()
-    if profession:
-        profession_line = f"Profession: {profession}"
-        if normalize_search_text(profession_line) not in normalize_search_text("\n".join(parts)):
-            parts.append(profession_line)
     combined = "\n\n".join(part for part in parts if part.strip()).strip()
     return combined or None
 
 
-def _merge_contact_updates(existing: dict[str, Any] | None, updates: dict[str, Any]) -> dict[str, Any]:
+def _merge_contact_updates(
+    existing: dict[str, Any] | None, updates: dict[str, Any]
+) -> dict[str, Any]:
     base = dict(existing or {})
     return {
         "contact_id": str(base.get("contact_id") or ""),
@@ -655,7 +676,10 @@ def _ensure_contact_create(proposal: dict[str, Any], ref: dict[str, Any]) -> Non
     if not reference:
         return
     for item in proposal["contacts"]:
-        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "create":
+        if (
+            str(item.get("reference") or "") == reference
+            and str(item.get("operation") or "") == "create"
+        ):
             return
     proposal["contacts"].append(
         {
@@ -666,7 +690,9 @@ def _ensure_contact_create(proposal: dict[str, Any], ref: dict[str, Any]) -> Non
             "display_name": ref.get("display_name"),
         }
     )
-    _append_unique_change(proposal["explicit_change_lines"], f"Create contact: {ref.get('display_name')}")
+    _append_unique_change(
+        proposal["explicit_change_lines"], f"Create contact: {ref.get('display_name')}"
+    )
 
 
 def _ensure_place_create(proposal: dict[str, Any], ref: dict[str, Any]) -> None:
@@ -676,7 +702,10 @@ def _ensure_place_create(proposal: dict[str, Any], ref: dict[str, Any]) -> None:
     if not reference:
         return
     for item in proposal["places"]:
-        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "create":
+        if (
+            str(item.get("reference") or "") == reference
+            and str(item.get("operation") or "") == "create"
+        ):
             return
     proposal["places"].append(
         {
@@ -691,9 +720,14 @@ def _ensure_place_create(proposal: dict[str, Any], ref: dict[str, Any]) -> None:
     _append_unique_change(proposal["explicit_change_lines"], f"Create place: {ref.get('name')}")
 
 
-def _ensure_contact_update_entry(proposal: dict[str, Any], reference: str, display_name: str) -> dict[str, Any]:
+def _ensure_contact_update_entry(
+    proposal: dict[str, Any], reference: str, display_name: str
+) -> dict[str, Any]:
     for item in proposal["contacts"]:
-        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "update":
+        if (
+            str(item.get("reference") or "") == reference
+            and str(item.get("operation") or "") == "update"
+        ):
             return item
     update_item = {
         "proposal_id": _proposal_id("contact_update"),
@@ -756,7 +790,9 @@ def _apply_contact_fields_to_proposal(
         target_reference,
         str(target_ref.get("display_name") or label_name),
     )
-    merged = _merge_contact_updates(target_existing or update_item.get("merged"), normalized_updates)
+    merged = _merge_contact_updates(
+        target_existing or update_item.get("merged"), normalized_updates
+    )
     update_item["display_name"] = str(target_ref.get("display_name") or label_name)
     update_item["fields"] = {k: v for k, v in normalized_updates.items() if v not in (None, [], "")}
     update_item["merged"] = merged
@@ -875,6 +911,7 @@ def _build_proposal(
     original_message: str,
     forced_new_contact_names: set[str] | None = None,
     force_all_ambiguous_new_contacts: bool = False,
+    evidence_messages: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     main_name = str(extracted.get("main_contact_name") or "").strip()
     related_name = str(extracted.get("related_contact_name") or "").strip()
@@ -944,7 +981,9 @@ def _build_proposal(
     places_by_text: dict[str, dict[str, Any]] = {}
     forced_new_contact_names = set(forced_new_contact_names or set())
 
-    def resolve_contact(name: str, field_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def resolve_contact(
+        name: str, field_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         normalized_name = str(name or "").strip()
         if not normalized_name:
             return None, build_need_user_input(
@@ -1037,7 +1076,11 @@ def _build_proposal(
             continue
 
         raw_birthday = raw_update.get("birthday")
-        if raw_birthday is None and main_ref and _contact_reference_value(target_ref) == _contact_reference_value(main_ref):
+        if (
+            raw_birthday is None
+            and main_ref
+            and _contact_reference_value(target_ref) == _contact_reference_value(main_ref)
+        ):
             raw_birthday = parsed_birth_date
         parsed_update_birthday, update_birth_date_error = _parse_birth_date(raw_birthday)
         if update_birth_date_error:
@@ -1068,7 +1111,11 @@ def _build_proposal(
         if any(value not in (None, [], "") for value in updates.values()):
             applied_update_refs.add(_contact_reference_value(target_ref))
 
-    if parsed_birth_date and main_ref and _contact_reference_value(main_ref) not in applied_update_refs:
+    if (
+        parsed_birth_date
+        and main_ref
+        and _contact_reference_value(main_ref) not in applied_update_refs
+    ):
         _apply_contact_fields_to_proposal(
             proposal,
             target_ref=main_ref,
@@ -1078,8 +1125,18 @@ def _build_proposal(
 
     first_relationship: dict[str, Any] | None = None
     for spec in relationship_specs:
-        from_name = str(spec.get("from_contact_name") or spec.get("from_name") or spec.get("source_contact_name") or "").strip()
-        to_name = str(spec.get("to_contact_name") or spec.get("to_name") or spec.get("target_contact_name") or "").strip()
+        from_name = str(
+            spec.get("from_contact_name")
+            or spec.get("from_name")
+            or spec.get("source_contact_name")
+            or ""
+        ).strip()
+        to_name = str(
+            spec.get("to_contact_name")
+            or spec.get("to_name")
+            or spec.get("target_contact_name")
+            or ""
+        ).strip()
         relationship_type, reciprocal_type = _normalize_relationship_pair(
             spec.get("relationship_type") or spec.get("type"),
             spec.get("reciprocal_type") or spec.get("other_type"),
@@ -1120,8 +1177,12 @@ def _build_proposal(
     first_place_ref: dict[str, Any] | None = None
     for spec in place_link_specs:
         contact_name = str(spec.get("contact_name") or spec.get("name") or main_name or "").strip()
-        place_text = str(spec.get("place_text") or spec.get("place_name") or spec.get("address") or "").strip()
-        link_role = str(spec.get("place_role") or spec.get("role") or "home").strip().lower() or "home"
+        place_text = str(
+            spec.get("place_text") or spec.get("place_name") or spec.get("address") or ""
+        ).strip()
+        link_role = (
+            str(spec.get("place_role") or spec.get("role") or "home").strip().lower() or "home"
+        )
         contact_ref, need_user_input = resolve_contact(contact_name, "main_contact_name")
         if need_user_input:
             return None, need_user_input
@@ -1146,6 +1207,42 @@ def _build_proposal(
             f"Link {contact_ref.get('display_name')} to {place_ref.get('name')} as {link_role}",
         )
 
+    evidence_texts = [
+        m.get("content", "") for m in (evidence_messages or []) if m.get("role") == "user"
+    ] or [original_message]
+    proposal["additional_knowledge"] = []
+    for fact in _dict_items(extracted.get("additional_knowledge")):
+        quote = str(fact.get("quote") or "")
+        predicate = str(fact.get("predicate") or "")
+        statement = str(fact.get("statement") or "").strip()
+        if not (8 <= len(quote) <= 1200 and any(quote in text for text in evidence_texts)):
+            continue
+        if (
+            not re.fullmatch(r"[a-z0-9_.-]{1,100}", predicate)
+            or predicate in {"birthday", "employment"}
+            or predicate.startswith("relationship.")
+        ):
+            continue
+        if not 3 <= len(statement) <= 2000:
+            continue
+        target, need_user_input = resolve_contact(
+            str(fact.get("contact_name") or ""), "main_contact_name"
+        )
+        if need_user_input:
+            return None, need_user_input
+        if not target:
+            continue
+        proposal["additional_knowledge"].append(
+            {
+                "reference": _contact_reference_value(target),
+                "display_name": target.get("display_name"),
+                "predicate": predicate,
+                "statement": statement,
+                "quote": quote,
+            }
+        )
+        _append_unique_change(proposal["explicit_change_lines"], statement)
+
     first_relationship_data = first_relationship if isinstance(first_relationship, dict) else {}
     first_place_data = first_place_ref if isinstance(first_place_ref, dict) else {}
     proposal["edit_context"] = {
@@ -1163,7 +1260,9 @@ def _build_proposal(
     if not proposal["summary_lines"]:
         return None, build_need_user_input(
             prompt="I couldn't determine a concrete contact update from that message. What should I change?",
-            questions=["I couldn't determine a concrete contact update from that message. What should I change?"],
+            questions=[
+                "I couldn't determine a concrete contact update from that message. What should I change?"
+            ],
             fields=_clarification_fields(["details"]),
             kind="clarification",
             source="contact_command",
@@ -1177,7 +1276,10 @@ def _contact_merged_by_reference(proposal: dict[str, Any], reference: str) -> di
     contacts_raw = proposal.get("contacts")
     contacts = contacts_raw if isinstance(contacts_raw, list) else []
     for item in contacts:
-        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "update":
+        if (
+            str(item.get("reference") or "") == reference
+            and str(item.get("operation") or "") == "update"
+        ):
             merged = item.get("merged")
             if isinstance(merged, dict):
                 return merged
@@ -1185,7 +1287,9 @@ def _contact_merged_by_reference(proposal: dict[str, Any], reference: str) -> di
 
 
 def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[str, Any]]:
-    edit_context = proposal.get("edit_context") if isinstance(proposal.get("edit_context"), dict) else {}
+    edit_context = (
+        proposal.get("edit_context") if isinstance(proposal.get("edit_context"), dict) else {}
+    )
     fields: list[dict[str, Any]] = []
     main_ref = str(edit_context.get("main_contact_reference") or "")
     related_ref = str(edit_context.get("related_contact_reference") or "")
@@ -1333,7 +1437,16 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
         if isinstance((clarification_context or {}).get("extracted"), dict):
             previous_extraction = dict((clarification_context or {}).get("extracted") or {})
 
-    original_message = str((clarification_context or {}).get("original_message") or raw_message).strip()
+    from time_context import snapshot
+
+    request_time = (
+        (clarification_context or {}).get("request_time")
+        or context.get("request_time")
+        or snapshot(context.get("client_context"))
+    )
+    original_message = str(
+        (clarification_context or {}).get("original_message") or raw_message
+    ).strip()
     extraction_message = original_message
     conversation_messages = [
         item
@@ -1367,11 +1480,22 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
                 _strip_clarification_field_labels(raw_message, clarification_field_labels),
             )
 
+    current_request_time = context.get("request_time") or snapshot(context.get("client_context"))
+    for index, item in enumerate(conversation_messages):
+        item.setdefault(
+            "sent_at", (request_time if index == 0 else current_request_time)["sent_at"]
+        )
+        item.setdefault(
+            "timezone", (request_time if index == 0 else current_request_time)["timezone"]
+        )
+
     extracted = _llm_extract_contact_changes(
         extraction_message,
         user_email=user_email,
         conversation_messages=conversation_messages,
         existing_extraction=previous_extraction,
+        request_time=request_time,
+        reference_history=context.get("reference_history"),
     )
     logger.info(
         "[handle_contact] extraction complete need_user_input=%s contacts=%d relationships=%d place_links=%d",
@@ -1395,10 +1519,12 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             requested_fields=explicit_need_user_input.get("fields") or [],
             extra_payload={
                 "command_name": "contact",
+                "request_time": request_time,
                 "extracted": extracted,
                 "thread_id": context.get("thread_id"),
             },
         )
+        clarification_payload["conversation_messages"][-1].update(snapshot({"timezone": request_time["timezone"]}))
         store_clarification_preview(
             clarification_preview_id,
             clarification_payload,
@@ -1431,6 +1557,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
     proposal, proposal_need_user_input = _build_proposal(
         extracted,
         original_message=original_message,
+        evidence_messages=conversation_messages,
         forced_new_contact_names=forced_new_contact_names,
         force_all_ambiguous_new_contacts=force_all_ambiguous_new_contacts,
     )
@@ -1448,10 +1575,12 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             requested_fields=proposal_need_user_input.get("fields") or [],
             extra_payload={
                 "command_name": "contact",
+                "request_time": request_time,
                 "extracted": extracted,
                 "thread_id": context.get("thread_id"),
             },
         )
+        clarification_payload["conversation_messages"][-1].update(snapshot({"timezone": request_time["timezone"]}))
         store_clarification_preview(
             clarification_preview_id,
             clarification_payload,
@@ -1487,14 +1616,17 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
 
     edit_fields = _build_edit_fields(proposal, preview_id)
 
-    from commands.storage import store_command_data, store_pending_event
+    from commands.storage import get_command_data, store_command_data, store_pending_event
 
     store_command_data(
         preview_id,
         {
             "command_name": "contact",
+            "request_time": request_time,
             "proposal": proposal,
+            "extracted": extracted,
             "original_message": original_message,
+            "conversation_messages": conversation_messages,
             "thread_id": context.get("thread_id"),
         },
     )
@@ -1504,6 +1636,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
 
     return {
         "type": "contact_confirmation",
+        "command_state": get_command_data(preview_id),
         "preview_id": preview_id,
         "proposal": proposal,
         "summary_lines": proposal.get("summary_lines", []),
@@ -1511,6 +1644,8 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
         "derived_change_lines": proposal.get("derived_change_lines", []),
         "edit_fields": edit_fields,
         "edit_action_id": _edit_action_id(preview_id),
+        "request_time": request_time,
+        "conversation_messages": conversation_messages,
         "requires_confirmation": True,
         "message": "I drafted these contact graph changes. Please review, edit if needed, and confirm.",
     }
