@@ -29,7 +29,7 @@
     "expo-asset": "~55.0.17",
     "expo-background-task": "~55.0.17",
     "expo-build-properties": "~55.0.9",
-    "expo-clipboard": "~55.0.8",
+    "expo-clipboard": "~58.0.3",
     "expo-constants": "~55.0.8",
     "expo-device": "~55.0.10",
     "expo-document-picker": "~55.0.8",
