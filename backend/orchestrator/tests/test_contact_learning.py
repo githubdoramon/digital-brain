@@ -219,7 +219,7 @@ def test_chat_worker_applies_structured_contact_changes(database, monkeypatch):
     def analyze(owner, batch, **kwargs):
         ctx = intelligence.context_for(owner, batch)
         return ctx, intelligence.validate_findings(
-            {"findings": [candidate(batch[0])]}, batch, ctx, **kwargs
+            {"findings": [candidate(batch[0])]}, batch, ctx, knowledge_only=kwargs["knowledge_only"]
         )
 
     monkeypatch.setattr(intelligence_model, "analyze", analyze)
@@ -466,7 +466,9 @@ def test_new_contact_retries_other_deferred_facts_without_another_message(databa
                 "statement": "Mia likes puzzles.",
                 "category": "preference",
             }
-        return ctx, intelligence.validate_findings({"findings": [f]}, batch, ctx, **kwargs)
+        return ctx, intelligence.validate_findings(
+            {"findings": [f]}, batch, ctx, knowledge_only=kwargs["knowledge_only"]
+        )
 
     monkeypatch.setattr(intelligence_model, "analyze", analyze)
     assert knowledge_jobs.process_once([OWNER])

@@ -73,7 +73,7 @@ def test_tiny_history_uses_one_analysis_and_individual_receipts(database, monkey
 
     def analyze(owner, batch, **kwargs):
         calls.append(batch)
-        assert owner == OWNER and kwargs == {"knowledge_only": True}
+        assert owner == OWNER and kwargs == {"knowledge_only": True, "durable_splits": True}
         assert [row["source_id"] for row in batch if not row["supporting"]] == ids
         assert all(not row["actionable"] for row in batch)
         return {"deferred_refs": [f"{ids[2]}:0"]}, []

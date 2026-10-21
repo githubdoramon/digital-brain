@@ -75,6 +75,12 @@ class LLMOutputExhaustedError(RuntimeError):
     code = "output_exhausted"
 
 
+class LLMDegenerateOutputError(LLMOutputExhaustedError):
+    """Structured generation was cancelled before it exhausted the full allowance."""
+
+    code = "output_degenerate"
+
+
 class LLMEmptyContentError(ValueError):
     """No usable answer was emitted, including reasoning-only completions."""
 
@@ -693,33 +699,39 @@ def _post_chat_completion_stream(
     payload: dict[str, Any],
     *,
     timeout: Optional[int] = None,
+    sensitive_payload: bool = False,
 ) -> dict[str, Any]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
     request_url = f"{base_url}/chat/completions"
+    from llm_output_guard import JSONOutputGuard
+
+    guard = (
+        JSONOutputGuard() if payload.get("response_format") and not payload.get("tools") else None
+    )
+    deadline = time.monotonic() + resolved_timeout
+    saw_done = False
     finish_reason = None
     accumulated_content = ""
     accumulated_reasoning = ""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
     accumulated_usage: dict[str, Any] | None = None
 
-    logger.info(
-        "[llm_helpers] LLM outbound request (stream): %s",
-        json.dumps(
-            {
-                "url": request_url,
-                "method": "POST",
-                "timeout_seconds": resolved_timeout,
-                "headers": {
-                    "content-type": "application/json",
-                    "authorization_present": bool(get_llm_headers().get("Authorization")),
-                },
-                "payload": payload,
-            },
-            ensure_ascii=False,
-            default=str,
-        ),
-    )
+    if sensitive_payload:
+        diagnostic(
+            "llm_request",
+            model=payload.get("model"),
+            timeout=resolved_timeout,
+            messages=payload.get("messages"),
+            response_format=payload.get("response_format"),
+            tools=payload.get("tools"),
+            stream=True,
+            max_tokens=payload.get("max_tokens"),
+            reasoning_effort=payload.get("reasoning_effort"),
+            reasoning=payload.get("reasoning"),
+        )
+    else:
+        logger.info("[llm_helpers] LLM outbound request (stream): model=%s", payload.get("model"))
 
     response = requests.post(
         request_url,
@@ -735,16 +747,28 @@ def _post_chat_completion_stream(
             raise rejected from None
         response.raise_for_status()
 
+        response.encoding = "utf-8"
         for raw_line in response.iter_lines(decode_unicode=True):
-            line = str(raw_line or "").strip()
-            if not line or line == "data: [DONE]":
+            if time.monotonic() > deadline:
+                raise requests.Timeout("stream_deadline")
+            line = (
+                raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line or "")
+            ).strip()
+            if not line:
                 continue
-            if line.startswith("data: "):
-                line = line[6:]
+            if line.startswith("data:"):
+                line = line[5:].lstrip()
+            if line == "[DONE]":
+                saw_done = True
+                break
             try:
                 chunk = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            if chunk.get("error"):
+                diagnostic("llm_stream_provider_error", error=chunk["error"])
+                raise LLMUnavailableError("stream_provider_error")
 
             chunk_usage = chunk.get("usage")
             if isinstance(chunk_usage, dict):
@@ -754,7 +778,14 @@ def _post_chat_completion_stream(
             if choice.get("finish_reason") is not None:
                 finish_reason = choice["finish_reason"]
             delta = choice.get("delta", {})
-            accumulated_content += str(delta.get("content", "") or "")
+            text = str(delta.get("content", "") or "")
+            if guard and (reason := guard.feed(text)):
+                logger.warning(
+                    "[llm_helpers] stream_cancelled reason=%s content_chars=%d", reason, guard.size
+                )
+                diagnostic("llm_stream_cancelled", reason=reason, content_chars=guard.size)
+                raise LLMDegenerateOutputError(reason)
+            accumulated_content += text
 
             reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content")
             if isinstance(reasoning_delta, list):
@@ -784,6 +815,9 @@ def _post_chat_completion_stream(
                 if function.get("arguments"):
                     bucket["function"]["arguments"] += str(function.get("arguments") or "")
 
+        if guard and not saw_done and finish_reason is None:
+            raise LLMUnavailableError("incomplete_structured_stream")
+
         content = {
             "choices": [
                 {
@@ -805,10 +839,19 @@ def _post_chat_completion_stream(
         }
         if accumulated_usage is not None:
             content["usage"] = accumulated_usage
-        logger.info(
-            "[llm_helpers] LLM response (stream final sync): %s",
-            json.dumps(content, ensure_ascii=False),
-        )
+        if sensitive_payload:
+            diagnostic(
+                "llm_response",
+                model=payload.get("model"),
+                choices=[{"finish_reason": finish_reason, "content": accumulated_content}],
+                usage=accumulated_usage,
+            )
+        else:
+            logger.info(
+                "[llm_helpers] LLM response (stream final sync): model=%s finish_reason=%s",
+                payload.get("model"),
+                finish_reason,
+            )
         return content
 
     finally:
@@ -874,7 +917,7 @@ def _call_llm_raw(
         )
 
     content = (
-        _post_chat_completion_stream(payload, timeout=timeout)
+        _post_chat_completion_stream(payload, timeout=timeout, sensitive_payload=sensitive_payload)
         if stream
         else _post_chat_completion(
             payload,

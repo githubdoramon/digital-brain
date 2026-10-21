@@ -265,7 +265,7 @@ def process_once(owners):
         return False
     job = jobs[0]
     logger.info(
-        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d parts=%d recovered=%d",
+        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d parts=%d recovered=%d batch_limit=%d",
         job["user_email"],
         job["source_id"],
         job["part"],
@@ -273,6 +273,7 @@ def process_once(owners):
         job["attempts"] + 1,
         len(jobs),
         sum(item["status"] == "running" for item in jobs),
+        job.get("batch_limit", knowledge_batching.MAX_PARTS),
     )
     try:
         with _heartbeat(job, jobs=jobs):
@@ -284,7 +285,7 @@ def process_once(owners):
                 sum(len(row["text"]) for row in batch),
             )
             context, findings = intelligence_model.analyze(
-                job["user_email"], batch, knowledge_only=True
+                job["user_email"], batch, knowledge_only=True, durable_splits=True
             )
             with get_conn() as conn, conn.cursor() as cur:
                 for item in jobs:
@@ -361,6 +362,30 @@ def process_once(owners):
             len(findings),
             len(jobs),
             statuses.count("deferred"),
+        )
+    except intelligence_model.SourceBatchSplit as exc:
+        with get_conn() as conn, conn.cursor() as cur:
+            for item in jobs:
+                cur.execute(
+                    """UPDATE knowledge_learning SET batch_limit=LEAST(batch_limit,%s),
+                    status='pending',attempts=GREATEST(0,attempts-1),next_attempt_at=NOW(),
+                    lease_token=NULL,lease_until=NULL,error_code=NULL
+                    WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s
+                    AND lease_until>NOW()""",
+                    (
+                        exc.size,
+                        item["user_email"],
+                        item["source_id"],
+                        item["part"],
+                        item["lease_token"],
+                    ),
+                )
+            conn.commit()
+        logger.info(
+            "[knowledge] batch_split_persisted reason=%s parts=%d batch_limit=%d",
+            exc.reason,
+            len(jobs),
+            exc.size,
         )
     except llm_admission.BackgroundDeferred as exc:
         _defer_learning(jobs, exc)
@@ -534,6 +559,7 @@ def _summary_response(facts, schema, attempt):
             + (" The previous response was invalid. Follow the schema exactly." if attempt else "")
         ),
         use_fast_model=False,
+        stream=True,
         reasoning_effort="low" if attempt else "medium",
         temperature=0,
         timeout=300,

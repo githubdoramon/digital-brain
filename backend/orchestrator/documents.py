@@ -1353,9 +1353,19 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
     )
     user_prompt = json.dumps({"tags": normalized}, ensure_ascii=False)
     try:
+        import tag_generation_cache
         from llm_helpers import build_json_schema_response_format
         from llm_json_schemas import TAG_SUGGESTION_RESPONSE_SCHEMA
 
+        cache_key = tag_generation_cache.key(
+            kind="tag_translation",
+            model=get_smart_model(),
+            prompt=user_prompt,
+            system=prompt,
+            schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
+        )
+        if (cached := tag_generation_cache.load(cache_key)) is not None:
+            return cached
         parsed = _call_llm_json_response(
             user_prompt,
             system_prompt=prompt,
@@ -1375,12 +1385,19 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
                     logger.debug("[documents] cleaned=%s", cleaned)
                     if cleaned:
                         translated.append(cleaned)
-            return translated or normalized
+            result = translated or normalized
+            if len(translated) == len(normalized) and all(
+                isinstance(tag, str) for tag in parsed["tags"]
+            ):
+                tag_generation_cache.save(cache_key, result)
+            return result
     except Exception as exc:
         from llm_helpers import LLMUnavailableError
 
         if isinstance(exc, LLMUnavailableError):
-            logger.warning("[documents] LLM unavailable while translating tags; keeping original tags")
+            logger.warning(
+                "[documents] LLM unavailable while translating tags; keeping original tags"
+            )
             return normalized
         logger.warning("[documents] Failed to translate tags: %s", exc, exc_info=exc)
     return normalized

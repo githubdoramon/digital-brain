@@ -78,8 +78,12 @@ def database(monkeypatch, request):
                 "0084_learning_progress.sql",
                 "0085_learning_fairness_note_dedup.sql",
                 "0086_learning_efficiency.sql",
+                "0087_background_learning_recovery.sql",
             ):
-                if name == "0086_learning_efficiency.sql" and getattr(request, "param", None) in {
+                if name in {
+                    "0086_learning_efficiency.sql",
+                    "0087_background_learning_recovery.sql",
+                } and getattr(request, "param", None) in {
                     "pre_efficiency",
                     "pre_fairness",
                     "pre_context",

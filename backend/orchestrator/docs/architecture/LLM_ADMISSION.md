@@ -1,10 +1,11 @@
 # LLM background admission
 
 `llm_admission.py` controls chat-completion traffic from the knowledge learner,
-scheduled intelligence and summary worker. Sync requests, sync SSE collection,
+scheduled intelligence, summary worker and asynchronous LLM job workers. Sync requests, sync SSE collection,
 async chat streams, warm-up and compaction requests use the shared transport gate.
-Chat, briefings and other unclassified callers retain foreground behavior; embedding
-requests are outside this gate. No model or reasoning defaults change.
+Interactive chat/briefing requests and other unclassified callers retain foreground
+behavior; scheduled briefings use background admission. Embedding requests are outside
+this gate. No model or reasoning defaults change.
 
 One background workflow per endpoint may hold admission in the orchestrator process.
 A workflow retains its slot across extraction, repairs, reconciliation and commit,
@@ -55,3 +56,40 @@ It establishes receipt migration, no-budget provider deferral, summary coalescin
 queue rotation, reservation and cancellation behavior. It does not measure real-server
 capacity, latency improvements or extraction accuracy; compare calls/tokens per
 completed source part and foreground latency after deployment.
+
+## All asynchronous language-model workers
+
+`async_jobs.background_worker` puts event/contact/document tagging, document
+enhancement, contact enrichment, meeting transcripts, proposed events, daily
+briefings and emergency-stock jobs into the same admission coordinator. It checks
+readiness before claiming a row. Provider deferrals release the exact job revision,
+return it to pending and reverse the claim's attempt increment. A newer job revision
+cannot be deferred by an older worker. Deferrals remain visible even when a legacy
+fallback catches the exception; they cannot mark the job successful or clear its
+input payload. Jobs retain their existing durable retry path for other failures.
+
+Briefing worker-thread submissions already copy contextvars. Each background
+workflow now shares a request lock across its child threads, serializing physical
+LLM calls while retaining workflow ownership. Interactive requests keep foreground
+priority. Non-LLM calendar sync, embeddings, backups and messaging capture are not
+classified as language-model workers or blocked by this gate.
+
+Tag suggestions use a durable exact-input cache from migration 0087. The key hashes
+the endpoint, model, complete effective tagging prompts and request options. Editing
+source text or tags, changing prompts/category rules/model/options invalidates it.
+Document tag translations use the same cache. Only successfully parsed tag results
+are cached, including valid empty results; failed calls and fallback guesses are
+not. The cache stores hashes and tags, never source snapshots or credentials. Tags
+still go through the existing merge/persistence path, and a missing cache does not
+prevent ordinary tagging.
+
+Knowledge extraction and summaries collect SSE responses. `JSONOutputGuard` cancels
+structured streams after 512 consecutive whitespace characters outside JSON strings,
+repeated closing tool/function syntax, excessive trailing output, or a one-MiB content
+bound. String escapes and source quotations do not count as syntax loops. Cancellation
+closes the HTTP response in `finally`; partial output is discarded. Generation
+failure (`output_degenerate`) is distinct from endpoint unavailability and does not
+open a provider outage cooldown. Stream collection also has an overall request deadline.
+Local logs record the cancellation reason and received character count, never those
+values in external telemetry. The provider may continue server-side generation after
+socket closure; actual cancellation/resource release needs live-server verification.

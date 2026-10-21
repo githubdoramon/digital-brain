@@ -80,6 +80,7 @@ def enqueue_due_job(*, now_utc: datetime | None = None) -> bool:
     return False
 
 
+@async_jobs.background_worker("emergency_stock_jobs")
 def process_due_once() -> bool:
     job = async_jobs.claim_due_job(job_type=JOB_TYPE)
     if not job:

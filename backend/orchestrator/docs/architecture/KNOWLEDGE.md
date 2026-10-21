@@ -433,3 +433,32 @@ repair or read-time rewriting is needed.
 The mobile Knowledge screen retains search, its paginated fact list, and existing
 contact-specific navigation. The subject carousel and its entity-list request are
 removed; no replacement browsing interface is introduced.
+
+### Durable smaller claims and knowledge-only prompts (0087)
+
+Historical source splitting is now persisted before recursive sub-batches are
+computed. Every row in the failed claim receives a smaller `batch_limit`, releases
+its token and returns to pending without spending a validation retry. Later claims
+respect that limit across restarts and provider deferrals. Each smaller group
+validates, commits its findings and advances its own receipts independently; a
+later group's failure cannot roll it back or re-claim its completed parts. Supporting
+context is still supplied and remains ineligible for independent findings. Singleton
+failures retain ordinary bounded retries. Reconciliation candidate splitting stays
+within the affected stage and preserves extraction; this is not a persistent cache
+of uncommitted model output. Stale/expired tokens cannot change batch boundaries.
+
+Knowledge-only prompts omit task creation/completion instructions and work-only
+wire fields; the controller fills their constant inapplicable values before the
+same full internal validation. The model can return only knowledge/contact changes.
+The common identity, ambiguity, exact-evidence, deletion, manual-change, birthday and
+reciprocal relationship rules still apply. Extraction omits unrelated zero-relevance
+profiles/entities, retaining source-linked identities/relationships and every literal
+name/alias match rather than choosing among ambiguous names. Reconciliation retains
+its independent retrieval and controller checks use complete original records.
+
+Prompts explicitly demonstrate the empty result (`findings` and `deferred_refs`),
+request one compact object followed by termination, and discourage expanding
+acknowledgements into speculative facts. They do not lower reasoning effort or
+weaken grounded inference. Instructions alone do not establish why a provider emits
+whitespace loops, nor prove live extraction quality; deterministic tests establish
+controller protections, stream cancellation and durable recovery, not model accuracy.

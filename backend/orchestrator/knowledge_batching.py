@@ -49,8 +49,12 @@ def select(cur, anchor):
         ),
     )
     selected, size = [], 0
+    batch_limit = min(MAX_PARTS, anchor.get("batch_limit", MAX_PARTS))
     anchor_date = _date(source["payload"])
     for row in cur.fetchall():
+        batch_limit = min(batch_limit, row.get("batch_limit", MAX_PARTS))
+        if len(selected) >= batch_limit:
+            break
         date = _date(row["payload"])
         if anchor_date and date:
             try:

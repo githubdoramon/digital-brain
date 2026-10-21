@@ -1,12 +1,68 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from typing import Any
 from uuid import uuid4
 
+import llm_admission
 from db import get_conn
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
+
+_ACTIVE_WORKER = ContextVar("async_llm_worker", default=None)
+
+
+def background_worker(lane):
+    """Coordinate durable LLM jobs before claim and preserve retries on deferral."""
+
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            with llm_admission.background_work(lane):
+                if not llm_admission.background_ready():
+                    return False
+                tracker = {"job": None}
+                token = _ACTIVE_WORKER.set(tracker)
+                try:
+                    result = function(*args, **kwargs)
+                    if exc := llm_admission.current_deferral():
+                        raise exc
+                    return result
+                except llm_admission.BackgroundDeferred as exc:
+                    logger.info(
+                        "[async_jobs] llm_deferred lane=%s reason=%s delay_s=%d",
+                        lane,
+                        exc.reason,
+                        exc.delay,
+                    )
+                    job = tracker["job"]
+                    if job:
+                        defer_job(job["job_id"], revision=job["revision"], delay=exc.delay)
+                    return bool(job)
+                finally:
+                    _ACTIVE_WORKER.reset(token)
+
+        return run
+
+    return decorate
+
+
+def defer_job(job_id, *, revision, delay):
+    """Release only this claim; revisions protect newer queued work."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE async_jobs SET status='pending',status_message='Waiting to retry',
+            attempts=GREATEST(0,attempts-1),next_run_at=NOW()+(%s * INTERVAL '1 second'),
+            started_at=NULL,finished_at=NULL,error=NULL,updated_at=NOW()
+            WHERE job_id=%s AND revision=%s AND status='running'""",
+            (delay, job_id, revision),
+        )
+        conn.commit()
 
 
 class AsyncJobStatus(str, Enum):
@@ -92,10 +148,15 @@ def enqueue_job(
         existing_raw = cur.fetchone()
         existing = dict(existing_raw) if existing_raw else None
 
-        if existing and not replace_existing and str(existing.get("status") or "") in {
-            AsyncJobStatus.PENDING.value,
-            AsyncJobStatus.RUNNING.value,
-        }:
+        if (
+            existing
+            and not replace_existing
+            and str(existing.get("status") or "")
+            in {
+                AsyncJobStatus.PENDING.value,
+                AsyncJobStatus.RUNNING.value,
+            }
+        ):
             conn.commit()
             return {
                 "job_id": existing.get("job_id"),
@@ -274,6 +335,8 @@ def claim_due_job(*, job_type: str) -> dict[str, Any] | None:
             conn.commit()
             return None
         conn.commit()
+        if tracker := _ACTIVE_WORKER.get():
+            tracker["job"] = row
         return row
 
 
@@ -284,6 +347,8 @@ def mark_succeeded(
     status_message: str = "Completed",
     revision: int | None = None,
 ) -> None:
+    if exc := llm_admission.current_deferral():
+        raise exc
     with get_conn() as conn, conn.cursor() as cur:
         params: list[Any] = [
             AsyncJobStatus.SUCCEEDED.value,
@@ -342,6 +407,10 @@ def mark_failed(
     revision: int | None = None,
     retry_delay_seconds: int | None = None,
 ) -> None:
+    if exc := llm_admission.current_deferral():
+        if revision is not None:
+            defer_job(job_id, revision=revision, delay=exc.delay)
+        return
     with get_conn() as conn, conn.cursor() as cur:
         params: list[Any] = [
             AsyncJobStatus.FAILED.value,

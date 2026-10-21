@@ -10,7 +10,7 @@ import os
 import random
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
@@ -54,6 +54,8 @@ def background_work(lane="background"):
         "lane": lane,
         "held": None,
         "ready": False,
+        "deferred": None,
+        "request_lock": threading.RLock(),
         "endpoint": os.getenv("LLM_BASE_URL", ""),
     }
     session_token = _SESSION.set(session)
@@ -68,6 +70,18 @@ def background_work(lane="background"):
                 _state(session["endpoint"]).waiting.pop(lane, None)
         _SESSION.reset(session_token)
         _BACKGROUND.reset(token)
+
+
+def current_deferral():
+    session = _SESSION.get()
+    return session.get("deferred") if session else None
+
+
+def _record_deferral(exc):
+    session = _SESSION.get()
+    if session is not None:
+        session["deferred"] = exc
+    return exc
 
 
 def _state(endpoint):
@@ -118,7 +132,7 @@ def request_slot(endpoint):
             blocked = _blocked(state, time.monotonic(), lane)
             if blocked:
                 state.deferred += 1
-                raise blocked
+                raise _record_deferral(blocked)
             state.background = True
             state.last_background = time.monotonic()
             state.waiting.pop(lane, None)
@@ -126,7 +140,9 @@ def request_slot(endpoint):
                 session["held"] = state
                 session["endpoint"] = endpoint
         elif background and state.cooldown_until > time.monotonic():
-            raise BackgroundDeferred("provider_cooldown", state.cooldown_until - time.monotonic())
+            raise _record_deferral(
+                BackgroundDeferred("provider_cooldown", state.cooldown_until - time.monotonic())
+            )
         elif not background:
             state.foreground += 1
     try:
@@ -145,7 +161,7 @@ def request_slot(endpoint):
                 math.ceil(delay),
             )
             if background:
-                raise BackgroundDeferred("provider_unavailable", delay) from exc
+                raise _record_deferral(BackgroundDeferred("provider_unavailable", delay)) from exc
         raise
     else:
         with _LOCK:
@@ -165,7 +181,9 @@ def admitted(endpoint):
     def decorate(function):
         @wraps(function)
         def call(*args, **kwargs):
-            with request_slot(endpoint()):
+            session = _SESSION.get()
+            lock = session["request_lock"] if session else nullcontext()
+            with lock, request_slot(endpoint()):
                 return function(*args, **kwargs)
 
         return call

@@ -159,7 +159,7 @@ def failure_code(error):
     from llm_helpers import LLMOutputExhaustedError, LLMUnavailableError
 
     if isinstance(error, LLMOutputExhaustedError):
-        return "output_exhausted"
+        return error.code
     if isinstance(error, LLMUnavailableError):
         return "model_unavailable"
     return "analysis_failed"

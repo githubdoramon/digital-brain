@@ -125,6 +125,7 @@ def source_pins(sources, people, relationships):
 
 def compact_context(context, *, extraction=False, query="", anchors=()):
     words = set(re.findall(r"[^\W_]{3,}", query.casefold()))
+    name_words = set(re.findall(r"[^\W_]+", query.casefold()))
     pinned = source_pins(
         context.get("source_context", []),
         context.get("people", []),
@@ -171,8 +172,18 @@ def compact_context(context, *, extraction=False, query="", anchors=()):
                     }
                 }
             score = len(words & set(re.findall(r"[^\W_]{3,}", json_for(item).casefold())))
+            if section in {"contacts", "people"}:
+                names = [row.get("display_name", ""), *(row.get("aliases") or [])]
+                if any(
+                    name_words & set(re.findall(r"[^\W_]+", str(name).casefold())) for name in names
+                ):
+                    score += 1
             if any(item.get(key) in pinned for key in REFERENCE_FIELDS if item.get(key)):
                 score += 1000
+            # Extraction needs source identities and literal name/alias matches,
+            # including every ambiguous match, rather than unrelated profiles.
+            if extraction and query and score == 0:
+                continue
             rows.append((score, item))
         rows.sort(key=lambda row: row[0], reverse=True)
         # No embeddings, evidence histories, raw metadata or source snapshots.

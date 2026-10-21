@@ -5,6 +5,8 @@ import os
 from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
+import llm_admission
+import tag_generation_cache
 from llm_config import get_fast_model
 from llm_helpers import build_json_schema_response_format
 from llm_json_schemas import TAG_SUGGESTION_RESPONSE_SCHEMA
@@ -275,7 +277,9 @@ def _suggest_tags(
             "and any durable context from notes. Avoid tags that merely repeat the person's name."
         )
     else:
-        subject_instruction = "Consider the document type (contract, receipt, medical record, ID, notes) and topic."
+        subject_instruction = (
+            "Consider the document type (contract, receipt, medical record, ID, notes) and topic."
+        )
 
     subtag_examples = "; ".join(
         f"{major}: {', '.join(MAJOR_TAG_KEYWORDS.get(major, [])[:3])}" for major in MAJOR_TAGS
@@ -307,6 +311,14 @@ def _suggest_tags(
             "reasoning_effort": "none",
         }
         request_options.update(dict(llm_request_options or {}))
+        cache_key = tag_generation_cache.key(
+            model=model or get_fast_model(),
+            system=system_prompt,
+            prompt=user_prompt,
+            options=request_options,
+        )
+        if (cached := tag_generation_cache.load(cache_key)) is not None:
+            return cached
         raw_content = _call_llm_text(
             user_prompt,
             system_prompt=system_prompt,
@@ -317,12 +329,28 @@ def _suggest_tags(
         if not raw_content:
             return []
         parsed = _parse_suggested_tags_response(raw_content)
-        return parsed[:MAX_SUGGESTED_TAGS]
+        parsed = parsed[:MAX_SUGGESTED_TAGS]
+        try:
+            strict = json.loads(raw_content)
+        except json.JSONDecodeError:
+            strict = None
+        if (
+            isinstance(strict, dict)
+            and set(strict) == {"tags"}
+            and isinstance(strict["tags"], list)
+            and all(isinstance(tag, str) for tag in strict["tags"])
+        ):
+            tag_generation_cache.save(cache_key, parsed)
+        return parsed
+    except llm_admission.BackgroundDeferred:
+        raise
     except Exception as exc:
         from llm_helpers import LLMUnavailableError
 
         if isinstance(exc, LLMUnavailableError):
-            logger.warning("[tags_manager] LLM unavailable while generating tags; skipping tag suggestions")
+            logger.warning(
+                "[tags_manager] LLM unavailable while generating tags; skipping tag suggestions"
+            )
             return []
         logger.warning("[tags_manager] Failed to generate tags: %s", exc, exc_info=exc)
         return []

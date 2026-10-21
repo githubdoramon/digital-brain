@@ -114,6 +114,7 @@ def get_worker_status() -> dict[str, Any]:
     }
 
 
+@async_jobs.background_worker("meeting_transcript_jobs")
 def process_due_once(
     *,
     todo_writer: Callable[[TodoIn], None] | None = None,

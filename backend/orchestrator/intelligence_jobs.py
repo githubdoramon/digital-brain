@@ -222,7 +222,11 @@ def _process_run(run):
                         if review_batch
                         else ({}, [])
                     )
-                except (intelligence_model.InvalidModelOutput, LLMRequestRejected) as exc:
+                except (
+                    intelligence_model.InvalidModelOutput,
+                    intelligence_model.LLMOutputExhaustedError,
+                    LLMRequestRejected,
+                ) as exc:
                     intelligence.defer_batch(
                         run["user_email"], run, review_batch, exc.code, review=True
                     )
@@ -237,7 +241,11 @@ def _process_run(run):
             context, findings = intelligence_model.analyze(
                 run["user_email"], batch, knowledge_only=run["knowledge_only"]
             )
-        except (intelligence_model.InvalidModelOutput, LLMRequestRejected) as exc:
+        except (
+            intelligence_model.InvalidModelOutput,
+            intelligence_model.LLMOutputExhaustedError,
+            LLMRequestRejected,
+        ) as exc:
             intelligence.defer_batch(run["user_email"], run, batch, exc.code)
             logger.warning("[intelligence] batch deferred reason=%s", exc.code)
             continue
