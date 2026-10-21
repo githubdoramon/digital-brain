@@ -6,6 +6,8 @@ import json
 
 import intelligence
 import learning_fairness
+import learning_ownership
+import llm_admission
 from db import get_conn
 from observability.logger import get_runtime_logger
 
@@ -106,7 +108,7 @@ def _learning(cur, owner):
             LEFT JOIN intelligence_state st ON st.user_email=COALESCE(b.user_email,j.user_email)
             WHERE (s.owner_email IS NULL OR s.owner_email=%s) AND s.duplicate_of_source_id IS NULL
                 AND (j.source_id IS NOT NULL OR (b.version>=1 AND
-                    (s.observed_at<=b.seeded_at OR s.kind IN ('chat','contact_note'))))
+                    {learning_ownership.ELIGIBLE_SOURCE_SQL}))
         ) SELECT historical,status,phase,error_code,COUNT(*) AS count,
             MIN(observed_at) AS oldest_pending_observed_at,MIN(source_at) AS oldest_pending_source_at,
             MIN(next_attempt_at) FILTER (WHERE phase='retrying') AS next_retry_at,
@@ -145,6 +147,7 @@ def _summaries(cur, owner):
         """WITH subjects AS (
             SELECT *, CASE WHEN version=rendered_version THEN 'processed'
                 WHEN lease_until>NOW() THEN 'running'
+                WHEN history_dirty AND dirty_since>NOW()-INTERVAL '15 minutes' THEN 'delayed'
                 WHEN next_attempt_at>NOW() AND error_code IS NOT NULL THEN 'retrying'
                 WHEN next_attempt_at>NOW() THEN 'delayed' ELSE 'ready' END AS phase
             FROM knowledge_summaries WHERE user_email=%s
@@ -167,7 +170,7 @@ def _summaries(cur, owner):
 
 def _intelligence(cur, owner, cutoff):
     lanes = {}
-    for name, historical in (("history", True), ("scheduled", False)):
+    for name, historical in (("scheduled", False),):
         coverage = intelligence.progress_with_cursor(cur, owner, cutoff, knowledge_only=historical)
         counts = _empty()
         counts.update({key.removesuffix("_parts"): value for key, value in coverage.items()})
@@ -183,6 +186,8 @@ def _intelligence(cur, owner, cutoff):
         )
         counts["errors"] = {row["error_code"]: row["count"] for row in cur.fetchall()}
         lanes[name] = counts
+    # Retained as an explicit retired lane for older clients; no work is scheduled here.
+    lanes["history"] = {**_empty(), "retired": True, "review_retrying": 0, "review_paused": 0}
     cur.execute(
         """SELECT DISTINCT ON (knowledge_only) knowledge_only,slot,status,cutoff,started_at,
             next_attempt_at,lease_until,batches,error_code,reviewed
@@ -191,7 +196,8 @@ def _intelligence(cur, owner, cutoff):
     )
     for row in cur.fetchall():
         item = dict(row)
-        lanes["history" if item.pop("knowledge_only") else "scheduled"]["latest_run"] = item
+        if not item.pop("knowledge_only"):
+            lanes["scheduled"]["latest_run"] = item
     cur.execute(
         """SELECT knowledge_only,slot,cutoff,started_at,lease_until,batches,
             EXTRACT(EPOCH FROM (NOW()-started_at))::bigint AS elapsed_s
@@ -201,7 +207,8 @@ def _intelligence(cur, owner, cutoff):
     )
     for row in cur.fetchall():
         item = dict(row)
-        lanes["history" if item.pop("knowledge_only") else "scheduled"]["active"].append(item)
+        if not item.pop("knowledge_only"):
+            lanes["scheduled"]["active"].append(item)
     # Runs claim batches, not individual parts. Do not count active runs as parts.
     for counts in lanes.values():
         counts["running_runs"] = len(counts["active"])
@@ -267,6 +274,7 @@ def snapshot(owner):
         "intelligence": analysis,
         "summaries": summaries,
         "indexing": indexing,
+        "llm_admission": llm_admission.status(),
         "fairness": fairness,
         "deduplication": deduplication,
     }
@@ -285,6 +293,7 @@ def log_snapshot(owner):
             "activation_at",
             "schedule",
             "fairness",
+            "llm_admission",
             "deduplication",
         )
     }

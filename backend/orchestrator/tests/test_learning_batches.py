@@ -213,7 +213,7 @@ def test_intelligence_restart_recovers_short_lease_without_stealing_live_run(dat
     with database() as conn:
         conn.execute("DELETE FROM intelligence_runs WHERE user_email=%s", (OWNER,))
         conn.execute(
-            "INSERT INTO intelligence_runs(run_id,user_email,slot,knowledge_only,cutoff) VALUES('history',%s,'historical',TRUE,NOW())",
+            "INSERT INTO intelligence_runs(run_id,user_email,slot,knowledge_only,cutoff) VALUES('history',%s,'scheduled',FALSE,NOW())",
             (OWNER,),
         )
     old = intelligence_jobs.claim_run([OWNER])

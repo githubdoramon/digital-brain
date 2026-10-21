@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import intelligence
 import intelligence_model
 import learning_fairness
+import llm_admission
 from db import get_conn
 from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
 from llm_policy import LLMRequestRejected, failure_code
@@ -38,7 +39,6 @@ def latest_slot(now):
 def enqueue_due(owner, *, now=None):
     now = now or intelligence.utcnow()
     intelligence.initialize(owner)
-    refresh_backlog(owner)
     requeue_deferred(owner)
     slot = latest_slot(now)
     with get_conn() as conn, conn.cursor() as cur:
@@ -56,32 +56,6 @@ def enqueue_due(owner, *, now=None):
         return created
 
 
-def refresh_backlog(owner):
-    """Late historical imports extend the knowledge-only pass, never the live queue."""
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """UPDATE intelligence_runs r SET cutoff=NOW(),
-            next_attempt_at=CASE WHEN status='succeeded' THEN NOW() ELSE next_attempt_at END,
-            status=CASE WHEN status='succeeded' THEN 'pending' ELSE status END
-            WHERE r.user_email=%s AND slot='knowledge-backlog' AND status <> 'running'
-            AND EXISTS (SELECT 1 FROM intelligence_sources s
-                JOIN intelligence_state st ON st.user_email=r.user_email
-                CROSS JOIN LATERAL generate_series(0, GREATEST(0,
-                    (length(COALESCE(s.payload->>'text','')) - 1) / %s)) part(part)
-                WHERE s.kind IN ('message','event','document') AND (s.owner_email IS NULL OR s.owner_email=r.user_email)
-                AND (s.historical OR s.observed_at < st.started_at
-                    OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE))
-                AND NOT EXISTS (SELECT 1 FROM intelligence_processed p WHERE p.user_email=r.user_email
-                    AND p.source_id=s.source_id AND p.part=part.part)
-                AND NOT EXISTS (SELECT 1 FROM intelligence_failures f
-                    WHERE f.user_email=r.user_email AND f.source_id=s.source_id AND NOT f.review
-                    AND f.part=part.part
-                    AND (f.next_attempt_at IS NULL OR f.next_attempt_at > NOW())))""",
-            (owner, intelligence.CHUNK_SIZE),
-        )
-        conn.commit()
-
-
 def claim_run(owners):
     if not owners:
         return None
@@ -91,10 +65,10 @@ def claim_run(owners):
         cur.execute(
             """SELECT s.user_email,s.current_streak FROM intelligence_state s WHERE s.user_email = ANY(%s)
             AND EXISTS(SELECT 1 FROM intelligence_runs r WHERE r.user_email = s.user_email
-                AND r.status <> 'succeeded' AND r.next_attempt_at <= NOW()
+                AND NOT r.knowledge_only AND r.status <> 'succeeded' AND r.next_attempt_at <= NOW()
                 AND (r.lease_until IS NULL OR r.lease_until <= NOW()))
             AND NOT EXISTS(SELECT 1 FROM intelligence_runs active WHERE active.user_email = s.user_email
-                AND active.lease_until > NOW())
+                AND NOT active.knowledge_only AND active.lease_until > NOW())
             ORDER BY s.last_claimed_at NULLS FIRST,s.user_email FOR UPDATE SKIP LOCKED LIMIT 1""",
             (list(owners),),
         )
@@ -102,7 +76,7 @@ def claim_run(owners):
         if not owner:
             return None
         cur.execute(
-            """SELECT * FROM intelligence_runs WHERE user_email = %s AND status <> 'succeeded'
+            """SELECT * FROM intelligence_runs WHERE user_email = %s AND NOT knowledge_only AND status <> 'succeeded'
             AND next_attempt_at <= NOW() AND (lease_until IS NULL OR lease_until <= NOW())
             ORDER BY (knowledge_only=%s) DESC,cutoff,run_id FOR UPDATE LIMIT 1""",
             (owner["user_email"], learning_fairness.history_first(owner["current_streak"])),
@@ -178,13 +152,27 @@ def finish_run(run, *, more=False, failed=False):
             logger.warning("[intelligence] progress_snapshot_unavailable")
 
 
+@llm_admission.background_work("intelligence")
 def process_once(owners):
+    if not llm_admission.background_ready():
+        return False
     run = claim_run(owners)
     if not run:
         return False
     try:
         with _heartbeat(run):
             return _process_run(run)
+    except llm_admission.BackgroundDeferred as exc:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE intelligence_runs SET status='pending',lease_token=NULL,lease_until=NULL,
+                error_code=%s,next_attempt_at=NOW()+(%s*INTERVAL '1 second')
+                WHERE run_id=%s AND lease_token=%s""",
+                (exc.reason, exc.delay, run["run_id"], run["lease_token"]),
+            )
+            conn.commit()
+        logger.info("[intelligence] run_deferred reason=%s delay_s=%d", exc.reason, exc.delay)
+        return True
     except Exception as exc:
         finish_run(run, failed=True)
         logger.warning(

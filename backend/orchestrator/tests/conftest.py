@@ -185,3 +185,15 @@ def setup_test_env(monkeypatch):
     monkeypatch.setenv("AGENT_MAX_STEPS", "5")
     monkeypatch.setenv("AGENT_MAX_TOOL_CALLS", "10")
     monkeypatch.setenv("AGENT_MAX_REPAIRS", "5")
+
+
+@pytest.fixture(autouse=True)
+def isolated_llm_admission():
+    """Provider state is process-local, not shared between independent test cases."""
+    import llm_admission
+
+    with llm_admission._LOCK:
+        llm_admission._STATES.clear()
+    yield
+    with llm_admission._LOCK:
+        llm_admission._STATES.clear()

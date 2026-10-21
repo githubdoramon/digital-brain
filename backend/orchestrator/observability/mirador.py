@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Executor, Future
-from contextlib import contextmanager
+from contextlib import aclosing, contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
 from functools import wraps
@@ -890,8 +890,9 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
             try:
                 from opentelemetry import trace
             except ImportError:
-                async for item in function(payload, *args, **kwargs):
-                    yield item
+                async with aclosing(function(payload, *args, **kwargs)) as stream:
+                    async for item in stream:
+                        yield item
                 return
 
             # Transport helpers receive a ready-made payload, while
@@ -936,9 +937,7 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
                                 chunk = json.loads(line[6:])
                             except (ValueError, TypeError):
                                 chunk = None
-                            if isinstance(chunk, dict) and isinstance(
-                                chunk.get("usage"), dict
-                            ):
+                            if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
                                 usage = chunk["usage"]
                     yield item
 
@@ -958,15 +957,21 @@ def traced_llm_request(function: Callable[..., _T]) -> Callable[..., _T]:
                         pass
                 raise
             finally:
-                duration_seconds = time.perf_counter() - started
-                span.set_attribute("llm.duration_ms", duration_seconds * 1000)
-                _record_llm_metrics(
-                    model=model,
-                    duration_seconds=duration_seconds,
-                    outcome=outcome,
-                    result={"usage": usage} if usage is not None else None,
-                )
-                span.end()
+                try:
+                    # Closing the public generator must close its provider iterator
+                    # immediately, including its network client and admission slot.
+                    with trace.use_span(span, end_on_exit=False):
+                        await stream.aclose()
+                finally:
+                    duration_seconds = time.perf_counter() - started
+                    span.set_attribute("llm.duration_ms", duration_seconds * 1000)
+                    _record_llm_metrics(
+                        model=model,
+                        duration_seconds=duration_seconds,
+                        outcome=outcome,
+                        result={"usage": usage} if usage is not None else None,
+                    )
+                    span.end()
 
         return wrapped_stream  # type: ignore[return-value]
 

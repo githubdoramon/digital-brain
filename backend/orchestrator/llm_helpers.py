@@ -18,6 +18,7 @@ from typing import Any, Optional
 import httpx
 import requests
 
+import llm_admission
 from llm_config import (
     get_chat_keep_alive,
     get_ollama_api_base_url,
@@ -373,6 +374,7 @@ def _chat_warmup_response(response, *, native):
     return data
 
 
+@llm_admission.admitted(lambda: _get_required_setting("LLM_BASE_URL", LLM_BASE_URL))
 @traced_llm_request
 def _post_chat_model_warmup(payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
     """Trace the small Ollama chat request used to warm a configured model."""
@@ -391,18 +393,19 @@ def _post_chat_model_warmup(payload: dict[str, Any], *, timeout: int) -> dict[st
 
 @traced_llm_request
 async def _post_chat_model_warmup_async(payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
-    # One deadline includes connection setup, native probe and compatible fallback.
-    # Native async I/O also makes shutdown cancellation close the in-flight request.
-    async with asyncio.timeout(timeout):
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=min(10, timeout))
-        ) as client:
-            for index, (url, body) in enumerate(_chat_warmup_requests(payload)):
-                response = await client.post(url, headers=get_llm_headers(), json=body)
-                data = _chat_warmup_response(response, native=index == 0)
-                if data is not None:
-                    return data
-    raise RuntimeError("model_warmup_failed")
+    with llm_admission.request_slot(_get_required_setting("LLM_BASE_URL", LLM_BASE_URL)):
+        # One deadline includes connection setup, native probe and compatible fallback.
+        # Native async I/O also makes shutdown cancellation close the in-flight request.
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=min(10, timeout))
+            ) as client:
+                for index, (url, body) in enumerate(_chat_warmup_requests(payload)):
+                    response = await client.post(url, headers=get_llm_headers(), json=body)
+                    data = _chat_warmup_response(response, native=index == 0)
+                    if data is not None:
+                        return data
+        raise RuntimeError("model_warmup_failed")
 
 
 def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
@@ -487,6 +490,7 @@ def _is_retryable_status(status_code: int) -> bool:
     return status_code >= 500 or status_code == 429
 
 
+@llm_admission.admitted(lambda: _get_required_setting("LLM_BASE_URL", LLM_BASE_URL))
 @traced_llm_request
 def _post_chat_completion(
     payload: dict[str, Any],
@@ -544,7 +548,8 @@ def _post_chat_completion(
         text = (response.text or "").strip().replace("\n", " ")
         return text[:400]
 
-    for attempt in range(1, LLM_MAX_RETRIES + 1):
+    retry_limit = 1 if llm_admission.is_background() else LLM_MAX_RETRIES
+    for attempt in range(1, retry_limit + 1):
         started_at = time.perf_counter()
         try:
             response = requests.post(
@@ -558,7 +563,7 @@ def _post_chat_completion(
                 last_exception = requests.HTTPError(
                     f"HTTP {response.status_code}", response=response
                 )
-                if attempt < LLM_MAX_RETRIES:
+                if attempt < retry_limit:
                     delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                     logger.warning(
                         "[llm_helpers] LLM request failed (HTTP %s) for model=%s in %.1fms (timeout=%ss, messages=%d). Retry in %.1fs (attempt %d/%d). Response: %s",
@@ -569,7 +574,7 @@ def _post_chat_completion(
                         message_count,
                         delay,
                         attempt,
-                        LLM_MAX_RETRIES,
+                        retry_limit,
                         _preview_response_text(response),
                     )
                     time.sleep(delay)
@@ -616,7 +621,7 @@ def _post_chat_completion(
                 resolved_timeout,
                 message_count,
                 attempt,
-                LLM_MAX_RETRIES,
+                retry_limit,
                 rejected.code if rejected else "http_error",
                 rejected.limit if rejected else None,
                 _preview_response_text(response),
@@ -631,7 +636,7 @@ def _post_chat_completion(
         except requests.Timeout as exc:
             last_exception = exc
             elapsed_ms = (time.perf_counter() - started_at) * 1000
-            if attempt < LLM_MAX_RETRIES:
+            if attempt < retry_limit:
                 delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     "[llm_helpers] LLM request timed out for model=%s after %.1fms (timeout=%ss, messages=%d). Retry in %.1fs (attempt %d/%d)",
@@ -641,7 +646,7 @@ def _post_chat_completion(
                     message_count,
                     delay,
                     attempt,
-                    LLM_MAX_RETRIES,
+                    retry_limit,
                 )
                 time.sleep(delay)
             else:
@@ -656,7 +661,7 @@ def _post_chat_completion(
 
         except requests.ConnectionError as exc:
             last_exception = exc
-            if attempt < LLM_MAX_RETRIES:
+            if attempt < retry_limit:
                 delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     "[llm_helpers] LLM request failed (%s) for model=%s, retrying in %.1fs (attempt %d/%d)",
@@ -664,7 +669,7 @@ def _post_chat_completion(
                     model_name,
                     delay,
                     attempt,
-                    LLM_MAX_RETRIES,
+                    retry_limit,
                 )
                 time.sleep(delay)
             else:
@@ -676,6 +681,7 @@ def _post_chat_completion(
     raise last_exception
 
 
+@llm_admission.admitted(lambda: _get_required_setting("LLM_BASE_URL", LLM_BASE_URL))
 @traced_llm_request
 def _post_chat_completion_stream(
     payload: dict[str, Any],
@@ -715,83 +721,87 @@ def _post_chat_completion_stream(
         timeout=resolved_timeout,
         stream=True,
     )
-    if response.status_code in {400, 413, 422}:
-        rejected = request_rejection(response)
-        remember_constraint(payload.get("model"), rejected)
-        raise rejected from None
-    response.raise_for_status()
+    try:
+        if response.status_code in {400, 413, 422}:
+            rejected = request_rejection(response)
+            remember_constraint(payload.get("model"), rejected)
+            raise rejected from None
+        response.raise_for_status()
 
-    for raw_line in response.iter_lines(decode_unicode=True):
-        line = str(raw_line or "").strip()
-        if not line or line == "data: [DONE]":
-            continue
-        if line.startswith("data: "):
-            line = line[6:]
-        try:
-            chunk = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        chunk_usage = chunk.get("usage")
-        if isinstance(chunk_usage, dict):
-            accumulated_usage = chunk_usage
-
-        delta = chunk.get("choices", [{}])[0].get("delta", {})
-        accumulated_content += str(delta.get("content", "") or "")
-
-        reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content")
-        if isinstance(reasoning_delta, list):
-            for item in reasoning_delta:
-                if isinstance(item, dict):
-                    accumulated_reasoning += str(item.get("text") or item.get("content") or "")
-        elif reasoning_delta:
-            accumulated_reasoning += str(reasoning_delta)
-
-        for tool_call in delta.get("tool_calls") or []:
-            if not isinstance(tool_call, dict):
+        for raw_line in response.iter_lines(decode_unicode=True):
+            line = str(raw_line or "").strip()
+            if not line or line == "data: [DONE]":
                 continue
-            idx = int(tool_call.get("index", 0) or 0)
-            bucket = accumulated_tool_calls.setdefault(
-                idx,
-                {
-                    "id": tool_call.get("id", ""),
-                    "type": "function",
-                    "function": {"name": "", "arguments": ""},
-                },
-            )
-            if tool_call.get("id"):
-                bucket["id"] = tool_call["id"]
-            function = tool_call.get("function") or {}
-            if function.get("name"):
-                bucket["function"]["name"] = function["name"]
-            if function.get("arguments"):
-                bucket["function"]["arguments"] += str(function.get("arguments") or "")
+            if line.startswith("data: "):
+                line = line[6:]
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-    content = {
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": accumulated_content,
-                    **({"reasoning": accumulated_reasoning} if accumulated_reasoning else {}),
-                    **(
-                        {"tool_calls": list(accumulated_tool_calls.values())}
-                        if accumulated_tool_calls
-                        else {}
-                    ),
-                },
-                "finish_reason": "tool_calls" if accumulated_tool_calls else "stop",
-            }
-        ]
-    }
-    if accumulated_usage is not None:
-        content["usage"] = accumulated_usage
-    logger.info(
-        "[llm_helpers] LLM response (stream final sync): %s",
-        json.dumps(content, ensure_ascii=False),
-    )
-    return content
+            chunk_usage = chunk.get("usage")
+            if isinstance(chunk_usage, dict):
+                accumulated_usage = chunk_usage
+
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            accumulated_content += str(delta.get("content", "") or "")
+
+            reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content")
+            if isinstance(reasoning_delta, list):
+                for item in reasoning_delta:
+                    if isinstance(item, dict):
+                        accumulated_reasoning += str(item.get("text") or item.get("content") or "")
+            elif reasoning_delta:
+                accumulated_reasoning += str(reasoning_delta)
+
+            for tool_call in delta.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                idx = int(tool_call.get("index", 0) or 0)
+                bucket = accumulated_tool_calls.setdefault(
+                    idx,
+                    {
+                        "id": tool_call.get("id", ""),
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    },
+                )
+                if tool_call.get("id"):
+                    bucket["id"] = tool_call["id"]
+                function = tool_call.get("function") or {}
+                if function.get("name"):
+                    bucket["function"]["name"] = function["name"]
+                if function.get("arguments"):
+                    bucket["function"]["arguments"] += str(function.get("arguments") or "")
+
+        content = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": accumulated_content,
+                        **({"reasoning": accumulated_reasoning} if accumulated_reasoning else {}),
+                        **(
+                            {"tool_calls": list(accumulated_tool_calls.values())}
+                            if accumulated_tool_calls
+                            else {}
+                        ),
+                    },
+                    "finish_reason": "tool_calls" if accumulated_tool_calls else "stop",
+                }
+            ]
+        }
+        if accumulated_usage is not None:
+            content["usage"] = accumulated_usage
+        logger.info(
+            "[llm_helpers] LLM response (stream final sync): %s",
+            json.dumps(content, ensure_ascii=False),
+        )
+        return content
+
+    finally:
+        response.close()
 
 
 def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[dict[str, str]]:
@@ -937,159 +947,162 @@ async def stream_llm_chat(
     extra_body: Optional[dict[str, Any]] = None,
     context_policy: CompactionPolicy | None = None,
 ) -> AsyncGenerator[str, None]:
-    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
-    payload = build_chat_payload(
-        messages,
-        model=model,
-        use_fast_model=use_fast_model,
-        stream=True,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        reasoning_effort=reasoning_effort,
-        response_format=response_format,
-        extra_body=extra_body,
-        tools=tools,
-        tool_choice=tool_choice,
-    )
-    payload = await asyncio.to_thread(
-        _prepare_chat_request,
-        payload,
-        context_policy if context_policy is not None else CompactionPolicy(),
-    )
-    logger.info(
-        "[llm_helpers] LLM input (stream): %s",
-        json.dumps(payload.get("messages"), ensure_ascii=False),
-    )
-    logger.info(
-        "[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False)
-    )
-    logger.info(
-        "[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False)
-    )
-    resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
-    request_url = f"{base_url}/chat/completions"
-    logger.info(
-        "[llm_helpers] LLM outbound request (stream): %s",
-        json.dumps(
-            {
-                "url": request_url,
-                "method": "POST",
-                "timeout_seconds": resolved_timeout,
-                "headers": {
-                    "content-type": "application/json",
-                    "authorization_present": bool(get_llm_headers().get("Authorization")),
+    with llm_admission.request_slot(_get_required_setting("LLM_BASE_URL", LLM_BASE_URL)):
+        base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+        payload = build_chat_payload(
+            messages,
+            model=model,
+            use_fast_model=use_fast_model,
+            stream=True,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            response_format=response_format,
+            extra_body=extra_body,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        payload = await asyncio.to_thread(
+            _prepare_chat_request,
+            payload,
+            context_policy if context_policy is not None else CompactionPolicy(),
+        )
+        logger.info(
+            "[llm_helpers] LLM input (stream): %s",
+            json.dumps(payload.get("messages"), ensure_ascii=False),
+        )
+        logger.info(
+            "[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False)
+        )
+        logger.info(
+            "[llm_helpers] LLM tool choice (stream): %s",
+            json.dumps(tool_choice, ensure_ascii=False),
+        )
+        resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
+        request_url = f"{base_url}/chat/completions"
+        logger.info(
+            "[llm_helpers] LLM outbound request (stream): %s",
+            json.dumps(
+                {
+                    "url": request_url,
+                    "method": "POST",
+                    "timeout_seconds": resolved_timeout,
+                    "headers": {
+                        "content-type": "application/json",
+                        "authorization_present": bool(get_llm_headers().get("Authorization")),
+                    },
+                    "payload": payload,
                 },
-                "payload": payload,
-            },
-            ensure_ascii=False,
-            default=str,
-        ),
-    )
-    timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
-    last_exception: Exception | None = None
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+        timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
+        last_exception: Exception | None = None
 
-    async def _response_error_preview(response: httpx.Response) -> str:
-        try:
-            body = await response.aread()
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            return f"<unable to read error body: {type(exc).__name__}: {exc}>"
-        return body.decode("utf-8", errors="replace").strip().replace("\n", " ")[:2000]
+        async def _response_error_preview(response: httpx.Response) -> str:
+            try:
+                body = await response.aread()
+            except Exception as exc:  # pragma: no cover - defensive logging path
+                return f"<unable to read error body: {type(exc).__name__}: {exc}>"
+            return body.decode("utf-8", errors="replace").strip().replace("\n", " ")[:2000]
 
-    for attempt in range(1, LLM_MAX_RETRIES + 1):
-        try:
-            async with httpx.AsyncClient(timeout=timeout_config) as client:
-                async with client.stream(
-                    "POST",
-                    request_url,
-                    headers=get_llm_headers(),
-                    json=payload,
-                ) as response:
-                    logger.info(
-                        "[llm_helpers] LLM stream response status=%s attempt=%d/%d",
-                        response.status_code,
-                        attempt,
-                        LLM_MAX_RETRIES,
-                    )
-                    if _is_retryable_status(response.status_code):
-                        error_preview = await _response_error_preview(response)
-                        last_exception = httpx.HTTPStatusError(
-                            f"HTTP {response.status_code}",
-                            request=response.request,
-                            response=response,
-                        )
-                        logger.warning(
-                            "[llm_helpers] LLM stream request failed status=%s attempt=%d/%d response=%s",
+        retry_limit = 1 if llm_admission.is_background() else LLM_MAX_RETRIES
+        for attempt in range(1, retry_limit + 1):
+            try:
+                async with httpx.AsyncClient(timeout=timeout_config) as client:
+                    async with client.stream(
+                        "POST",
+                        request_url,
+                        headers=get_llm_headers(),
+                        json=payload,
+                    ) as response:
+                        logger.info(
+                            "[llm_helpers] LLM stream response status=%s attempt=%d/%d",
                             response.status_code,
                             attempt,
-                            LLM_MAX_RETRIES,
-                            error_preview,
+                            retry_limit,
                         )
-                        if attempt < LLM_MAX_RETRIES:
-                            delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                            logger.warning(
-                                "[llm_helpers] Stream request failed (HTTP %s), retrying in %.1fs (attempt %d/%d)",
-                                response.status_code,
-                                delay,
-                                attempt,
-                                LLM_MAX_RETRIES,
+                        if _is_retryable_status(response.status_code):
+                            error_preview = await _response_error_preview(response)
+                            last_exception = httpx.HTTPStatusError(
+                                f"HTTP {response.status_code}",
+                                request=response.request,
+                                response=response,
                             )
-                            await asyncio.sleep(delay)
-                            continue
+                            logger.warning(
+                                "[llm_helpers] LLM stream request failed status=%s attempt=%d/%d response=%s",
+                                response.status_code,
+                                attempt,
+                                retry_limit,
+                                error_preview,
+                            )
+                            if attempt < retry_limit:
+                                delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                                logger.warning(
+                                    "[llm_helpers] Stream request failed (HTTP %s), retrying in %.1fs (attempt %d/%d)",
+                                    response.status_code,
+                                    delay,
+                                    attempt,
+                                    retry_limit,
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            response.raise_for_status()
+
+                        if response.status_code >= 400:
+                            error_preview = await _response_error_preview(response)
+                            if response.status_code in {400, 413, 422}:
+                                rejected = request_rejection(response)
+                                remember_constraint(payload.get("model"), rejected)
+                                raise rejected from None
+                            logger.error(
+                                "[llm_helpers] LLM stream request rejected status=%s response=%s",
+                                response.status_code,
+                                error_preview,
+                            )
                         response.raise_for_status()
-
-                    if response.status_code >= 400:
-                        error_preview = await _response_error_preview(response)
-                        if response.status_code in {400, 413, 422}:
-                            rejected = request_rejection(response)
-                            remember_constraint(payload.get("model"), rejected)
-                            raise rejected from None
-                        logger.error(
-                            "[llm_helpers] LLM stream request rejected status=%s response=%s",
+                        async for line in response.aiter_lines():
+                            yield line
+                        logger.info(
+                            "[llm_helpers] LLM response (stream): completed status=%s attempt=%d/%d",
                             response.status_code,
-                            error_preview,
+                            attempt,
+                            retry_limit,
                         )
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        yield line
-                    logger.info(
-                        "[llm_helpers] LLM response (stream): completed status=%s attempt=%d/%d",
-                        response.status_code,
+                        return  # success, stop retrying
+
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_exception = exc
+                if attempt < retry_limit:
+                    delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[llm_helpers] Stream request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                        type(exc).__name__,
+                        delay,
                         attempt,
-                        LLM_MAX_RETRIES,
+                        retry_limit,
                     )
-                    return  # success, stop retrying
-
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-            last_exception = exc
-            if attempt < LLM_MAX_RETRIES:
-                delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                logger.warning(
-                    "[llm_helpers] Stream request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    await asyncio.sleep(delay)
+                else:
+                    raise _wrap_llm_unavailable(exc) from exc
+            except httpx.HTTPStatusError as exc:
+                if is_llm_unavailable_error(exc):
+                    raise _wrap_llm_unavailable(exc) from exc
+                raise
+            except httpx.HTTPError as exc:
+                logger.error(
+                    "[llm_helpers] LLM stream transport error type=%s detail=%s",
                     type(exc).__name__,
-                    delay,
-                    attempt,
-                    LLM_MAX_RETRIES,
+                    str(exc),
                 )
-                await asyncio.sleep(delay)
-            else:
-                raise _wrap_llm_unavailable(exc) from exc
-        except httpx.HTTPStatusError as exc:
-            if is_llm_unavailable_error(exc):
-                raise _wrap_llm_unavailable(exc) from exc
-            raise
-        except httpx.HTTPError as exc:
-            logger.error(
-                "[llm_helpers] LLM stream transport error type=%s detail=%s",
-                type(exc).__name__,
-                str(exc),
-            )
-            raise
+                raise
 
-    if last_exception is None:
-        raise RuntimeError("LLM stream request failed without an exception")
-    assert last_exception is not None
-    raise last_exception
+        if last_exception is None:
+            raise RuntimeError("LLM stream request failed without an exception")
+        assert last_exception is not None
+        raise last_exception
 
 
 def call_llm(

@@ -77,7 +77,15 @@ def database(monkeypatch, request):
                 "0083_learning_validation_recovery.sql",
                 "0084_learning_progress.sql",
                 "0085_learning_fairness_note_dedup.sql",
+                "0086_learning_efficiency.sql",
             ):
+                if name == "0086_learning_efficiency.sql" and getattr(request, "param", None) in {
+                    "pre_efficiency",
+                    "pre_fairness",
+                    "pre_context",
+                    "pre_reliability",
+                }:
+                    continue
                 if (
                     name == "0085_learning_fairness_note_dedup.sql"
                     and getattr(request, "param", None) == "pre_fairness"
@@ -126,6 +134,9 @@ def setup_owner(database, owner=OWNER):
         conn.execute(
             "UPDATE intelligence_state SET started_at='2026-01-01' WHERE user_email=%s", (owner,)
         )
+    # Production startup enqueues the latest scheduled slot; history is now owned
+    # by knowledge_learning rather than an implicit intelligence backlog run.
+    jobs.enqueue_due(owner, now=FUTURE)
 
 
 def ingest(
@@ -579,9 +590,7 @@ def test_subject_repair_receives_rejected_ref_and_commits_supported_result(datab
     assert len(store.knowledge_for(OWNER)) == 1
 
 
-def test_reconciliation_retrieves_small_candidate_groups_without_full_source_text(
-    database, monkeypatch
-):
+def test_reconciliation_groups_candidates_with_only_their_cited_source_text(database, monkeypatch):
     import json
 
     setup_owner(database)
@@ -604,7 +613,7 @@ def test_reconciliation_retrieves_small_candidate_groups_without_full_source_tex
             assert not payload["context"]["knowledge"]
             assert not payload["context"]["tasks"]
             return {"findings": candidates}
-        assert len(payload["candidates"]) <= 3
+        assert len(payload["candidates"]) <= store.MAX_FINDINGS
         assert payload["sources"][0]["text_spans"][1:] == [None] * (
             len(model.source_spans(batch[0]["text"])) - 1
         )
@@ -613,7 +622,7 @@ def test_reconciliation_retrieves_small_candidate_groups_without_full_source_tex
     monkeypatch.setattr(model, "call_llm_json", ask)
     _, findings = model.analyze(OWNER, batch, knowledge_only=True)
     assert len(findings) == 7
-    assert [len(request["candidates"]) for request in requests[1:]] == [3, 3, 1]
+    assert [len(request["candidates"]) for request in requests[1:]] == [7]
 
 
 def test_rejected_batches_defer_without_receipts_then_pause_and_allow_other_sources(
@@ -824,26 +833,27 @@ def test_duplicate_proposals_are_not_counted_as_creations(database):
     assert duplicate["findings_skipped"] == 1
 
 
-def test_failed_history_waits_without_reopening_and_retries_when_due(database):
+def test_failed_history_waits_in_canonical_queue_and_retries_when_due(database, monkeypatch):
+    import knowledge_jobs
+
     setup_owner(database)
     ingest(database, sent="2025-12-01T12:00:00+00:00")
-    claimed = jobs.claim_run({OWNER})
-    batch = store.next_batch(OWNER, FUTURE, knowledge_only=True)
-    store.defer_batch(OWNER, claimed, batch, "invalid_evidence")
-    jobs.finish_run(claimed)
-    jobs.refresh_backlog(OWNER)
-    assert jobs.claim_run({OWNER}) is None
+    knowledge_jobs.initialize_owner(OWNER)
+    monkeypatch.setattr(
+        model,
+        "analyze",
+        lambda *a, **k: (_ for _ in ()).throw(model.InvalidModelOutput("invalid_evidence")),
+    )
+    assert knowledge_jobs.process_once([OWNER])
+    assert not knowledge_jobs.process_once([OWNER])
     with database() as conn:
-        conn.execute("UPDATE intelligence_failures SET next_attempt_at=NOW()")
-    jobs.refresh_backlog(OWNER)
-    reclaimed = jobs.claim_run({OWNER})
-    assert reclaimed["knowledge_only"]
-    with pytest.raises(ValueError, match="lease_expired"):
-        store.defer_batch(OWNER, claimed, batch, "invalid_evidence")
-    store.apply_batch(OWNER, reclaimed, batch, context(batch), [])
-    jobs.finish_run(reclaimed)
-    jobs.refresh_backlog(OWNER)
-    assert jobs.claim_run({OWNER}) is None
+        assert (
+            conn.execute("SELECT status FROM knowledge_learning").fetchone()["status"] == "failed"
+        )
+        conn.execute("UPDATE knowledge_learning SET next_attempt_at=NOW()")
+    monkeypatch.setattr(model, "analyze", lambda *a, **k: ({}, []))
+    assert knowledge_jobs.process_once([OWNER])
+    assert not knowledge_jobs.process_once([OWNER])
 
 
 def test_failure_status_and_explicit_retry_are_private_and_owner_scoped(database, monkeypatch):
@@ -1154,21 +1164,22 @@ def test_confirmed_completion_withdraws_a_pending_task_suggestion(database):
 
 
 def test_late_history_extends_only_the_knowledge_queue(database):
+    import knowledge_jobs
+
     setup_owner(database)
-    assert jobs.process_once({OWNER})  # Initial empty backlog completes.
+    knowledge_jobs.initialize_owner(OWNER)
     ingest(database, sent="2025-12-30T12:00:00+00:00", ident="historical")
     assert not store.next_batch(OWNER, FUTURE)
-    jobs.refresh_backlog(OWNER)
-    historical_run = jobs.claim_run({OWNER})
-    assert historical_run["knowledge_only"]
-    assert store.next_batch(OWNER, historical_run["cutoff"], knowledge_only=True)
-    jobs.finish_run(historical_run, more=True)
+    knowledge_jobs.initialize_owner(OWNER)
+    historical = knowledge_jobs.claim([OWNER])
+    assert historical["historical"]
     ingest(database, ident="fresh")
-    jobs.enqueue_due(OWNER, now=FUTURE)
-    fresh_run = jobs.claim_run({OWNER})
-    assert not fresh_run["knowledge_only"]
-    fresh_batch = store.next_batch(OWNER, fresh_run["cutoff"])
-    assert len(fresh_batch) == 1 and fresh_batch[0]["actionable"]
+    current = jobs.claim_run([OWNER])
+    assert not current["knowledge_only"]
+    batch = store.next_batch(OWNER, current["cutoff"])
+    assert len(batch) == 1 and batch[0]["actionable"]
+    with database() as conn:
+        assert not conn.execute("SELECT 1 FROM intelligence_runs WHERE knowledge_only").fetchone()
 
 
 def test_self_knowledge_appears_only_on_the_confirmed_owner_contact(database):

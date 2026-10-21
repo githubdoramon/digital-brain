@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { theme } from '@/theme';
 
 type Lane = {
+  retired?: boolean;
   total: number;
   processed: number;
   remaining: number;
@@ -99,7 +100,9 @@ export function KnowledgeProgressStatus({ details }: { details: LearningProgress
           : 'Learning from your saved history'}
       </Text>
       <ProgressLane title="History learning" lane={details.learning.history} />
-      <ProgressLane title="Older messages and files" lane={details.intelligence.history} />
+      {!details.intelligence.history.retired ? (
+        <ProgressLane title="Older messages and files" lane={details.intelligence.history} />
+      ) : null}
       {details.learning.ongoing.total ? (
         <ProgressLane title="Ongoing learning" lane={details.learning.ongoing} />
       ) : null}

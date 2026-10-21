@@ -24,8 +24,9 @@ events/documents supply bounded context. Two days of neighboring messages supply
 conversation context. Attachment files remain in their original apps.
 
 On the first worker tick each authorized owner gets a durable activation boundary.
-Existing messages/events/documents are seeded once and a knowledge-only backlog
-run is queued. That pass starts automatically and can continue across restarts.
+Existing messages/events/documents are seeded once. Since migration 0086 their
+historical knowledge pass is owned solely by `knowledge_jobs`, which starts
+asynchronously and resumes from its canonical source-part receipts.
 Messages whose original sent time precedes activation remain knowledge-only even
 when imported later. No task proposals, task edits or completions can come from
 that historical evidence alone. New observations of historical events/documents
@@ -46,17 +47,17 @@ derived knowledge is retained when a group is subsequently excluded.
 - Slot uniqueness prevents duplicate morning/evening runs. On recovery, the latest
   due slot processes all outstanding observations, rather than requiring a replay
   of every missed calendar slot.
-- Per-owner, reclaimable two-minute leases serialize backlog and scheduled
-  runs across processes. An independent heartbeat runs every 20 seconds; each
+- Per-owner, reclaimable two-minute leases serialize scheduled runs across processes. An independent heartbeat runs every 20 seconds; each
   successful batch also renews the lease. Inference failure persists only `analysis_failed` and retries after
   five minutes.
 - Sources are split into 5,000-character parts with 400 characters of overlap;
   twelve parts form a model batch. One batch is handled per worker turn, then
   the persisted run yields its lease. Shared durable fairness counters give eligible
-  historical work a turn after at most two scheduled turns, even with continuous
-  new arrivals. Scheduled runs select fresh evidence only. Late historical imports
-  extend the separate knowledge-only queue. A sole eligible queue uses every turn;
-  backoff and active-lease protections still apply. Model calls finish before yielding.
+  historical work a turn after at most two current turns inside the canonical
+  knowledge queue. Intelligence selects current evidence only; it no longer claims
+  a second historical pass. Late historical imports enter the canonical learner.
+  Shared background admission rotates workflows and respects provider cooldown.
+  Model calls finish before yielding.
 - A source/part receipt commits in the same transaction as its findings. Failed
   inference or a lost lease advances no receipts. Receipts, rather than a sequence
   high-water mark, also cover transactions that commit out of order.
@@ -159,11 +160,12 @@ Snapshot failure emits `progress_snapshot_unavailable` and never fails the work.
 
 The independent knowledge progress observer also emits `[learning] progress` at
 startup and every minute during long model calls. Its shared API snapshot reports
-separate historical/scheduled coverage through the current snapshot time, including
+canonical knowledge history and scheduled coverage through the current snapshot time, including
 late imports beyond a previous run's cutoff, retry reasons, active runs, elapsed time,
 oldest waiting source dates and latest successful receipts. `/mobile/intelligence/status`
-adds these two lanes under `progress`; `/mobile/knowledge/progress` includes them
-alongside ongoing/historical knowledge learning and summaries. See
+retains an explicitly retired empty history lane under `progress`; the active
+scheduled lane remains. `/mobile/knowledge/progress` reports canonical ongoing/history
+knowledge learning, scheduled intelligence and summaries. See
 [Knowledge progress and activity](KNOWLEDGE.md#progress-and-activity). Local activity
 logs include owner and source/run references; source bodies remain in the explicitly
 enabled local diagnostics, never telemetry.
@@ -197,3 +199,10 @@ deferral, continued archive progress, paused retries, owner-scoped retry/status,
 private LLM logging, and warmup API fallback. The new migration was exercised on
 disposable PostgreSQL. Model responses and provider HTTP responses were mocked;
 this is not a deployed or live-model verification.
+
+
+Historical learning, scheduled intelligence and summaries share the process-local
+[LLM admission policy](LLM_ADMISSION.md). Provider failures are deferred after one
+transport attempt, without pausing evidence as invalid. Interactive chat and briefing
+retain normal retries and priority. Historical summary refreshes coalesce for 15
+minutes; current changes retain their normal short debounce.

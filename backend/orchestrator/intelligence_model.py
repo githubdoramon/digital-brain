@@ -739,9 +739,13 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         if len(candidates["findings"]) > intelligence.MAX_FINDINGS:
             raise ValueError("too_many_findings")
         reconciled = {"findings": [], "deferred_refs": list(candidates.get("deferred_refs", []))}
-        for offset in range(0, len(candidates["findings"]), 3):
+        for offset in range(0, len(candidates["findings"]), intelligence.MAX_FINDINGS):
             result = _reconcile(
-                owner, eligible, payload, candidates["findings"][offset : offset + 3], context
+                owner,
+                eligible,
+                payload,
+                candidates["findings"][offset : offset + intelligence.MAX_FINDINGS],
+                context,
             )
             reconciled["findings"].extend(result["findings"])
             reconciled["deferred_refs"].extend(result.get("deferred_refs", []))

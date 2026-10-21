@@ -104,7 +104,7 @@ def test_knowledge_owners_take_turns_without_sharing_fairness_counters(database)
         assert [history for who, history in claimed if who == owner] == [False, False, True]
 
 
-def test_intelligence_history_gets_a_turn_while_scheduled_runs_keep_arriving(database):
+def test_intelligence_only_claims_scheduled_runs_after_history_handoff(database):
     setup_owner(database)
     with database() as conn:
         conn.execute(
@@ -122,9 +122,9 @@ def test_intelligence_history_gets_a_turn_while_scheduled_runs_keep_arriving(dat
                 "INSERT INTO intelligence_runs(run_id,user_email,slot,cutoff) VALUES(%s,%s,%s,%s)",
                 (f"new-{i}", OWNER, f"new-{i}", FUTURE),
             )
-    assert lanes == [False, False, True] * 3
+    assert lanes == [False] * 9
     report = learning_progress.snapshot(OWNER)
-    assert report["fairness"]["intelligence"]["last_history_claimed_at"] is not None
+    assert report["intelligence"]["history"]["retired"] is True
 
 
 def test_intelligence_yields_after_one_model_batch(database, monkeypatch):
@@ -150,17 +150,14 @@ def test_intelligence_yields_after_one_model_batch(database, monkeypatch):
         )
 
 
-def test_expired_historical_run_is_reclaimed_when_its_turn_arrives(database):
+def test_expired_historical_run_is_never_reclaimed_by_intelligence(database):
     setup_owner(database)
     with database() as conn:
-        conn.execute("UPDATE intelligence_state SET current_streak=2 WHERE user_email=%s", (OWNER,))
         conn.execute(
-            "UPDATE intelligence_runs SET status='running',lease_token='old',lease_until=NOW()-INTERVAL '1 second'"
-        )
-        conn.execute(
-            "INSERT INTO intelligence_runs(run_id,user_email,slot,cutoff) VALUES('current',%s,'current',%s)",
+            "INSERT INTO intelligence_runs(run_id,user_email,slot,cutoff,knowledge_only,status,lease_token,lease_until) VALUES('legacy',%s,'legacy',%s,TRUE,'running','old',NOW()-INTERVAL '1 second')",
             (OWNER, FUTURE),
         )
-    run = intelligence_jobs.claim_run([OWNER])
-    assert run["knowledge_only"] and run["lease_token"] != "old"
+    claimed = intelligence_jobs.claim_run([OWNER])
+    assert not claimed["knowledge_only"]
+    intelligence_jobs.finish_run(claimed)
     assert intelligence_jobs.claim_run([OWNER]) is None

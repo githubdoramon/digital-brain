@@ -14,6 +14,8 @@ import knowledge
 import knowledge_batching
 import knowledge_prose
 import learning_fairness
+import learning_ownership
+import llm_admission
 from db import get_conn
 from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
 from llm_policy import failure_code
@@ -59,18 +61,20 @@ def initialize_owner(owner):
                 (owner,),
             )
         cur.execute(
-            """INSERT INTO knowledge_learning(user_email,source_id,part,historical)
+            f"""INSERT INTO knowledge_learning(user_email,source_id,part,historical)
             SELECT %s,s.source_id,p.part, s.historical OR s.kind NOT IN ('chat','contact_note')
-            FROM intelligence_sources s CROSS JOIN LATERAL generate_series(0,GREATEST(0,
+            FROM intelligence_sources s
+            JOIN knowledge_backfills b ON b.user_email=%s
+            JOIN intelligence_state st ON st.user_email=b.user_email
+            CROSS JOIN LATERAL generate_series(0,GREATEST(0,
                 (length(COALESCE(s.payload->>'text',''))-1)/%s)) p(part)
             WHERE (s.owner_email IS NULL OR s.owner_email=%s)
                 AND s.duplicate_of_source_id IS NULL
-                AND (s.observed_at <= (SELECT seeded_at FROM knowledge_backfills WHERE user_email=%s)
-                    OR s.kind IN ('chat','contact_note'))
+                AND {learning_ownership.ELIGIBLE_SOURCE_SQL}
                 AND NOT EXISTS(SELECT 1 FROM knowledge_learning j WHERE j.user_email=%s AND j.source_id=s.source_id AND j.part=p.part)
             ORDER BY s.source_id,p.part LIMIT 500
             ON CONFLICT DO NOTHING""",
-            (owner, intelligence.CHUNK_SIZE, owner, owner, owner),
+            (owner, owner, intelligence.CHUNK_SIZE, owner, owner),
         )
         # New context in the same thread/conversation, or a confirmed identity link, permits
         # reconsidering deferred assertions without inventing an unresolved knowledge record.
@@ -225,8 +229,37 @@ def _heartbeat(job, *, summary=False, jobs=None):
     return lease_heartbeat(renew)
 
 
+def _defer_learning(jobs, exc):
+    with get_conn() as conn, conn.cursor() as cur:
+        for item in jobs:
+            cur.execute(
+                """UPDATE knowledge_learning SET status='pending',attempts=GREATEST(0,attempts-1),
+                error_code=%s,lease_token=NULL,lease_until=NULL,
+                next_attempt_at=NOW()+(%s*INTERVAL '1 second')
+                WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s""",
+                (
+                    exc.reason,
+                    exc.delay,
+                    item["user_email"],
+                    item["source_id"],
+                    item["part"],
+                    item["lease_token"],
+                ),
+            )
+        conn.commit()
+    logger.info(
+        "[knowledge] learning_deferred reason=%s delay_s=%d parts=%d",
+        exc.reason,
+        exc.delay,
+        len(jobs),
+    )
+
+
 @traced_intelligence_run()
+@llm_admission.background_work("knowledge")
 def process_once(owners):
+    if not llm_admission.background_ready():
+        return False
     jobs = claim(owners, batched=True)
     if not jobs:
         return False
@@ -265,6 +298,10 @@ def process_once(owners):
                             "[knowledge] batch_discarded reason=lease_lost parts=%d", len(jobs)
                         )
                         return True
+                cur.execute(
+                    "SELECT set_config('brain.learning_history',%s,TRUE)",
+                    ("on" if job["historical"] else "off",),
+                )
                 current = {
                     r["source_id"]
                     for r in batch
@@ -325,12 +362,17 @@ def process_once(owners):
             len(jobs),
             statuses.count("deferred"),
         )
+    except llm_admission.BackgroundDeferred as exc:
+        _defer_learning(jobs, exc)
     except Exception as exc:
         code = (
             exc.code
             if isinstance(exc, intelligence_model.InvalidModelOutput)
             else failure_code(exc)
         )
+        if code in {"model_unavailable", "model_timeout", "model_rate_limited"}:
+            _defer_learning(jobs, llm_admission.BackgroundDeferred("provider_unavailable", 30))
+            return True
         for item in jobs:
             _finish(item, "failed", code)
         diagnostic(
@@ -353,13 +395,17 @@ def process_once(owners):
     return True
 
 
+@llm_admission.background_work("summaries")
 def summarize_once(owners):
-    if not owners:
+    if not owners or not llm_admission.background_ready():
         return False
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT * FROM knowledge_summaries WHERE user_email=ANY(%s)
-            AND version<>rendered_version AND next_attempt_at<=NOW()
+            AND version<>rendered_version
+            AND ((NOT history_dirty AND next_attempt_at<=NOW()) OR
+                (history_dirty AND dirty_since<=NOW()-INTERVAL '15 minutes'
+                    AND (error_code IS NULL OR next_attempt_at<=NOW())))
             AND (lease_until IS NULL OR lease_until<NOW())
             ORDER BY next_attempt_at FOR UPDATE SKIP LOCKED LIMIT 1""",
             (list(owners),),
@@ -375,6 +421,7 @@ def summarize_once(owners):
             (row["lease_token"], row["user_email"], row["subject_ref"]),
         )
         conn.commit()
+    retry_delay = 300
     started = time.monotonic()
     logger.info(
         "[knowledge] summary_started owner=%s subject_ref=%s version=%s",
@@ -445,6 +492,10 @@ def summarize_once(owners):
             time.monotonic() - started,
         )
         code = None
+    except llm_admission.BackgroundDeferred as exc:
+        code = exc.reason
+        retry_delay = exc.delay
+        logger.info("[knowledge] summary_deferred reason=%s delay_s=%d", code, retry_delay)
     except Exception as exc:
         code = (
             exc.code
@@ -457,7 +508,13 @@ def summarize_once(owners):
             """UPDATE knowledge_summaries SET lease_token=NULL,lease_until=NULL,error_code=%s,
             next_attempt_at=NOW()+(%s * INTERVAL '1 second')
             WHERE user_email=%s AND subject_ref=%s AND lease_token=%s""",
-            (code, 300 if code else 2, row["user_email"], row["subject_ref"], row["lease_token"]),
+            (
+                code,
+                retry_delay if code else 2,
+                row["user_email"],
+                row["subject_ref"],
+                row["lease_token"],
+            ),
         )
         conn.commit()
     return True

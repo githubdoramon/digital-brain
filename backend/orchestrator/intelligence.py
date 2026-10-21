@@ -84,11 +84,6 @@ def initialize(owner: str):
             cur.execute(
                 "UPDATE intelligence_state SET seeded = TRUE WHERE user_email = %s", (owner,)
             )
-            cur.execute(
-                """INSERT INTO intelligence_runs(run_id, user_email, slot, cutoff, knowledge_only)
-                VALUES (%s, %s, 'knowledge-backlog', NOW(), TRUE) ON CONFLICT DO NOTHING""",
-                (key(owner, "backlog"), owner),
-            )
         conn.commit()
     return state
 

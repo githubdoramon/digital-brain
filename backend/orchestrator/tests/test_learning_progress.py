@@ -106,29 +106,24 @@ def test_learning_states_ownership_expired_leases_and_original_dates(database):
     assert report["counts"] == {"done": 1, "pending": 2, "running": 2, "failed": 2, "deferred": 1}
 
 
-def test_external_history_includes_late_imports_and_excludes_chat(database):
+def test_canonical_history_includes_late_imports_and_legacy_lane_is_retired(database):
     jobs.initialize_owner(OWNER)
     old = source(database, "late-import", kind="message", historical=False)
     source(database, "chat")
     source(database, "new", kind="document", historical=False, sent="2100-01-01T00:00:00+00:00")
+    jobs.initialize_owner(OWNER)
     with database() as conn:
-        conn.execute("UPDATE intelligence_runs SET status='succeeded'")
         conn.execute(
-            """INSERT INTO intelligence_failures(user_email,source_id,part,knowledge_only,attempts,error_code)
-            VALUES(%s,%s,0,TRUE,3,'invalid_evidence')""",
-            (OWNER, old),
+            "UPDATE knowledge_learning SET status='failed',attempts=3,error_code='invalid_evidence' WHERE source_id=%s",
+            (old,),
         )
     report = progress.snapshot(OWNER)
-    lane = report["intelligence"]["history"]
-    assert lane["total"] == lane["remaining"] == lane["paused"] == 1
-    assert lane["state"] == "waiting" and not report["history_caught_up"]
+    lane = report["learning"]["history"]
+    assert lane["total"] == 2 and lane["paused"] == 1
+    assert not report["history_caught_up"]
     assert lane["errors"] == {"invalid_evidence": 1}
+    assert report["intelligence"]["history"]["retired"]
     assert report["intelligence"]["scheduled"]["total"] == 1
-    with database() as conn:
-        conn.execute(
-            "INSERT INTO intelligence_processed(user_email,source_id) VALUES(%s,%s)", (OWNER, old)
-        )
-    assert progress.snapshot(OWNER)["intelligence"]["history"]["state"] == "caught_up"
 
 
 def test_old_source_in_ongoing_queue_still_counts_as_unfinished_history(database):
@@ -158,7 +153,8 @@ def test_summary_retries_active_runs_and_current_versions(database):
             (OWNER, OWNER, OWNER),
         )
         conn.execute(
-            "UPDATE intelligence_runs SET status='running',started_at=NOW()-INTERVAL '2 minutes',lease_until=NOW()+INTERVAL '15 minutes'"
+            "INSERT INTO intelligence_runs(run_id,user_email,slot,cutoff,status,started_at,lease_until) VALUES('scheduled',%s,'scheduled',NOW(),'running',NOW()-INTERVAL '2 minutes',NOW()+INTERVAL '15 minutes')",
+            (OWNER,),
         )
     report = progress.snapshot(OWNER)
     summaries = report["summaries"]
@@ -166,10 +162,11 @@ def test_summary_retries_active_runs_and_current_versions(database):
     assert summaries["processed"] == summaries["running"] == summaries["retrying"] == 1
     assert summaries["errors"] == {"invalid_summary": 1}
     assert len(summaries["active"]) == 1
-    history = report["intelligence"]["history"]
-    assert history["running_runs"] == 1 and history["running"] == 0
-    assert history["active"][0]["elapsed_s"] >= 120
-    assert history["state"] == "processing" and not report["history_caught_up"]
+    scheduled = report["intelligence"]["scheduled"]
+    assert scheduled["running_runs"] == 1 and scheduled["running"] == 0
+    assert scheduled["active"][0]["elapsed_s"] >= 120
+    assert scheduled["state"] == "processing"
+    assert report["intelligence"]["history"]["retired"]
 
 
 def test_summary_debounce_is_waiting_without_failed_retry(database):

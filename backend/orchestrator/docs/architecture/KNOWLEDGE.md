@@ -56,16 +56,21 @@ excluded from telemetry. See [LLM_CONTEXT.md](LLM_CONTEXT.md).
 Migration `0081_learning_reliability.sql` requeues previously failed learning and
 paused intelligence parts once, without resetting successful receipts or ambiguous
 identity deferrals. The authenticated knowledge retry endpoint can also requeue
-learning, historical failures and failed summaries for its owner. Historical runs
-defer rejected HTTP requests per batch, allowing later sources to proceed; transient
-provider outages still back off the run. Repeated batch failures pause after three
-attempts and retain their evidence for explicit recovery.
+learning, retained validation failures and failed summaries for its owner. Content
+validation failures pause after three attempts and retain their evidence. Provider
+outages defer work without spending that source-part validation budget; requests
+from historical learning, scheduled intelligence and summaries share the admission
+policy in [LLM_ADMISSION.md](LLM_ADMISSION.md).
 
 Intelligence uses two bounded phases. Extraction receives primary source text and
 compact identity/entity hints; it does not receive archive facts, task lists,
 proposal histories or unrelated documents. Reconciliation retrieves matching records
-for at most three candidates at a time and receives only their cited excerpts,
+together for up to the existing 20-finding limit and receives only cited excerpts,
 retaining original source refs and span indices. It cannot cite omitted excerpts.
+The shared token preflight still applies; an oversized reconciliation recursively
+splits its candidate group without repeating extraction. Routine non-empty batches
+therefore use one extraction and one reconciliation rather than a call per three
+findings. Reasoning settings are unchanged.
 Both phases use explicit field projections: embeddings, evidence histories, source
 snapshots, raw metadata and manual contact Notes never enter retrieved prompt context.
 Controller validation still uses complete original records, including correction,
@@ -211,7 +216,11 @@ their own source dates and exact evidence links.
 ## Summaries, retrieval and deletion
 
 Summaries derive from active subject-linked knowledge. Changes invalidate summaries;
-rapid changes coalesce. Publish compares the captured version against the current
+rapid changes coalesce. Historical changes retain a persistent first-dirty timestamp
+and become eligible for one refresh after 15 minutes, even when more historical
+facts keep arriving. A current change removes this historical delay and uses the
+normal short debounce. Admission/cooldown can delay actual model execution; the
+15-minute bound is eligibility, not a completion promise. Publish compares the captured version against the current
 version, preventing stale in-flight output after corrections/deletion/relinking.
 Summary claims also carry a renewable lease token, preventing concurrent workers
 from processing the same subject. Malformed, empty or reasoning-only responses get
@@ -263,16 +272,29 @@ legacy seeds with an unknown original date. Existing duplicate evidence remains 
 Only retained reference-format failures are requeued, not ambiguity deferrals or
 successful receipts.
 
-Both extractors use `learning_fairness.py`: while ongoing and historical work remain
-eligible, history receives a turn after at most two current-work claims. The counters
-and last claim/history timestamps persist per owner in the database and update under
-the same row lock as job claiming, so restarts and concurrent servers cannot reset
-the policy. When only one lane is ready it can use all turns; retry delays and paused
-parts remain respected. Knowledge turns claim one source part; intelligence turns
-run at most one model batch before yielding their run lease. Owners rotate by last
-claim time. This guarantees bounded turns, rather than equal wall-clock duration:
-an in-flight model request finishes before another lane can run. Historical action
-restrictions, evidence validation, lease tokens and transactional receipts still apply.
+The canonical knowledge learner uses `learning_fairness.py`: while ongoing and
+historical work remain eligible, history receives a turn after at most two current
+claims. Counters and timestamps persist per owner under the scheduling-row lock.
+When one lane is ready it can use every turn; retry delays and paused parts remain
+respected. Knowledge claims bounded conversation batches; scheduled intelligence
+handles at most one model batch per turn. Owners rotate by last claim time.
+These are bounded turns, not equal wall-clock duration; active model work completes
+before yielding. Shared process-local admission also rotates waiting learning,
+intelligence and summary workflows, prioritizes foreground requests and reserves
+background opportunities during continuous foreground traffic.
+
+Migration `0086_learning_efficiency.sql` makes `knowledge_learning` the sole owner
+of the historical knowledge pass. Historical intelligence runs are retired and their
+lease tokens revoked. Successful archive receipts populate the canonical journal;
+already done parts, clarification waits and newer reconsideration requests remain
+intact. Genuine outstanding validation failures retain their retry state; exhausted
+provider-outage failures become eligible again. Facts, source snapshots, manual edits
+and evidence links are not rewritten. Old journals remain as audit data. Late old-dated
+imports enter the canonical seeder, so they cannot disappear behind the old activation
+cutoff. Scheduled intelligence continues current-source task/project analysis and
+its completion review. The API retains an explicitly retired empty historical
+intelligence lane for existing clients; the app hides it. Canonical history coverage
+and catch-up come from the knowledge learner.
 
 Migration 0080 requeues previously completed shared-learning parts once so retained
 evidence also receives contact structuring. Here knowledge-only includes contact
