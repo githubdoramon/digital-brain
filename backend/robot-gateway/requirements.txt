@@ -1,7 +1,7 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-psycopg[binary]==3.2.13
-pydantic==2.9.2
-aiomqtt==2.3.0
-google-auth==2.41.1
-requests==2.32.3
+fastapi==0.146.0
+uvicorn[standard]==0.54.0
+psycopg[binary]==3.3.6
+pydantic==2.14.1
+aiomqtt==2.5.1
+google-auth==2.62.0
+requests==2.34.2
