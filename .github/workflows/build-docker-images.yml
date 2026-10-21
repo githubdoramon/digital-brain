@@ -185,7 +185,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-orchestrator
           tags: |
@@ -284,7 +284,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-robot-gateway
           tags: |
@@ -429,7 +429,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-frontend
           tags: |
