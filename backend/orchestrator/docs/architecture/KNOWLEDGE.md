@@ -81,8 +81,8 @@ in [LLM_CONTEXT.md](LLM_CONTEXT.md). Knowledge keeps its source-preserving split
 policy; conversational working summaries are never extraction evidence.
 
 `KNOWLEDGE_CONTEXT_WINDOW_TOKENS` defaults to a combined 65,536-token window.
-Generated output and reasoning reserve up to 12,000 tokens, with another 4,096-token
-margin (`KNOWLEDGE_CONTEXT_MARGIN_TOKENS`), leaving at most 49,440 estimated input
+Generated output and reasoning reserve up to 20,000 tokens, with another 4,096-token
+margin (`KNOWLEDGE_CONTEXT_MARGIN_TOKENS`), leaving at most 41,440 estimated input
 tokens. A local BPE estimate with 20% headroom includes both messages, instructions,
 JSON escaping and the response schema. Vocabulary data is cached at image build
 time; no runtime tokenizer network request is needed. Lower input/context limits reported by
@@ -90,6 +90,18 @@ the provider override the defaults per model/provider for one hour; a smaller
 budget that successfully repairs a rejection is also reused. Optional lower provider
 output caps are respected when reserving the window. Logs contain phase, counts,
 estimated input, input budget and output reserve, never prompt text.
+
+JSON requests reject `finish_reason=length` before parsing or balanced-JSON repair,
+including responses collected from SSE. Truncated findings never reach controller
+validation or commit. `output_exhausted` is distinct from schema/evidence errors
+and provider outages. Extraction/reconciliation retries the affected request once
+with concise JSON instructions and a smaller optional-context budget. Continued
+exhaustion splits primary source groups or reconciliation candidate groups;
+reconciliation splits retain extracted candidates and never restart extraction.
+Single unsplittable failures remain failures with no success receipt. Retry and
+split logs include stage, reason, counts and budgets; reasoning effort is unchanged.
+A larger output reserve helps legitimate answers, but does not cure provider
+repetition/whitespace loops; no partial result is salvaged from those responses.
 
 Primary source text is never truncated to fit. Oversized primary batches split while
 retaining nearby clarification as supporting evidence. Chat learning reads the
@@ -136,7 +148,7 @@ Model read timeouts default to 180 seconds; medium reasoning has a configurable
 transports (`LLM_TIMEOUT`, `LLM_REASONING_TIMEOUT`,
 `LLM_HIGH_REASONING_TIMEOUT`). Explicit longer timeouts remain longer. Optional
 `LLM_MAX_OUTPUT_TOKENS` caps output for known provider limits, including reasoning.
-Extraction requests up to `KNOWLEDGE_MAX_OUTPUT_TOKENS` (12,000 by default).
+Extraction requests up to `KNOWLEDGE_MAX_OUTPUT_TOKENS` (20,000 by default).
 Learning, summary and historical workers use shared two-minute leases, renewed by
 an independent thread every 20 seconds, including during long reasoning requests.
 Abandoned work becomes eligible again after at most two minutes. Polling

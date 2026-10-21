@@ -39,7 +39,8 @@ def ensure_contact_scope(
 
     Returns `(active_scope, active_scope_ids, preempt_result, resolution_attempted)`.
     """
-    normalized_text = sanitize_goal_text(text)
+    selected_text = state.resolution.get("request_contact_text")
+    normalized_text = sanitize_goal_text(selected_text if selected_text is not None else text)
     active_scope = state.resolution.get("active_contact_scope") or []
     active_scope_ids = list(state.resolution.get("active_contact_scope_ids") or [])
 
@@ -59,9 +60,13 @@ def ensure_contact_scope(
         return active_scope, active_scope_ids, None, False
     if not user_email or not normalized_text:
         return active_scope, active_scope_ids, None, False
-    if require_person_query and not is_contact_referential_memory_query(
-        normalized_text,
-        normalized_text,
+    if (
+        selected_text is None
+        and require_person_query
+        and not is_contact_referential_memory_query(
+            normalized_text,
+            normalized_text,
+        )
     ):
         return active_scope, active_scope_ids, None, False
 
@@ -99,7 +104,9 @@ def block_redundant_contact_resolution(
     if not text:
         return None, None
 
-    scoped_text = sanitize_goal_text(str(state.resolution.get("active_contact_scope_text", "")).strip())
+    scoped_text = sanitize_goal_text(
+        str(state.resolution.get("active_contact_scope_text", "")).strip()
+    )
     scoped_ids = state.resolution.get("active_contact_scope_ids", [])
     if scoped_text and scoped_text.lower() == text.lower() and scoped_ids:
         cached_result = state.resolution.get("contact_resolution") or {}
@@ -112,7 +119,9 @@ def block_redundant_contact_resolution(
             None,
         )
 
-    pending_text = sanitize_goal_text(str(state.resolution.get("pending_contact_scope_text", "")).strip())
+    pending_text = sanitize_goal_text(
+        str(state.resolution.get("pending_contact_scope_text", "")).strip()
+    )
     pending_need_user_input = state.resolution.get("pending_contact_need_user_input")
     pending_prompt = ""
     if isinstance(pending_need_user_input, dict):
@@ -121,7 +130,9 @@ def block_redundant_contact_resolution(
         return (
             {
                 "status": ToolStatus.NEED_USER_INPUT.value,
-                "ambiguous_contacts": state.resolution.get("pending_contact_ambiguous_contacts", []),
+                "ambiguous_contacts": state.resolution.get(
+                    "pending_contact_ambiguous_contacts", []
+                ),
                 "people_mentioned": state.resolution.get("pending_contact_people", []),
                 "message": "Contact resolution already requires clarification.",
                 "need_user_input": pending_need_user_input,

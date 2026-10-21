@@ -48,6 +48,7 @@ def get_main_bounded_protocol_prompt() -> str:
         "     * For 'who did I meet/talk to/call most' style questions, do NOT return the user as the counterpart.\n\n"
         "3. BOUNDED REASONING:\n"
         "   - Work toward the GOAL efficiently\n"
+        "   - Apply the latest scope correction to the original unanswered request. Do not resolve people the user dismissed or mentioned only as background for a separate task.\n"
         "   - Stop when you have enough information\n"
         "   - Don't loop on the same query\n"
         "   - If stuck, acknowledge what you found and what's missing\n\n"

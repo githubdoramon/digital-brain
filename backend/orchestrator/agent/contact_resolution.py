@@ -178,6 +178,12 @@ def resolve_contacts_for_text(
             "mode": "minimal",
         }
         context_messages = list((conversation_history or [])[-8:])
+        if "request_contact_text" in state.resolution:
+            # Selected names constrain lookup, but the original request still owns
+            # corrections and explicit new-contact/relationship instructions.
+            original_request = {"role": "user", "content": state.goal}
+            if not context_messages or context_messages[-1] != original_request:
+                context_messages.append(original_request)
         if (
             not context_messages
             or context_messages[-1].get("role") != "user"

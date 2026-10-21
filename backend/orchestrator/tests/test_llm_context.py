@@ -459,3 +459,42 @@ def test_tool_compaction_preserves_literal_description_fields_in_schema_values()
     for key in ("const", "default", "enum", "examples"):
         assert compacted[key] == schema[key]
     assert len(compacted["description"]) == 240
+
+
+def test_compaction_preserves_recent_corrections_and_originals():
+    recent = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"Recent turn {i}"}
+        for i in range(12)
+    ]
+    recent[-2]["content"] = "Ignore Dana Lewis. Continue the original Acme recap."
+    question = {"role": "user", "content": "Answer my original question."}
+    original = payload([*old_dialogue()[:-1], *recent, question])
+    snapshot = deepcopy(original)
+    requests = []
+
+    def summarize(request):
+        requests.append(request)
+        return "User requested the Acme recap with Alex Carter; it remains unanswered."
+
+    fitted = context.prepare_request(
+        original,
+        summarize=summarize,
+        policy=context.CompactionPolicy(
+            current_request=question["content"], recent_dialogue_messages=12
+        ),
+    )
+    assert requests
+    assert fitted["messages"][-13:] == [*recent, question]
+    assert original == snapshot
+    assert context.estimate_input(fitted) <= context.request_budget("smart-test").input_limit
+    assert "original unanswered request" in requests[0]["messages"][0]["content"]
+    assert "dismissed people/topics" in requests[0]["messages"][0]["content"]
+
+
+def test_repeated_current_question_does_not_pin_the_whole_history():
+    question = {"role": "user", "content": "Answer the original question."}
+    messages = [question, *old_dialogue()[1:-1], question]
+    units = context._candidates(
+        messages, context.CompactionPolicy(current_request=question["content"])
+    )
+    assert units == [(0, len(messages) - 1, None)]

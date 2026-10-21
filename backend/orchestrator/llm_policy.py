@@ -156,8 +156,10 @@ def failure_code(error):
         if status >= 500:
             return "model_unavailable"
     # Imported lazily to keep this module usable by llm_helpers itself.
-    from llm_helpers import LLMUnavailableError
+    from llm_helpers import LLMOutputExhaustedError, LLMUnavailableError
 
+    if isinstance(error, LLMOutputExhaustedError):
+        return "output_exhausted"
     if isinstance(error, LLMUnavailableError):
         return "model_unavailable"
     return "analysis_failed"

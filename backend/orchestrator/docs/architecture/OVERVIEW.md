@@ -115,6 +115,26 @@ sequenceDiagram
 | `agents/daily_briefing/profile.py` | Daily briefing bounded profile and tools |
 | `agent/tool_loop_runner.py` | Shared bounded tool loop runner utility |
 
+### Conversation scope and history budgets
+
+The intent router receives complete user/assistant messages instead of a three-message,
+400-character preview. Routing and answering use the shared `llm_context` token-budget
+compactor: retain the latest 12 dialogue messages and the current request verbatim,
+summarize older exchanges when input exceeds 80% of the model input budget, and never
+modify persisted conversation messages or knowledge-learning evidence. Summaries retain
+the original unanswered request, scope corrections, dismissed people/topics, and action
+outcomes. Failed compaction retains originals and fails explicitly if they cannot fit.
+Compaction caches are request-scoped; this does not introduce persistent thread summaries.
+
+The router classifies follow-up corrections against the original unanswered request and
+returns task-relevant `contact_references`. The controller verifies those phrases occur
+in user messages (accent-insensitively) before using them for automatic contact resolution,
+including on-demand search/event scoping. Empty references disable automatic person
+scoping for that run; explicit resolution tools remain available when needed. Assistant-only
+or invented names cannot seed lookups. Dismissed people and references to separate future
+meetings are excluded. Required identity ambiguities still use the existing clarification
+path; the original goal and latest user message remain intact for planning and validation.
+
 ## Important Notes
 
 - Android mobile background location uses one app-owned foreground service and one ongoing Digital Brain notification while location tracking is enabled. Native Fused Location capture requests a ten-minute interval with a 50m movement filter and up to twenty minutes of delivery batching. Samples reporting accuracy worse than 50m are discarded before queueing and at the backend write boundary; unknown accuracy remains eligible, and the cutoff is separate from the movement trigger. Native callbacks persist a bounded queue without auth or backend calls; JavaScript acknowledges only after committing samples to its durable queue, and a separate uploader posts through the client proxy. Runtime drains share a bounded time budget with scheduled fallback drains. See `mobile/BACKGROUND_RUNTIME.md` for ownership and migration details.

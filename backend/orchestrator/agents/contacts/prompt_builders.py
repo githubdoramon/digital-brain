@@ -17,6 +17,10 @@ Text: \"{text}\"
 
 IMPORTANT CONTEXT USAGE:
 - Focus on the current Text above.
+- Omit people explicitly dismissed as irrelevant or whom the user asks you to stop
+  searching/resolving. A mention in an instruction to ignore someone is not a target.
+- For retrieval, include only identities needed for the requested evidence. A separate
+  future meeting or motivation does not add participants to the topic being recalled.
 - Use Conversation messages only to resolve references inside this Text.
 - Do NOT include people that appear only in conversation history.
 - If the text is an analytical question asking for an unknown person (e.g., \"who did I meet most\"), do NOT output placeholders.

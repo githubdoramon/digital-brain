@@ -213,7 +213,7 @@ def test_combined_context_reserves_output_and_margin():
     policy.remember_constraint(
         "smart-test", policy.LLMRequestRejected("context_length_exceeded", context_limit=32768)
     )
-    assert prompt_context.request_limits() == (20480, 8192)
+    assert prompt_context.request_limits() == (17750, 10922)
 
 
 def test_reported_input_limit_and_accepted_reduced_budget_are_remembered():

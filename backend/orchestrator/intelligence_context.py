@@ -98,7 +98,7 @@ def request_limits():
         int(os.getenv("KNOWLEDGE_CONTEXT_WINDOW_TOKENS", "65536")),
         limits.get("context_limit", 10000000),
     )
-    output = min(int(os.getenv("KNOWLEDGE_MAX_OUTPUT_TOKENS", "12000")), window // 4)
+    output = min(int(os.getenv("KNOWLEDGE_MAX_OUTPUT_TOKENS", "20000")), window // 3)
     margin = int(os.getenv("KNOWLEDGE_CONTEXT_MARGIN_TOKENS", "4096"))
     budget = request_budget(get_smart_model(), output=output, window=window, margin=margin)
     return budget.input_limit, budget.output_limit

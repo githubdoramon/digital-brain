@@ -265,6 +265,11 @@ class AgentController:
         self.runtime_profile = selected_interface.profile.runtime
         state.conversational_profile = selected_interface.profile.name
 
+        if classification is not None and classification.contact_references is not None:
+            # Only task-relevant references may seed automatic identity resolution.
+            # Keep the actual goal/message intact for planning and validation.
+            state.resolution["request_contact_text"] = "\n".join(classification.contact_references)
+
         clarification_prompt: Optional[str] = None
         pre_resolve_hint = (
             classification.pre_resolve_contacts if classification is not None else None
@@ -324,7 +329,9 @@ class AgentController:
         if base_interface is None:
             raise RuntimeError("No conversational agent interface provided to AgentController")
         self._agent_interface_context.set(base_interface)
-        self._compaction_context.set(CompactionPolicy(current_request=question.strip()))
+        self._compaction_context.set(
+            CompactionPolicy(current_request=question.strip(), recent_dialogue_messages=12)
+        )
         self.agent_profile = base_interface.profile
         self.runtime_profile = base_interface.profile.runtime
         try:

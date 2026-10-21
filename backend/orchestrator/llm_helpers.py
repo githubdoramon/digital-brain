@@ -69,6 +69,12 @@ class LLMUnavailableError(RuntimeError):
     """Raised when the LLM service cannot be reached on a critical path."""
 
 
+class LLMOutputExhaustedError(RuntimeError):
+    """The provider exhausted generation; partial JSON must never be salvaged."""
+
+    code = "output_exhausted"
+
+
 class LLMEmptyContentError(ValueError):
     """No usable answer was emitted, including reasoning-only completions."""
 
@@ -691,6 +697,7 @@ def _post_chat_completion_stream(
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     resolved_timeout = request_timeout(payload, timeout or LLM_TIMEOUT)
     request_url = f"{base_url}/chat/completions"
+    finish_reason = None
     accumulated_content = ""
     accumulated_reasoning = ""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
@@ -743,7 +750,10 @@ def _post_chat_completion_stream(
             if isinstance(chunk_usage, dict):
                 accumulated_usage = chunk_usage
 
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            choice = (chunk.get("choices") or [{}])[0]
+            if choice.get("finish_reason") is not None:
+                finish_reason = choice["finish_reason"]
+            delta = choice.get("delta", {})
             accumulated_content += str(delta.get("content", "") or "")
 
             reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content")
@@ -788,7 +798,8 @@ def _post_chat_completion_stream(
                             else {}
                         ),
                     },
-                    "finish_reason": "tool_calls" if accumulated_tool_calls else "stop",
+                    "finish_reason": finish_reason
+                    or ("tool_calls" if accumulated_tool_calls else "stop"),
                 }
             ]
         }
@@ -1120,6 +1131,7 @@ def call_llm(
     response_format: Optional[dict[str, Any]] = None,
     extra_body: Optional[dict[str, Any]] = None,
     sensitive_payload: bool = False,
+    reject_truncated: bool = False,
 ) -> str:
     """
     Make a synchronous chat request to the LLM.
@@ -1156,7 +1168,16 @@ def call_llm(
         extra_body=extra_body,
         sensitive_payload=sensitive_payload,
     )
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    choice = data.get("choices", [{}])[0]
+    if reject_truncated and choice.get("finish_reason") == "length":
+        usage = data.get("usage") or {}
+        logger.warning(
+            "[llm_helpers] output_exhausted completion_tokens=%s prompt_tokens=%s",
+            usage.get("completion_tokens"),
+            usage.get("prompt_tokens"),
+        )
+        raise LLMOutputExhaustedError("output_exhausted")
+    content = choice.get("message", {}).get("content", "")
 
     if not content:
         raise LLMEmptyContentError("LLM returned empty content")
@@ -1315,6 +1336,7 @@ def call_llm_json(
                 response_format=response_format,
                 extra_body=extra_body,
                 sensitive_payload=sensitive_payload,
+                reject_truncated=True,
             )
             return parse_llm_json_content(content)
         except LLMRequestRejected as exc:

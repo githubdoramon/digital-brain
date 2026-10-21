@@ -20,7 +20,12 @@ from knowledge_prose import PROSE_INSTRUCTIONS
 from knowledge_references import contact_ref, normalize_finding
 from learning_validation import LearningValidationError
 from llm_config import get_smart_model
-from llm_helpers import LLMEmptyContentError, build_json_schema_response_format, call_llm_json
+from llm_helpers import (
+    LLMEmptyContentError,
+    LLMOutputExhaustedError,
+    build_json_schema_response_format,
+    call_llm_json,
+)
 from llm_policy import LLMRequestRejected, remember_constraint
 from observability.diagnostics import diagnostic, diagnostic_scope
 from observability.logger import get_runtime_logger
@@ -289,6 +294,7 @@ def _ask_validated(payload, *, phase):
     response_format = build_json_schema_response_format(
         name="scheduled_intelligence", schema=SCHEMA
     )
+    context_rejected = False
     for attempt in range(2):
         fitted = _fit_payload(payload, budget, system, response_format)
         logger.info(
@@ -324,13 +330,40 @@ def _ask_validated(payload, *, phase):
             result = Analysis.model_validate(result).model_dump()
             if "candidates" in payload and len(result["findings"]) > len(payload["candidates"]):
                 raise InvalidModelOutput("invalid_schema")
-            if attempt:
+            if context_rejected:
                 remember_constraint(get_smart_model(), input_budget=budget)
             return result
+        except LLMOutputExhaustedError as exc:
+            stage = "extraction" if phase.startswith("Extract") else "reconciliation"
+            exc.stage = stage
+            diagnostic(
+                "intelligence_output_exhausted",
+                stage=stage,
+                attempt=attempt + 1,
+                source_parts=len(fitted.get("sources", [])),
+                candidates=len(fitted.get("candidates", [])),
+                output_budget=output,
+            )
+            if attempt:
+                raise
+            logger.info(
+                "[intelligence] stage_retry stage=%s reason=output_exhausted input_budget=%d",
+                stage,
+                budget // 2,
+            )
+            budget //= 2
+            system += (
+                "\nReturn exactly ONE compact JSON object, then stop. No commentary, "
+                "markdown, repeated objects or padding. Keep each statement and reason "
+                "to one concise sentence. Prefer span_index with quote=null. "
+                "Retain every required field, reference and supported candidate; "
+                "do not omit facts merely to shorten the response."
+            )
         except LLMRequestRejected as exc:
             if exc.code != "context_length_exceeded" or attempt:
                 raise
             # This is a changed request, never a blind retry of the rejected input.
+            context_rejected = True
             new_budget, output = request_limits()
             budget = min(budget // 2, new_budget)
 
@@ -408,8 +441,12 @@ def analyze(owner, batch, *, knowledge_only=False):
 def _analyze_batch(owner, batch, *, knowledge_only=False):
     try:
         return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
-    except LLMRequestRejected as exc:
-        if exc.code != "context_length_exceeded":
+    except (LLMRequestRejected, LLMOutputExhaustedError) as exc:
+        if exc.code not in {"context_length_exceeded", "output_exhausted"}:
+            raise
+        # Exhausted reconciliation has already retried/split its candidates.
+        # Never start extraction again when a single candidate still cannot finish.
+        if getattr(exc, "stage", None) == "reconciliation":
             raise
         primary = [row for row in batch if not row.get("supporting")]
         supporting = [row for row in batch if row.get("supporting")]
@@ -421,9 +458,7 @@ def _analyze_batch(owner, batch, *, knowledge_only=False):
                 owner, primary + supporting[: len(supporting) // 2], knowledge_only=knowledge_only
             )
         middle = len(primary) // 2
-        logger.info(
-            "[intelligence] batch_split reason=context_length_exceeded source_parts=%d", len(batch)
-        )
+        logger.info("[intelligence] batch_split reason=%s source_parts=%d", exc.code, len(batch))
         context, findings = {}, []
         for group in (primary[:middle], primary[middle:]):
             # Keep nearby clarification available across the split. These rows
@@ -585,9 +620,12 @@ def _reconcile(owner, batch, payload, candidates, context):
             scoped,
             phase="Reconcile only these candidates against matching records. Return at most one finding per candidate. Only non-null text_spans and exact_quotes are supplied evidence; retain their original refs and span indices. Remove duplicates and unsupported or dismissed unchanged work.",
         )
-    except LLMRequestRejected as exc:
-        if exc.code != "context_length_exceeded" or len(candidates) < 2:
+    except (LLMRequestRejected, LLMOutputExhaustedError) as exc:
+        if exc.code not in {"context_length_exceeded", "output_exhausted"} or len(candidates) < 2:
             raise
+        logger.info(
+            "[intelligence] reconciliation_split reason=%s candidates=%d", exc.code, len(candidates)
+        )
         middle = len(candidates) // 2
         left = _reconcile(owner, batch, payload, candidates[:middle], context)
         right = _reconcile(owner, batch, payload, candidates[middle:], context)

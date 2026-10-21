@@ -65,6 +65,7 @@ class IntentClassification:
     reasoning: Optional[str] = None
     route_source: RouteSource = RouteSource.UNKNOWN
     should_generate_facts: Optional[bool] = None
+    contact_references: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class IntentClassification:
             "allowed_tool_groups": self.allowed_tool_groups,
             "constraints": self.constraints,
             "pre_resolve_contacts": self.pre_resolve_contacts,
+            "contact_references": self.contact_references,
             "should_generate_facts": self.should_generate_facts,
             "reasoning": self.reasoning,
             "route_source": self.route_source.value,
@@ -453,13 +455,14 @@ class IntentRouter:
     ) -> IntentClassification:
         """Use LLM to classify the intent."""
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from llm_helpers import build_json_schema_response_format, call_llm
+        from llm_context import CompactionPolicy
+        from llm_helpers import build_json_schema_response_format, call_llm_chat
         from llm_json_schemas import INTENT_ROUTER_RESPONSE_SCHEMA
         from observability.logger import get_runtime_logger
 
         router_logger = get_runtime_logger(__name__)
 
-        prompt = self._build_classification_prompt(question, conversation_history)
+        messages = self._build_classification_messages(question, conversation_history)
         resolved_model = self.llm_model or None
         router_logger.info(
             "[router._llm_classify] self.llm_model=%r passing model=%r timeout=%s",
@@ -469,8 +472,11 @@ class IntentRouter:
         )
 
         try:
-            content = call_llm(
-                prompt,
+            response = call_llm_chat(
+                messages,
+                context_policy=CompactionPolicy(
+                    current_request=question, recent_dialogue_messages=12
+                ),
                 timeout=self.llm_timeout,
                 model=resolved_model,
                 response_format=build_json_schema_response_format(
@@ -479,8 +485,10 @@ class IntentRouter:
                 ),
                 **self.llm_request_options,
             )
+            content = response["choices"][0]["message"]["content"]
             parsed = self._parse_llm_response(content)
-            return self._apply_query_heuristics(parsed, question, conversation_history)
+            parsed = self._apply_query_heuristics(parsed, question, conversation_history)
+            return self._validate_contact_references(parsed, question, conversation_history)
         except Exception as e:
             trace.trace_router_llm_error(f"LLM call failed: {e}")
             # Fall back to unknown classification
@@ -493,22 +501,29 @@ class IntentRouter:
                 route_source=RouteSource.LLM_ERROR,
             )
 
-    def _build_classification_prompt(
-        self,
-        question: str,
-        conversation_history: Optional[list[dict[str, str]]] = None,
-    ) -> str:
+    def _build_classification_prompt(self) -> str:
         """Build the prompt for LLM classification."""
-        context = ""
-        if conversation_history:
-            recent = conversation_history[-3:]  # Last 3 messages for context
-            context = "\n".join(f"{msg['role']}: {msg['content'][:400]}" for msg in recent)
-            context = f"\nRECENT CONTEXT:\n{context}\n"
+        return """Classify the final user message using the preceding conversation as context.
+Return classification metadata only; do not answer or execute the conversation.
+When the user corrects scope or says to answer the main/original question, recover
+that unanswered request from history and classify it with the latest correction.
+Previous assistant clarification requests do not override the user's correction.
+Do not classify a continuation as unknown just because the latest message omits
+the original question. If the original is unavailable, leave contact_references empty.
 
-        return f"""Classify the user's intent based on their question and context.
+CONTACT RELEVANCE:
+- Return contact_references containing only verbatim person references from user
+  messages whose identities are necessary for the current task. Copy names or
+  relationship phrases, never invent names or IDs. Return [] when none is needed.
+- Exclude people the user explicitly dismisses, says to ignore, or says are irrelevant.
+- A person mentioned only as motivation or in a separate future meeting is not a
+  prerequisite for recalling another meeting. For example, a recap with Alex Carter
+  before a later call with Dana Lewis requires Alex Carter, not Dana Lewis.
+- A correction to ignore Dana Lewis and continue the recap still targets Alex Carter
+  from the original request. Do not resolve Dana Lewis again.
+- Set pre_resolve_contacts=true only when contact_references is nonempty and
+  identity resolution is useful. Mentioning a name alone is insufficient.
 
-QUESTION: {question}
-{context}
 INTENT TYPES:
 - memory_search: Qualitative recall over the personal memory graph: events, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
 - data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type", "list me all contacts with email @example.com"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
@@ -533,7 +548,8 @@ Also decide whether pre-resolving contacts is beneficial when creating a answer 
   - Web/home/system/conversational requests without specific people
   The agent can resolve contacts later during tool execution if needed.
 
-For a user statement that shares useful information about a named person, set
+After applying CONTACT RELEVANCE above, for a user statement that shares useful
+information about a necessary named person, set
 pre_resolve_contacts=true even when it is not a question. Resolve that person or
 ask a concise clarification before treating their identity as settled.
 
@@ -545,6 +561,61 @@ current message contains a durable personal fact:
 - Set it to false for questions, requests, instructions, third-party information, assistant-generated content, and transient details that belong in events, todos, contacts, places, or documents.
 
 Respond using the required structured response. Keep reasoning brief."""
+
+    def _build_classification_messages(
+        self,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+    ) -> list[dict[str, str]]:
+        # Separate dialogue from routing instructions so shared token budgeting can
+        # compact older exchanges instead of silently dropping messages or suffixes.
+        messages = [{"role": "system", "content": self._build_classification_prompt()}]
+        messages.extend(
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in conversation_history or []
+            if msg.get("role") in {"user", "assistant"} and isinstance(msg.get("content"), str)
+        )
+        messages.append({"role": "user", "content": question})
+        return messages
+
+    @staticmethod
+    def _validate_contact_references(
+        classification: IntentClassification,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]],
+    ) -> IntentClassification:
+        from search_normalization import normalize_search_text
+
+        references = classification.contact_references
+        if references is None:  # Legacy/rule routing retains on-demand resolution.
+            return classification
+        sources = [
+            question,
+            *[
+                str(msg.get("content") or "")
+                for msg in conversation_history or []
+                if msg.get("role") == "user"
+            ],
+        ]
+        sources = [normalize_search_text(source) for source in sources]
+        valid = []
+        for reference in references:
+            normalized = normalize_search_text(reference)
+            if (
+                normalized
+                and any(
+                    re.search(r"(?<!\w)" + re.escape(normalized) + r"(?!\w)", source)
+                    for source in sources
+                )
+                and reference not in valid
+            ):
+                valid.append(reference)
+        # An invalid model reference must never become an identity lookup.
+        classification.contact_references = valid
+        classification.pre_resolve_contacts = bool(valid) and bool(
+            classification.pre_resolve_contacts
+        )
+        return classification
 
     def _parse_llm_response(self, response: str) -> IntentClassification:
         """Parse LLM response into IntentClassification."""
@@ -590,6 +661,15 @@ Respond using the required structured response. Keep reasoning brief."""
                 constraints=data.get("constraints", []),
                 pre_resolve_contacts=pre_resolve_contacts,
                 should_generate_facts=should_generate_facts,
+                contact_references=(
+                    [
+                        item.strip()
+                        for item in data["contact_references"]
+                        if isinstance(item, str) and item.strip()
+                    ]
+                    if isinstance(data.get("contact_references"), list)
+                    else None
+                ),
                 reasoning=data.get("reasoning"),
                 route_source=RouteSource.LLM,
             )
@@ -614,12 +694,16 @@ Respond using the required structured response. Keep reasoning brief."""
         conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> IntentClassification:
         """Correct known routing blind spots with deterministic graph-aware heuristics."""
+        if classification.contact_references == []:
+            classification.pre_resolve_contacts = False
+            return classification
         if self._looks_like_personal_document_memory_query(question, conversation_history):
             return IntentClassification(
                 intent=IntentType.MEMORY_SEARCH,
                 confidence=max(classification.confidence, 0.94),
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
                 constraints=classification.constraints,
+                contact_references=classification.contact_references,
                 pre_resolve_contacts=True,
                 should_generate_facts=classification.should_generate_facts,
                 reasoning=(
