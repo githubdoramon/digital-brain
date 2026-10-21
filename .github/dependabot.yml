@@ -1,0 +1,70 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend/web
+    schedule:
+      interval: weekly
+    groups:
+      frontend-non-security:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+    groups:
+      mobile-non-security:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: pip
+    directory: /backend/orchestrator
+    schedule:
+      interval: weekly
+    groups:
+      orchestrator-non-security:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: pip
+    directory: /backend/robot-gateway
+    schedule:
+      interval: weekly
+    groups:
+      robot-gateway-non-security:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /frontend/web
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /backend/orchestrator
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /backend/robot-gateway
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
