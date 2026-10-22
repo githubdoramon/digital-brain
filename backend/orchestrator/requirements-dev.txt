@@ -1,9 +1,9 @@
 # Testing
 pytest>=8.0.0
-pytest-asyncio>=0.23.0
+pytest-asyncio>=1.4.0
 
 # Linting & Formatting
-ruff==0.15.15
+ruff==0.17.1
 
 # Type checking (optional)
 # mypy>=1.10.0

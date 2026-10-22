@@ -1,5 +1,5 @@
 # Build the small pinned Tryx binding patch inside the image build, not at runtime.
-FROM rust:1.96-slim AS tryx-rust
+FROM rust:1.98-slim AS tryx-rust
 FROM python:3.11-slim AS tryx-builder
 COPY --from=tryx-rust /usr/local/cargo /usr/local/cargo
 COPY --from=tryx-rust /usr/local/rustup /usr/local/rustup
