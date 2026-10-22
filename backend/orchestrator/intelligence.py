@@ -88,7 +88,9 @@ def initialize(owner: str):
     return state
 
 
-def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=False):
+def next_batch(
+    owner: str, cutoff: datetime, *, knowledge_only=False, review=False, retry_only=False
+):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -101,8 +103,12 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
               AND s.observed_at <= %s
               AND (%s = (s.historical OR s.observed_at < st.started_at
                    OR COALESCE((s.payload->>'sent_at')::timestamptz < st.started_at, FALSE)))
-              AND (%s = FALSE OR (s.observed_at >= %s::timestamptz - INTERVAL '2 days'
-                  AND NOT s.historical AND p.part = 0))
+              AND (%s = FALSE OR (%s OR (s.observed_at >= %s::timestamptz - INTERVAL '2 days'
+                  AND NOT s.historical AND p.part = 0)))
+              AND (NOT %s OR EXISTS (SELECT 1 FROM intelligence_failures retry
+                  WHERE retry.user_email=st.user_email AND retry.source_id=s.source_id
+                  AND retry.part=p.part AND retry.review=%s AND retry.knowledge_only=%s
+                  AND retry.next_attempt_at<=NOW()))
               AND (%s OR NOT EXISTS (SELECT 1 FROM intelligence_processed done
                   WHERE done.user_email = %s AND done.source_id = s.source_id AND done.part = p.part))
               AND NOT EXISTS (SELECT 1 FROM intelligence_failures failed
@@ -120,7 +126,11 @@ def next_batch(owner: str, cutoff: datetime, *, knowledge_only=False, review=Fal
                 cutoff,
                 knowledge_only,
                 review,
+                retry_only,
                 cutoff,
+                retry_only,
+                review,
+                knowledge_only,
                 review,
                 owner,
                 review,
@@ -689,7 +699,7 @@ def retry_failures(owner):
         )
         count = cur.rowcount
         cur.execute(
-            """UPDATE intelligence_runs r SET status='pending',next_attempt_at=NOW(),reviewed=FALSE
+            """UPDATE intelligence_runs r SET status='pending',next_attempt_at=NOW()
             WHERE r.user_email=%s AND r.status IN ('failed','succeeded') AND EXISTS (
                 SELECT 1 FROM intelligence_failures f JOIN intelligence_sources s USING(source_id)
                 WHERE f.user_email=r.user_email AND f.knowledge_only=r.knowledge_only AND s.observed_at<=r.cutoff)""",

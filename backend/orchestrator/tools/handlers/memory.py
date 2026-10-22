@@ -22,6 +22,12 @@ if TYPE_CHECKING:
     from agent.state import AgentState
 
 
+def _queue_retrieved_knowledge(owner, results):
+    from knowledge_demand import queue_retrieved
+
+    queue_retrieved(owner, results)
+
+
 def handle_search_memories(
     args: dict[str, Any],
     state: Optional["AgentState"] = None,
@@ -128,6 +134,7 @@ def handle_search_memories(
         )
 
     results = results if limit is None else results[:limit]
+    _queue_retrieved_knowledge(kwargs.get("user_email"), results)
     # Update state if provided
     if state is not None and results:
         state.add_fact(f"Found {len(results)} memories matching '{query}'")
@@ -159,6 +166,7 @@ def handle_get_message(args: dict[str, Any], state=None, **kwargs) -> dict[str, 
                 "snippet": " ".join(m["body"] for m in result["messages"] if m["message_id"] == args["message_id"])[:1200],
             },
         )
+    _queue_retrieved_knowledge(owner, [{"kind": "message", "id": args["message_id"]}])
     return {"conversation": result}
 
 
@@ -213,6 +221,8 @@ def handle_get_conversation(args: dict[str, Any], state=None, **kwargs) -> dict[
             },
             role_hints=["evidence_anchor"],
         )
+    if conversation:
+        _queue_retrieved_knowledge(user_email, [{"kind": "conversation", "id": args["message_id"]}])
     return {"conversation": conversation}
 
 
@@ -374,6 +384,10 @@ def handle_get_events(
     if state is not None and events:
         state.add_fact(f"Retrieved {len(events)} event details")
 
+    _queue_retrieved_knowledge(
+        kwargs.get("user_email"),
+        [{"kind": "event", "id": e.get("id") or e.get("event_id")} for e in events],
+    )
     return {"events": events, "count": len(events)}
 
 
@@ -398,6 +412,7 @@ def handle_get_document(
     document = documents_service.get_document(document_id)
 
     if document:
+        _queue_retrieved_knowledge(kwargs.get("user_email"), [{"kind": "document", "id": document_id}])
         # Update state if provided
         if state is not None:
             state.add_fact(f"Retrieved document: {document.get('title', document_id)}")

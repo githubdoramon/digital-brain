@@ -78,7 +78,7 @@ def claim_run(owners):
         cur.execute(
             """SELECT * FROM intelligence_runs WHERE user_email = %s AND NOT knowledge_only AND status <> 'succeeded'
             AND next_attempt_at <= NOW() AND (lease_until IS NULL OR lease_until <= NOW())
-            ORDER BY (knowledge_only=%s) DESC,cutoff,run_id FOR UPDATE LIMIT 1""",
+            ORDER BY (knowledge_only=%s) DESC,started_at NULLS FIRST,cutoff,run_id FOR UPDATE LIMIT 1""",
             (owner["user_email"], learning_fairness.history_first(owner["current_streak"])),
         )
         run = dict(cur.fetchone())
@@ -103,13 +103,18 @@ def claim_run(owners):
 
 def requeue_deferred(owner):
     with get_conn() as conn, conn.cursor() as cur:
+        # A pending covering run already owns retry work. Wake at most the latest
+        # completed covering run; never reset a successful normal review.
         cur.execute(
-            """UPDATE intelligence_runs r SET status='pending', next_attempt_at=NOW(), reviewed=FALSE
-            WHERE r.user_email=%s AND r.status='succeeded'
-            AND EXISTS (SELECT 1 FROM intelligence_failures f
-                JOIN intelligence_sources s USING(source_id)
-                WHERE f.user_email=r.user_email AND f.knowledge_only=r.knowledge_only
-                AND s.observed_at <= r.cutoff AND f.next_attempt_at <= NOW())""",
+            """UPDATE intelligence_runs SET status='pending',next_attempt_at=NOW()
+            WHERE run_id=(SELECT r.run_id FROM intelligence_runs r
+                WHERE r.user_email=%s AND NOT r.knowledge_only AND r.status='succeeded'
+                AND NOT EXISTS(SELECT 1 FROM intelligence_runs active WHERE active.user_email=r.user_email
+                    AND NOT active.knowledge_only AND active.status<>'succeeded')
+                AND EXISTS(SELECT 1 FROM intelligence_failures f JOIN intelligence_sources s USING(source_id)
+                    WHERE f.user_email=r.user_email AND f.knowledge_only=r.knowledge_only
+                    AND s.observed_at<=r.cutoff AND f.next_attempt_at<=NOW())
+                ORDER BY r.cutoff DESC,r.run_id LIMIT 1)""",
             (owner,),
         )
         conn.commit()
@@ -212,10 +217,18 @@ def _process_run(run):
             run["user_email"], run["cutoff"], knowledge_only=run["knowledge_only"]
         )
         if not batch:
-            if not run["knowledge_only"] and not run["reviewed"]:
+            review_batch = []
+            review_retry = False
+            if not run["knowledge_only"]:
                 review_batch = intelligence.next_batch(
-                    run["user_email"], run["cutoff"], review=True
+                    run["user_email"], run["cutoff"], review=True, retry_only=True
                 )
+                review_retry = bool(review_batch)
+                if not review_batch and not run["reviewed"]:
+                    review_batch = intelligence.next_batch(
+                        run["user_email"], run["cutoff"], review=True
+                    )
+            if review_batch or (not run["knowledge_only"] and not run["reviewed"]):
                 try:
                     context, findings = (
                         intelligence_model.analyze(run["user_email"], review_batch)
@@ -235,7 +248,7 @@ def _process_run(run):
                 intelligence.apply_batch(
                     run["user_email"], run, review_batch, context, findings, review=True
                 )
-            finish_run(run)
+            finish_run(run, more=review_retry)
             return True
         try:
             context, findings = intelligence_model.analyze(

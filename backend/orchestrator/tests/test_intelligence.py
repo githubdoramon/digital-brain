@@ -80,12 +80,17 @@ def database(monkeypatch, request):
                 "0086_learning_efficiency.sql",
                 "0087_background_learning_recovery.sql",
                 "0088_command_learning_ownership.sql",
+                "0089_learning_scope.sql",
             ):
-                if name == "0088_command_learning_ownership.sql" and getattr(request, "param", None) == "pre_command_ownership":
+                if (
+                    name == "0088_command_learning_ownership.sql"
+                    and getattr(request, "param", None) == "pre_command_ownership"
+                ):
                     continue
                 if name in {
                     "0086_learning_efficiency.sql",
                     "0087_background_learning_recovery.sql",
+                    "0089_learning_scope.sql",
                 } and getattr(request, "param", None) in {
                     "pre_efficiency",
                     "pre_fairness",

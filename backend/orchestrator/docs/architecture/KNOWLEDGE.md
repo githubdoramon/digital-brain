@@ -486,3 +486,44 @@ acknowledgements into speculative facts. They do not lower reasoning effort or
 weaken grounded inference. Instructions alone do not establish why a provider emits
 whitespace loops, nor prove live extraction quality; deterministic tests establish
 controller protections, stream cancellation and durable recovery, not model accuracy.
+
+### Recent-first automatic scope and older evidence on demand (0089)
+
+Automatic learning now covers the last six calendar months, configurable through
+`KNOWLEDGE_HISTORY_MONTHS` (default 6). The source's `sent_at`—message date, event
+start, document date, or chat timestamp—determines age; an import timestamp does not
+make known old evidence recent. Unknown dates fall back to observation time.
+Manual/contact-note sources remain eligible. All original sources, learned facts,
+receipts, revisions and paused/deferred states are retained.
+
+Older unprocessed evidence is reported separately as `available_on_demand`, outside
+the automatic remaining count. `history_policy` explains the current window; the
+`history_caught_up` flag now describes eligible automatic/requested learning, not
+complete extraction of the entire archive. The app distinguishes recent coverage
+from older searchable material. Active leases can finish normally across a policy
+change, and completed old knowledge remains counted and searchable.
+
+Authenticated memory search and explicit event/document/message/chat retrieval queue
+original selected older evidence for knowledge-only background learning. This is not
+learning from the assistant's answer or search snippet. Requests are bounded to five
+selected entities and twenty pending parts, resolve the latest owner-accessible source
+revision, and skip command-owned, deleted, completed, ambiguous/deferred or exhausted
+parts. Repeated retrievals deduplicate against existing demand flags and receipts.
+On-demand claims take precedence within their scheduling lane; the existing current/
+history fairness and admission limits still apply. Retrieval remains available when
+background queueing is unavailable. No new historical task/project actions are enabled.
+
+Sparse conversation batches can now contain up to 48 source parts, configurable with
+`KNOWLEDGE_MAX_BATCH_PARTS` (1–48, default 48), while retaining the 16,000-character,
+24-hour and full token limits. Existing reduced batch limits below 12 survive migration;
+previous full-size defaults rise to 48. Extraction that fills all twenty finding slots
+from multiple primary sources is split before reconciliation/commit so a saturated
+response cannot silently receipt the rest of that group. Single-source extraction still
+has the existing bounded twenty-finding contract. The response permits up to 64
+clarification references so a larger ambiguous batch cannot lose its deferred markers.
+
+WhatsApp imports already cover roughly six months, so the horizon alone may remove
+little messaging work. Review-loop recovery removes repeated calls; larger bounded
+episodes amortize prompt overhead. Completion time and live extraction accuracy still
+require measurement against the real archive/provider, rather than extrapolating from
+synthetic fixtures.

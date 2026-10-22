@@ -102,7 +102,7 @@ class Finding(StrictResponse):
 
 class Analysis(StrictResponse):
     findings: list[Finding] = Field(max_length=20)
-    deferred_refs: list[str] = Field(default_factory=list, max_length=12)
+    deferred_refs: list[str] = Field(default_factory=list, max_length=64)
 
 
 class CompletionReview(StrictResponse):
@@ -521,7 +521,12 @@ def _analyze_batch(owner, batch, *, knowledge_only=False, durable_splits=False):
     try:
         return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
     except (LLMRequestRejected, LLMOutputExhaustedError) as exc:
-        if exc.code not in {"context_length_exceeded", "output_exhausted", "output_degenerate"}:
+        if exc.code not in {
+            "context_length_exceeded",
+            "output_exhausted",
+            "output_degenerate",
+            "finding_capacity",
+        }:
             raise
         # Exhausted reconciliation has already retried/split its candidates.
         # Never start extraction again when a single candidate still cannot finish.
@@ -843,6 +848,13 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         payload,
         phase="Extract supported candidates from primary_refs. Every finding must cite a primary source; other sources only clarify it. Existing facts and work will be retrieved in reconciliation. Empty findings is valid.",
     )
+    if (
+        len(candidates["findings"]) >= intelligence.MAX_FINDINGS
+        and len(payload["primary_refs"]) > 1
+    ):
+        # A full response may have omitted further supported facts. Split the
+        # evidence before receipts advance, rather than accepting a saturated batch.
+        raise LLMRequestRejected("finding_capacity")
     candidates["findings"] = [
         normalize_finding(finding, context) for finding in candidates["findings"]
     ]

@@ -1,13 +1,24 @@
 """Bounded, conversation-scoped historical learning batches with per-part receipts."""
 
+import os
 from datetime import datetime
 
 import intelligence
+import learning_ownership
 
-MAX_PARTS = 12
+MAX_PARTS = 48
+
+
+def max_parts():
+    return max(1, min(MAX_PARTS, int(os.getenv("KNOWLEDGE_MAX_BATCH_PARTS", "48"))))
+
+
 MAX_TEXT_CHARS = 16000
 MAX_GAP_SECONDS = 24 * 60 * 60
-ELIGIBLE_SQL = """knowledge_source_learnable(s.payload) AND ((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
+
+
+def eligible_sql():
+    return f"""knowledge_source_learnable(s.payload) AND (j.on_demand OR {learning_ownership.automatic_source_sql()}) AND ((j.status IN ('pending','failed') AND j.attempts<3 AND j.next_attempt_at<=NOW())
     OR (j.status='running' AND (j.lease_until IS NULL OR j.lease_until<NOW())))"""
 
 
@@ -35,7 +46,7 @@ def select(cur, anchor):
         WHERE j.user_email=%s AND j.historical AND s.kind=%s AND s.owner_email=%s
         AND s.payload->>%s=%s AND s.duplicate_of_source_id IS NULL
         AND (j.source_id,j.part)>=(%s,%s)
-        AND {ELIGIBLE_SQL}
+        AND {eligible_sql()}
         ORDER BY j.source_id,j.part FOR UPDATE OF j SKIP LOCKED LIMIT %s""",
         (
             anchor["user_email"],
@@ -45,11 +56,11 @@ def select(cur, anchor):
             conversation,
             anchor["source_id"],
             anchor["part"],
-            MAX_PARTS,
+            max_parts(),
         ),
     )
     selected, size = [], 0
-    batch_limit = min(MAX_PARTS, anchor.get("batch_limit", MAX_PARTS))
+    batch_limit = min(max_parts(), anchor.get("batch_limit", MAX_PARTS))
     anchor_date = _date(source["payload"])
     for row in cur.fetchall():
         batch_limit = min(batch_limit, row.get("batch_limit", MAX_PARTS))

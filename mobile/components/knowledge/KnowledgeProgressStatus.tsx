@@ -4,6 +4,7 @@ import { theme } from '@/theme';
 
 type Lane = {
   retired?: boolean;
+  available_on_demand?: number;
   total: number;
   processed: number;
   remaining: number;
@@ -26,6 +27,7 @@ export type LearningProgressDetails = {
   as_of: string;
   initialized: boolean;
   history_caught_up: boolean;
+  history_policy?: { automatic_months: number; older_on_demand: boolean };
   learning: { ongoing: Lane; history: Lane };
   intelligence: { history: Lane; scheduled: Lane };
   summaries: Lane;
@@ -96,10 +98,26 @@ export function KnowledgeProgressStatus({ details }: { details: LearningProgress
     <View style={{ gap: 14 }}>
       <Text style={{ color: theme.colors.ink, fontWeight: '600' }}>
         {details.history_caught_up
-          ? 'Your saved history is up to date.'
-          : 'Learning from your saved history'}
+          ? details.history_policy
+            ? 'Your recent history is up to date.'
+            : 'Your saved history is up to date.'
+          : details.history_policy
+            ? 'Learning from recent history'
+            : 'Learning from your saved history'}
       </Text>
+      {details.history_policy ? (
+        <Text style={{ color: theme.colors.mutedInk }}>
+          Learning from the last {details.history_policy.automatic_months} months. Older history
+          stays searchable and is learned when it comes up in a chat.
+        </Text>
+      ) : null}
       <ProgressLane title="History learning" lane={details.learning.history} />
+      {details.learning.history.available_on_demand ? (
+        <Text style={{ color: theme.colors.mutedInk }}>
+          {details.learning.history.available_on_demand.toLocaleString()} older passages available
+          when needed.
+        </Text>
+      ) : null}
       {!details.intelligence.history.retired ? (
         <ProgressLane title="Older messages and files" lane={details.intelligence.history} />
       ) : null}

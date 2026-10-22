@@ -71,6 +71,11 @@ def test_migration_reuses_receipts_preserves_waits_and_recovers_provider_failure
         )
     with pytest.raises(ValueError, match="lease_expired"):
         intelligence.apply_batch(OWNER, {"run_id": "legacy", "lease_token": "old"}, [], {}, [])
+    # The preservation assertions above use 0086; runtime checks need the latest schema.
+    with database() as conn:
+        root = Path(__file__).resolve().parents[1] / "db_migrations"
+        conn.execute((root / "0087_background_learning_recovery.sql").read_text())
+        conn.execute((root / "0089_learning_scope.sql").read_text())
     calls = []
 
     def analyze(owner, batch, **kwargs):

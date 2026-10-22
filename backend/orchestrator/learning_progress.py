@@ -22,6 +22,7 @@ _PHASES = (
     "deferred",
     "not_enqueued",
     "delayed",
+    "available_on_demand",
 )
 # Reporting also recognizes old-dated sources in the prioritized queue. This does
 # not change worker ordering or historical action permissions.
@@ -48,7 +49,8 @@ def _empty(unit="source_parts"):
 def _merge(rows, *, unit="source_parts"):
     result = _empty(unit)
     for row in rows:
-        result["total"] += row["count"]
+        if row["phase"] != "available_on_demand":
+            result["total"] += row["count"]
         result[row["phase"]] += row["count"]
         if row["phase"] != "processed":
             for field in (
@@ -64,7 +66,7 @@ def _merge(rows, *, unit="source_parts"):
             result["last_success_at"] is None or success > result["last_success_at"]
         ):
             result["last_success_at"] = success
-        if row.get("error_code") and row["phase"] != "processed":
+        if row.get("error_code") and row["phase"] not in {"processed", "available_on_demand"}:
             code = row["error_code"]
             result["errors"][code] = result["errors"].get(code, 0) + row["count"]
     result["remaining"] = result["total"] - result["processed"]
@@ -91,8 +93,10 @@ def _learning(cur, owner):
             SELECT {_HISTORY_SQL} AS historical,
                 j.status,j.error_code,j.last_success_at,s.observed_at,
                 (s.payload->>'sent_at')::timestamptz AS source_at,
-                CASE WHEN j.source_id IS NULL THEN 'not_enqueued'
-                    WHEN j.status='done' THEN 'processed'
+                CASE WHEN j.status='done' THEN 'processed'
+                    WHEN NOT (COALESCE(j.on_demand,FALSE) OR {learning_ownership.automatic_source_sql()})
+                        AND NOT COALESCE(j.status='running' AND j.lease_until>NOW(),FALSE) THEN 'available_on_demand'
+                    WHEN j.source_id IS NULL THEN 'not_enqueued'
                     WHEN j.status='deferred' THEN 'deferred'
                     WHEN j.status='running' AND j.lease_until>NOW() THEN 'running'
                     WHEN j.status='running' THEN 'ready'
@@ -259,6 +263,10 @@ def snapshot(owner):
             lane["state"] == "caught_up" for lane in (learning["history"], analysis["history"])
         ),
         "learning_cutoff": state["seeded_at"],
+        "history_policy": {
+            "automatic_months": learning_ownership.history_months(),
+            "older_on_demand": True,
+        },
         "activation_at": state["started_at"],
         "workers": {
             "learning": knowledge_workers["worker_alive"],
@@ -291,6 +299,7 @@ def log_snapshot(owner):
             "history_caught_up",
             "workers",
             "learning_cutoff",
+            "history_policy",
             "activation_at",
             "schedule",
             "fairness",

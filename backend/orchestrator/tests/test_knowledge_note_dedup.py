@@ -156,6 +156,8 @@ def test_migration_excludes_only_consecutive_noops_and_preserves_receipts_and_ev
     # deliberately ran against that migration's original boundary.
     with database() as conn:
         conn.execute((MIGRATION.parent / "0086_learning_efficiency.sql").read_text())
+        conn.execute((MIGRATION.parent / "0087_background_learning_recovery.sql").read_text())
+        conn.execute((MIGRATION.parent / "0089_learning_scope.sql").read_text())
     knowledge_jobs.initialize_owner(OWNER)
     report = learning_progress.snapshot(OWNER)
     assert report["deduplication"]["ignored_note_versions"] == 3

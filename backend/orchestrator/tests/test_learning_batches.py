@@ -111,8 +111,8 @@ def test_batch_isolates_owner_conversation_kind_and_current_lane(database):
 
 def test_batches_bound_count_text_and_known_time_span(database):
     ids = queue(database, 30)
-    assert len(jobs.claim([OWNER], batched=True)) == knowledge_batching.MAX_PARTS
-    assert len(jobs.claim([OWNER], batched=True)) == knowledge_batching.MAX_PARTS
+    assert len(jobs.claim([OWNER], batched=True)) == knowledge_batching.max_parts()
+    assert len(jobs.claim([OWNER], batched=True)) == knowledge_batching.max_parts()
     assert [row["source_id"] for row in jobs.claim([OWNER], batched=True)] == ids[24:]
     large = queue(database, 5, thread="long", text="x" * 4900)
     batch = jobs.claim([OWNER], batched=True)

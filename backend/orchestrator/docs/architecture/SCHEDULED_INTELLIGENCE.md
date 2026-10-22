@@ -206,3 +206,16 @@ Historical learning, scheduled intelligence and summaries share the process-loca
 transport attempt, without pausing evidence as invalid. Interactive chat and briefing
 retain normal retries and priority. Historical summary refreshes coalesce for 15
 minutes; current changes retain their normal short debounce.
+
+### Targeted review recovery
+
+Due review failures are selected by their exact owner/source/part/mode key before
+normal lookback review. The retry selector includes retained failures outside the
+ordinary two-day lookback; paused and not-yet-due parts remain excluded. Successful
+retry commits remove only those failure receipts. Reopening a completed run preserves
+its successful normal-review flag, so it cannot repeatedly review unrelated first-page
+sources. Automatic recovery wakes at most one latest covering completed run, and
+only when there is no existing unfinished run for that owner. Pending runs rotate
+by their last claim (`started_at`), with never-started new runs first, rather than
+letting the oldest cutoff monopolize every turn. Historical action restrictions,
+leases, source freshness and manual-override checks are unchanged.

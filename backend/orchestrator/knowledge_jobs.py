@@ -71,6 +71,7 @@ def initialize_owner(owner):
             WHERE (s.owner_email IS NULL OR s.owner_email=%s)
                 AND s.duplicate_of_source_id IS NULL
                 AND {learning_ownership.ELIGIBLE_SOURCE_SQL}
+                AND {learning_ownership.automatic_source_sql()}
                 AND NOT EXISTS(SELECT 1 FROM knowledge_learning j WHERE j.user_email=%s AND j.source_id=s.source_id AND j.part=p.part)
             ORDER BY s.source_id,p.part LIMIT 500
             ON CONFLICT DO NOTHING""",
@@ -108,7 +109,7 @@ def claim(owners, *, batched=False):
             f"""SELECT b.* FROM knowledge_backfills b WHERE b.user_email=ANY(%s)
             AND EXISTS(SELECT 1 FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
                 WHERE j.user_email=b.user_email AND s.duplicate_of_source_id IS NULL
-                AND {knowledge_batching.ELIGIBLE_SQL})
+                AND {knowledge_batching.eligible_sql()})
             ORDER BY b.last_claimed_at NULLS FIRST,b.user_email FOR UPDATE OF b SKIP LOCKED LIMIT 1""",
             (list(owners),),
         )
@@ -118,8 +119,8 @@ def claim(owners, *, batched=False):
         cur.execute(
             f"""SELECT j.* FROM knowledge_learning j JOIN intelligence_sources s USING(source_id)
             WHERE j.user_email=%s AND s.duplicate_of_source_id IS NULL
-            AND {knowledge_batching.ELIGIBLE_SQL}
-            ORDER BY (j.historical=%s) DESC,j.source_id,j.part FOR UPDATE OF j SKIP LOCKED LIMIT 1""",
+            AND {knowledge_batching.eligible_sql()}
+            ORDER BY (j.historical=%s) DESC,j.on_demand DESC,j.source_id,j.part FOR UPDATE OF j SKIP LOCKED LIMIT 1""",
             (schedule["user_email"], learning_fairness.history_first(schedule["current_streak"])),
         )
         row = cur.fetchone()

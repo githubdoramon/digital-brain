@@ -12,6 +12,10 @@ import pytest
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Existing fixtures span many years and use twelve-part batches. New policy
+# regressions explicitly exercise the production six-month/48-part defaults.
+os.environ.setdefault("KNOWLEDGE_HISTORY_MONTHS", "1200")
+os.environ.setdefault("KNOWLEDGE_MAX_BATCH_PARTS", "12")
 os.environ.setdefault("GOOGLE_CLIENT_IDS", "test-client-id")
 os.environ.setdefault("ALLOWED_USERS", "user@example.com")
 
