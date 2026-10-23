@@ -82,11 +82,6 @@ updates:
           - patch
 
   - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: docker
     directory: /frontend/web
     schedule:
       interval: weekly
