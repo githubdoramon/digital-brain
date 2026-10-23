@@ -69,7 +69,17 @@ updates:
       - dependency-name: "@siteed/audio-studio"
         update-types:
           - version-update:semver-minor
+      # Defer native integration majors until a coordinated migration.
+      - dependency-name: react-native-webview
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@react-native-google-signin/google-signin"
+        update-types:
+          - version-update:semver-major
       # Defer major lint and TypeScript changes until a planned toolchain migration.
+      - dependency-name: eslint-config-prettier
+        update-types:
+          - version-update:semver-major
       - dependency-name: eslint
         update-types:
           - version-update:semver-major
