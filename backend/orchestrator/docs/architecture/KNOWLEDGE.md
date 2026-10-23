@@ -527,3 +527,17 @@ little messaging work. Review-loop recovery removes repeated calls; larger bound
 episodes amortize prompt overhead. Completion time and live extraction accuracy still
 require measurement against the real archive/provider, rather than extrapolating from
 synthetic fixtures.
+
+Summary generation disables reasoning. Empty, malformed or exhausted output gets
+one smaller retry using the first fact, then a deterministic excerpt preserving
+that fact's uncertainty/inferred labels. No partial JSON is accepted. Citations in
+extraction/reconciliation use supplied span indices with `quote=null`; the controller
+copies the exact selected source text. Spans shorter than eight characters cannot
+serve as standalone evidence.
+
+Multi-part evidence validation failures split into smaller durable claims before
+spending a part's retry budget. Only isolated single-part failures reach the usual
+three-attempt pause. Migration 0090 requeues previously paused `invalid_evidence`
+rows with multi-part batch limits at a maximum of twelve parts, preserving other
+failure classes, single-part pauses and active leases. This includes the 48-part
+batch affected before evidence isolation was implemented.

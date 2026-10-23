@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import llm_admission
 from db import get_conn
+from job_leases import LEASE_SECONDS
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -283,16 +284,16 @@ def mark_running(job_id: str) -> bool:
     return updated
 
 
-def claim_due_job(*, job_type: str) -> dict[str, Any] | None:
+def claim_due_job(*, job_type: str, newest_first: bool = False) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT job_id, job_type, user_email, dedupe_key, revision, attempts, payload
             FROM async_jobs
             WHERE job_type = %s
               AND status IN (%s, %s)
               AND next_run_at <= NOW()
-            ORDER BY next_run_at ASC, updated_at ASC
+            ORDER BY {"requested_at DESC," if newest_first else ""} next_run_at ASC, updated_at ASC
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             """,
@@ -340,13 +341,62 @@ def claim_due_job(*, job_type: str) -> dict[str, Any] | None:
         return row
 
 
+class JobSuperseded(RuntimeError):
+    pass
+
+
+def recover_stale_jobs(*, job_type, user_email=None, timeout_seconds=LEASE_SECONDS):
+    """Revisions fence interrupted claims; live workers renew updated_at."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE async_jobs SET status='pending',revision=revision+1,
+            attempts=GREATEST(0,attempts-1),status_message='Queued after interruption',
+            started_at=NULL,finished_at=NULL,error=NULL,next_run_at=NOW(),updated_at=NOW()
+            WHERE job_type=%s AND (%s::text IS NULL OR user_email=%s)
+                AND status='running' AND updated_at<NOW()-(%s*INTERVAL '1 second')""",
+            (job_type, user_email, user_email, timeout_seconds),
+        )
+        count = cur.rowcount
+        conn.commit()
+    if count:
+        logger.info("[async_jobs] stale_jobs_recovered job_type=%s count=%d", job_type, count)
+    return count
+
+
+def heartbeat_job(job_id, revision, *, timeout_seconds=LEASE_SECONDS):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE async_jobs SET updated_at=NOW() WHERE job_id=%s AND revision=%s
+            AND status='running' AND updated_at>=NOW()-(%s*INTERVAL '1 second')""",
+            (job_id, revision, timeout_seconds),
+        )
+        renewed = bool(cur.rowcount)
+        conn.commit()
+    return renewed
+
+
+def require_current_job(cur):
+    """Lock the active revision in the same transaction as result publication."""
+    if exc := llm_admission.current_deferral():
+        raise exc
+    tracker = _ACTIVE_WORKER.get()
+    if tracker and (job := tracker["job"]):
+        cur.execute(
+            """SELECT 1 FROM async_jobs WHERE job_id=%s AND revision=%s
+            AND status='running' AND updated_at>=NOW()-(%s*INTERVAL '1 second') FOR UPDATE""",
+            (job["job_id"], job["revision"], LEASE_SECONDS),
+        )
+        if not cur.fetchone():
+            raise JobSuperseded("Job claim is no longer current")
+
+
 def mark_succeeded(
     job_id: str,
     *,
     result: dict[str, Any] | None = None,
     status_message: str = "Completed",
     revision: int | None = None,
-) -> None:
+) -> bool:
     if exc := llm_admission.current_deferral():
         raise exc
     with get_conn() as conn, conn.cursor() as cur:
@@ -377,7 +427,9 @@ def mark_succeeded(
             query,
             params,
         )
+        changed = bool(cur.rowcount)
         conn.commit()
+    return changed
 
 
 def clear_succeeded_payload(job_id: str, *, revision: int | None = None) -> None:

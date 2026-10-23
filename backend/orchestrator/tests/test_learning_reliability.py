@@ -192,7 +192,7 @@ def test_request_budget_includes_schema_instructions_and_all_source_text():
 def test_context_rejection_splits_without_dropping_parts_or_downgrading_history(monkeypatch):
     seen = []
 
-    def analyze(owner, batch, *, knowledge_only):
+    def analyze(owner, batch, *, knowledge_only, split_evidence=False):
         assert owner == "reader@example.com" and knowledge_only
         if len(batch) > 1:
             raise policy.LLMRequestRejected("context_length_exceeded")

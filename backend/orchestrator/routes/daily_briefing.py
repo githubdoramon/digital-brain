@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 import daily_briefing_jobs
 import daily_briefings
@@ -11,14 +11,12 @@ from auth import get_current_user, require_service_api_key
 from schemas import DailyBriefingEventSummaryDebugIn, DailyBriefingIn, DailyBriefingOut
 
 
-def create_daily_briefing_router(
-) -> APIRouter:
+def create_daily_briefing_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/mobile/briefings/daily", response_model=DailyBriefingOut)
     def get_daily_briefing(
         response: Response,
-        background_tasks: BackgroundTasks,
         date_value: str = Query(..., alias="date"),
         timezone: str | None = Query(default=None),
         user: dict = Depends(get_current_user),
@@ -42,14 +40,28 @@ def create_daily_briefing_router(
             user_email=user_email,
             briefing_date=briefing_date,
             timezone=timezone_value,
-            background_tasks=background_tasks,
         )
+        if queued.get("status") == "succeeded":
+            # A completed job without its artifact must not stay pending forever.
+            briefing = daily_briefings.get_daily_briefing(
+                user_email=user_email,
+                briefing_date=briefing_date,
+                timezone=timezone_value,
+            )
+            if briefing:
+                return _format_briefing_response(briefing, status="ready")
+            queued = daily_briefing_jobs.enqueue_daily_briefing_job(
+                user_email=user_email,
+                briefing_date=briefing_date,
+                timezone_name=timezone_value,
+                replace_existing=True,
+            )
         response.status_code = 202
         return _pending_briefing_response(
             briefing_date=briefing_date,
             timezone=timezone_value,
             job_id=str(queued.get("job_id") or ""),
-            message="Briefing generation is in progress.",
+            message=_job_message(queued),
             status="pending",
         )
 
@@ -71,7 +83,6 @@ def create_daily_briefing_router(
     def run_daily_briefing_agent(
         payload: DailyBriefingIn,
         response: Response,
-        background_tasks: BackgroundTasks,
     ):
         briefing_date = _parse_iso_date(payload.date)
         timezone_value = (payload.timezone or "UTC").strip() or "UTC"
@@ -81,7 +92,6 @@ def create_daily_briefing_router(
             user_email=user_email,
             briefing_date=briefing_date,
             timezone=timezone_value,
-            background_tasks=background_tasks,
         )
         response.status_code = 202
         return _pending_briefing_response(
@@ -122,24 +132,21 @@ def _enqueue_daily_briefing_job(
     user_email: str,
     briefing_date: date,
     timezone: str,
-    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     queued = daily_briefing_jobs.enqueue_daily_briefing_job(
         user_email=user_email,
         briefing_date=briefing_date,
         timezone_name=timezone,
     )
-    job_id = str(queued.get("job_id") or "")
-    should_schedule = bool(queued.get("should_schedule"))
-    if should_schedule and job_id:
-        background_tasks.add_task(
-            daily_briefing_jobs.run_daily_briefing_job,
-            job_id=job_id,
-            date_value=briefing_date.isoformat(),
-            timezone_name=timezone,
-            user_email=user_email,
-        )
     return queued
+
+
+def _job_message(job):
+    if job.get("status") == "running":
+        return "Your daily briefing is being prepared."
+    if job.get("status") == "failed":
+        return "We couldn't prepare your briefing. We'll retry shortly."
+    return "Your daily briefing is queued."
 
 
 def _parse_iso_date(value: str | None) -> date:

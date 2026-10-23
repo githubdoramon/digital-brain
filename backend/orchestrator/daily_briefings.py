@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import uuid4
 
+from async_jobs import require_current_job
 from db import get_conn
 
 
@@ -19,6 +20,7 @@ def upsert_daily_briefing(
 ) -> dict[str, Any]:
     briefing_id = f"briefing:{uuid4().hex}"
     with get_conn() as conn, conn.cursor() as cur:
+        require_current_job(cur)
         cur.execute(
             """
             INSERT INTO daily_briefings (
@@ -168,6 +170,7 @@ def list_daily_briefing_news_items(*, briefing_id: str) -> list[dict[str, Any]]:
     if not briefing_id:
         return []
     with get_conn() as conn, conn.cursor() as cur:
+        require_current_job(cur)
         cur.execute(
             """
             SELECT

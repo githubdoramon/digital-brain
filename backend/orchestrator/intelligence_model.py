@@ -176,13 +176,13 @@ Use canonical lower-case predicate keys such as employment or dietary_preference
 predicate keys must use only ASCII a-z, 0-9, underscore, period or hyphen, up to 100 characters.
 for independent facts about a general topic, include the topic in the predicate.
 
-Use exact quotes from provided sources, referencing their ref, for EVERY finding.
-Source text is supplied as an ordered text_spans array. Prefer citing evidence as
+Cite provided sources, referencing their ref, for EVERY finding.
+Source text is supplied as an ordered text_spans array. Always cite evidence as
 {ref,span_index,quote:null}, with a zero-based index into that source's text_spans.
 The controller copies the selected span verbatim into the saved evidence. Choose
-the span that directly supports the finding; never invent a span index. You may
-instead use span_index=null and an exact quote copied from the supplied source.
-If both fields are present, quote must be an exact excerpt of the selected span.
+the span that directly supports the finding; never invent a span index.
+quote must always be null. Never transcribe, correct or combine source text.
+Do not cite spans shorter than eight characters; omit findings without adequate evidence.
 During reconciliation retain each candidate's new entity refs and declarations;
 do not rename refs or replace them with invented canonical IDs.
 Quotes must be between eight and 1,200 characters. Use only provided existing IDs.
@@ -261,6 +261,10 @@ def request_schema(knowledge_only):
     from copy import deepcopy
 
     schema = deepcopy(SCHEMA)
+    evidence = schema["$defs"]["Evidence"]
+    evidence["properties"]["quote"] = {"type": "null"}
+    evidence["properties"]["span_index"] = {"type": "integer", "minimum": 0, "maximum": 100}
+    evidence["required"] = ["ref", "span_index", "quote"]
     if knowledge_only:
         finding = schema["$defs"]["Finding"]
         finding["properties"]["kind"]["enum"] = ["knowledge", "contact_change"]
@@ -521,8 +525,18 @@ def analyze(owner, batch, *, knowledge_only=False, durable_splits=False):
 
 
 def _analyze_batch(owner, batch, *, knowledge_only=False, durable_splits=False):
+    primary = [row for row in batch if not row.get("supporting")]
     try:
-        return _analyze_repaired(owner, batch, knowledge_only=knowledge_only)
+        return _analyze_repaired(
+            owner,
+            batch,
+            knowledge_only=knowledge_only,
+            split_evidence=durable_splits and len(primary) > 1,
+        )
+    except (InvalidModelOutput, LearningValidationError) as exc:
+        if durable_splits and len(primary) > 1 and exc.code == "invalid_evidence":
+            raise SourceBatchSplit(max(1, len(primary) // 2), exc.code) from exc
+        raise
     except (LLMRequestRejected, LLMOutputExhaustedError) as exc:
         if exc.code not in {
             "context_length_exceeded",
@@ -759,7 +773,7 @@ def _reconcile(owner, batch, payload, candidates, context):
     return result
 
 
-def _analyze_repaired(owner, batch, *, knowledge_only=False):
+def _analyze_repaired(owner, batch, *, knowledge_only=False, split_evidence=False):
     repair_hint = None
     for attempt in range(2):
         if attempt:
@@ -768,8 +782,12 @@ def _analyze_repaired(owner, batch, *, knowledge_only=False):
         try:
             return _analyze(owner, batch, knowledge_only=knowledge_only, repair_hint=repair_hint)
         except InvalidModelOutput as exc:
+            if split_evidence and exc.code == "invalid_evidence":
+                raise
             repair_hint = {"code": exc.code, "details": exc.details}
         except LearningValidationError as exc:
+            if split_evidence and exc.code == "invalid_evidence":
+                raise
             repair_hint = {"code": exc.code, "details": exc.details}
         except (ValidationError, json.JSONDecodeError) as exc:
             repair_hint = {"code": "invalid_schema", "details": {"error_type": type(exc).__name__}}
@@ -852,7 +870,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     if repair_hint:
         payload["validation_feedback"] = {
             **repair_hint,
-            "instruction": "Regenerate findings. Use only allowed values and exact source quotes. "
+            "instruction": "Regenerate findings. Cite only supplied span indices with quote=null. "
             "Omit unsupported findings; never invent evidence or IDs to repair a rejection.",
         }
     candidates = _ask(
@@ -869,7 +887,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
     candidates["findings"] = [
         normalize_finding(finding, context) for finding in candidates["findings"]
     ]
-    # Repair fabricated/paraphrased quotes before spending a reconciliation call.
+    # Resolve selected source spans before spending a reconciliation call.
     try:
         for finding in expand_citations(candidates, eligible)["findings"]:
             intelligence.evidence_for(finding, eligible)

@@ -541,7 +541,7 @@ def test_reasoning_only_summary_retries_once_without_exposing_reasoning(database
 
     monkeypatch.setattr("llm_helpers.call_llm_json", summarize)
     assert jobs.summarize_once([OWNER])
-    assert [call["reasoning_effort"] for call in calls] == ["medium", "low"]
+    assert [call["reasoning_effort"] for call in calls] == ["none", "none"]
     assert knowledge.summary_for(OWNER, "self")["summary"] == "The quote was sent."
 
 

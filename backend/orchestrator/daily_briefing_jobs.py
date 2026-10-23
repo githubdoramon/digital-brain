@@ -6,7 +6,9 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 import async_jobs
+import llm_admission
 from db import get_conn
+from job_leases import lease_heartbeat
 from notifications import DAILY_BRIEFING_NOTIFICATION_TYPE, send_notification_to_user
 from observability.logger import get_runtime_logger
 from scheduled_jobs import DAILY_BRIEFING
@@ -31,6 +33,7 @@ def enqueue_daily_briefing_job(
     replace_existing: bool = False,
     log_existing: bool = True,
 ) -> dict[str, Any]:
+    async_jobs.recover_stale_jobs(job_type=JOB_TYPE, user_email=user_email)
     dedupe_key = build_daily_briefing_dedupe_key(
         briefing_date=briefing_date,
         timezone_name=timezone_name,
@@ -80,25 +83,6 @@ def enqueue_daily_briefing_job(
     return queued
 
 
-def run_daily_briefing_job(
-    *,
-    job_id: str,
-    date_value: str,
-    timezone_name: str,
-    user_email: str,
-) -> None:
-    if not async_jobs.mark_running(job_id):
-        logger.info("[briefing.job] Skipping run; job already active/completed: %s", job_id)
-        return
-    _execute_daily_briefing_job(
-        job_id=job_id,
-        date_value=date_value,
-        timezone_name=timezone_name,
-        user_email=user_email,
-        revision=None,
-    )
-
-
 def start_worker() -> None:
     global _WORKER_THREAD
     if _WORKER_THREAD and _WORKER_THREAD.is_alive():
@@ -122,17 +106,19 @@ def stop_worker(timeout: float = 5.0) -> None:
 
 @async_jobs.background_worker("daily_briefing_jobs")
 def process_due_once() -> bool:
-    job = async_jobs.claim_due_job(job_type=JOB_TYPE)
+    async_jobs.recover_stale_jobs(job_type=JOB_TYPE)
+    job = async_jobs.claim_due_job(job_type=JOB_TYPE, newest_first=True)
     if not job:
         return False
     payload = dict(job.get("payload") or {})
-    _execute_daily_briefing_job(
-        job_id=str(job["job_id"]),
-        date_value=str(payload.get("date") or ""),
-        timezone_name=str(payload.get("timezone") or "UTC"),
-        user_email=str(payload.get("user_email") or job["user_email"]),
-        revision=int(job["revision"]),
-    )
+    with lease_heartbeat(lambda: async_jobs.heartbeat_job(job["job_id"], job["revision"])):
+        _execute_daily_briefing_job(
+            job_id=str(job["job_id"]),
+            date_value=str(payload.get("date") or ""),
+            timezone_name=str(payload.get("timezone") or "UTC"),
+            user_email=str(payload.get("user_email") or job["user_email"]),
+            revision=int(job["revision"]),
+        )
     return True
 
 
@@ -220,9 +206,13 @@ def get_worker_status() -> dict[str, Any]:
 
 
 def _worker_loop() -> None:
+    last_health = 0
     while not _STOP_EVENT.is_set():
         try:
             enqueue_due_daily_briefings()
+            if time.monotonic() - last_health >= 60:
+                log_queue_health()
+                last_health = time.monotonic()
             processed = process_due_once()
         except Exception:
             logger.exception("[briefing.job] worker tick failed")
@@ -231,6 +221,19 @@ def _worker_loop() -> None:
             time.sleep(0)
         else:
             _STOP_EVENT.wait(POLL_SECONDS)
+
+
+def log_queue_health():
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT status,COUNT(*) AS count,
+            MAX(EXTRACT(EPOCH FROM NOW()-requested_at))::int AS oldest_age_s
+            FROM async_jobs WHERE job_type=%s AND status<>'succeeded'
+            GROUP BY status ORDER BY status""",
+            (JOB_TYPE,),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+    logger.info("[briefing.job] queue_health states=%s", rows)
 
 
 def _execute_daily_briefing_job(
@@ -301,18 +304,25 @@ def _execute_daily_briefing_job_impl(
                 news_items=len(result.get("news_items") or []),
             )
 
-        async_jobs.mark_succeeded(
+        published = async_jobs.mark_succeeded(
             job_id,
             result={"briefing_id": result.get("briefing_id")},
             status_message="Daily briefing ready",
             revision=revision,
         )
+        if not published:
+            logger.info("[briefing.job] Superseded completion ignored job=%s", job_id)
+            return
         _notify_daily_briefing_ready(user_email=user_email, result=result)
         logger.info(
             "[briefing.job] Job completed job=%s briefing_id=%s",
             job_id,
             result.get("briefing_id"),
         )
+    except async_jobs.JobSuperseded:
+        logger.info("[briefing.job] Superseded publication ignored job=%s", job_id)
+    except llm_admission.BackgroundDeferred:
+        raise
     except Exception as exc:
         if trace is not None:
             trace.set_outcome("error", error_type=type(exc).__name__)
