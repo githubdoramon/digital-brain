@@ -1,4 +1,4 @@
-fastapi==0.153.0
+fastapi==0.154.0
 uvicorn[standard]==0.54.0
 psycopg[binary]==3.3.6
 python-dateutil==2.9.0.post0
@@ -29,8 +29,11 @@ opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp-proto-http==1.45.1
 
 
+
 # CPU-only glasses replay experiments; loaded only in the isolated inference process.
 faster-whisper==1.2.1
+
+
 
 
 Telethon==1.45.0
