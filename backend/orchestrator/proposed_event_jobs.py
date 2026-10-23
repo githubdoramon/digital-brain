@@ -95,7 +95,7 @@ def stop_worker(timeout: float = 5.0) -> None:
         thread.join(timeout=timeout)
 
 
-@async_jobs.background_worker("proposed_event_jobs")
+@async_jobs.background_worker("proposed_event_jobs", poll_seconds=POLL_SECONDS)
 def process_due_once() -> bool:
     job = async_jobs.claim_due_job(job_type=JOB_TYPE)
     if not job:

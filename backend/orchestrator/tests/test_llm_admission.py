@@ -151,6 +151,24 @@ def test_stale_waiting_lane_cannot_block_live_workers(monkeypatch):
         assert gate.background_ready()
 
 
+def test_stopped_slow_worker_expires_without_losing_live_pollers(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    with gate.background_work("active"):
+        with gate.request_slot(ENDPOINT):
+            with gate.background_work("stopped-briefing", poll_seconds=60):
+                assert not gate.background_ready()
+            for offset in (30, 60.2, 90, 120.4, 150, 181):
+                clock[0] = 1000 + offset
+                with gate.background_work("knowledge", poll_seconds=2):
+                    assert not gate.background_ready()
+    # The stopped lane expires, but the regularly polled lane keeps its turn.
+    with gate.background_work("knowledge", poll_seconds=2):
+        assert gate.background_ready()
+        with gate.request_slot(ENDPOINT):
+            pass
+
+
 def test_simultaneous_threads_admit_exactly_one_background_workflow():
     start = threading.Barrier(9)
     admitted = threading.Event()

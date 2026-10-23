@@ -151,6 +151,7 @@ def jobs_db(database, monkeypatch):
     with database() as conn:
         conn.execute((root / "0005_async_jobs.sql").read_text())
         conn.execute((root / "0056_async_jobs_scheduling.sql").read_text())
+        conn.execute((root / "0091_cancelled_async_jobs.sql").read_text())
     monkeypatch.setattr(async_jobs, "get_conn", database)
     return database
 

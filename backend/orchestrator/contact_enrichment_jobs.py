@@ -86,7 +86,7 @@ def get_worker_status() -> dict[str, Any]:
     }
 
 
-@async_jobs.background_worker("contact_enrichment_jobs")
+@async_jobs.background_worker("contact_enrichment_jobs", poll_seconds=POLL_SECONDS)
 def process_due_once() -> bool:
     job = async_jobs.claim_due_job(job_type=JOB_TYPE)
     if not job:

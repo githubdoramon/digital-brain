@@ -158,7 +158,7 @@ def finish_run(run, *, more=False, failed=False):
             logger.warning("[intelligence] progress_snapshot_unavailable")
 
 
-@llm_admission.background_work("intelligence")
+@llm_admission.background_work("intelligence", poll_seconds=POLL_SECONDS)
 def process_once(owners):
     run = claim_run(owners)
     if not run:

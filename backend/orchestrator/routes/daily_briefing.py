@@ -62,7 +62,7 @@ def create_daily_briefing_router() -> APIRouter:
             timezone=timezone_value,
             job_id=str(queued.get("job_id") or ""),
             message=_job_message(queued),
-            status="pending",
+            status="failed" if queued.get("status") == "cancelled" else "pending",
         )
 
     @router.get("/mobile/briefings/latest", response_model=DailyBriefingOut)
@@ -98,8 +98,8 @@ def create_daily_briefing_router() -> APIRouter:
             briefing_date=briefing_date,
             timezone=timezone_value,
             job_id=str(queued.get("job_id") or ""),
-            message="Daily briefing generation queued.",
-            status="pending",
+            message=_job_message(queued),
+            status="failed" if queued.get("status") == "cancelled" else "pending",
         )
 
     @router.post("/debug/daily-briefing/event-summary")
@@ -142,6 +142,8 @@ def _enqueue_daily_briefing_job(
 
 
 def _job_message(job):
+    if job.get("status") == "cancelled":
+        return "This briefing was replaced by a newer day."
     if job.get("status") == "running":
         return "Your daily briefing is being prepared."
     if job.get("status") == "failed":

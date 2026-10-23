@@ -65,6 +65,12 @@ This document captures behavior and quality rules for the daily briefing profile
   Claims without a heartbeat for two minutes are requeued with a new revision;
   superseded workers cannot publish a briefing or announce completion. Queue
   health counts and oldest request ages are logged once per minute.
+- Migration 0091 adds the terminal `cancelled` job state. Once a briefing's day has
+  passed in its configured timezone, a newer queued day for the same owner cancels
+  that unfinished job (pending, retrying or running). Today's jobs, future jobs,
+  other owners and stored briefings are preserved. Cancellation increments the
+  revision, stops generation before the next physical LLM request and fences
+  publication/notification; an already in-flight provider request may finish.
 - Service endpoint `/agents/daily-briefing/run` also queues work and returns immediately.
 - After a successful generation, a notification is dispatched using the `daily-briefing` notification type and the stored per-channel user subscription preferences. Push payloads use `kind=daily_briefing_ready` so mobile opens `/home` with the full briefing component already expanded.
 

@@ -11,8 +11,12 @@ One background workflow per endpoint may hold admission in the orchestrator proc
 A workflow retains its slot across extraction, repairs, reconciliation and commit,
 so another worker cannot discard already extracted candidates merely by occupying
 the next phase's slot. Waiting worker lanes rotate in arrival order. A readiness
-check occurs before claiming work; stale waiters expire after 60 seconds, while
-live polling refreshes their place. A worker with no eligible work releases its turn.
+check occurs before claiming work. Waiters expire after the larger of 60 seconds
+or three configured polling intervals. All asynchronous LLM workers pass their
+actual polling cadence to admission. Refreshing a waiter extends its deadline
+without changing its FIFO position, so a 60-second briefing poll plus overhead
+cannot lose its turn to 2-second history/tagging polls. Stopped lanes still expire;
+a worker with no eligible work releases its turn immediately.
 The durable per-owner knowledge scheduler still guarantees a historical turn after
 at most two current turns.
 

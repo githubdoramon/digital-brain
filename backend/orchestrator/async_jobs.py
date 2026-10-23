@@ -18,13 +18,17 @@ logger = get_runtime_logger(__name__)
 _ACTIVE_WORKER = ContextVar("async_llm_worker", default=None)
 
 
-def background_worker(lane):
+def background_worker(lane, *, poll_seconds=0, check_claim=False):
     """Coordinate durable LLM jobs before claim and preserve retries on deferral."""
 
     def decorate(function):
         @wraps(function)
         def run(*args, **kwargs):
-            with llm_admission.background_work(lane):
+            with llm_admission.background_work(
+                lane,
+                poll_seconds=poll_seconds,
+                before_request=check_current_job if check_claim else None,
+            ):
                 if not llm_admission.background_ready():
                     return False
                 tracker = {"job": None}
@@ -71,6 +75,7 @@ class AsyncJobStatus(str, Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 def get_job(
@@ -388,6 +393,11 @@ def require_current_job(cur):
         )
         if not cur.fetchone():
             raise JobSuperseded("Job claim is no longer current")
+
+
+def check_current_job():
+    with get_conn() as conn, conn.cursor() as cur:
+        require_current_job(cur)
 
 
 def mark_succeeded(

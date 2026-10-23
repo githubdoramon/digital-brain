@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import async_jobs
 import llm_admission
@@ -34,6 +35,7 @@ def enqueue_daily_briefing_job(
     log_existing: bool = True,
 ) -> dict[str, Any]:
     async_jobs.recover_stale_jobs(job_type=JOB_TYPE, user_email=user_email)
+    cancel_superseded_briefings(user_email=user_email)
     dedupe_key = build_daily_briefing_dedupe_key(
         briefing_date=briefing_date,
         timezone_name=timezone_name,
@@ -80,7 +82,49 @@ def enqueue_daily_briefing_job(
         timezone_name,
         queued.get("created"),
     )
+    if queued["job_id"] in cancel_superseded_briefings(user_email=user_email):
+        queued = {**queued, "status": "cancelled", "should_schedule": False}
     return queued
+
+
+def cancel_superseded_briefings(*, user_email=None, now_utc=None):
+    now = _as_utc(now_utc or datetime.now(timezone.utc))
+    cancelled = set()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT job_id,revision,user_email,payload FROM async_jobs
+            WHERE job_type=%s AND (%s::text IS NULL OR user_email=%s)
+                AND status IN ('pending','failed','running')
+            ORDER BY user_email,job_id FOR UPDATE""",
+            (JOB_TYPE, user_email, user_email),
+        )
+        dated = []
+        for row in cur.fetchall():
+            payload = row["payload"] or {}
+            try:
+                day = date.fromisoformat(str(payload.get("date") or ""))
+                today = now.astimezone(ZoneInfo(str(payload.get("timezone") or "UTC"))).date()
+            except (ValueError, ZoneInfoNotFoundError):
+                continue
+            dated.append((row, day, today))
+        latest = {}
+        for row, day, _ in dated:
+            latest[row["user_email"]] = max(latest.get(row["user_email"], day), day)
+        for row, day, today in dated:
+            if day >= today or day >= latest[row["user_email"]]:
+                continue
+            cur.execute(
+                """UPDATE async_jobs SET status='cancelled',revision=revision+1,
+                status_message='Replaced by a newer daily briefing',error=NULL,
+                finished_at=NOW(),updated_at=NOW() WHERE job_id=%s AND revision=%s""",
+                (row["job_id"], row["revision"]),
+            )
+            if cur.rowcount:
+                cancelled.add(row["job_id"])
+        conn.commit()
+    if cancelled:
+        logger.info("[briefing.job] superseded_days_cancelled count=%d", len(cancelled))
+    return cancelled
 
 
 def start_worker() -> None:
@@ -104,8 +148,9 @@ def stop_worker(timeout: float = 5.0) -> None:
         thread.join(timeout=timeout)
 
 
-@async_jobs.background_worker("daily_briefing_jobs")
+@async_jobs.background_worker("daily_briefing_jobs", poll_seconds=POLL_SECONDS, check_claim=True)
 def process_due_once() -> bool:
+    cancel_superseded_briefings()
     async_jobs.recover_stale_jobs(job_type=JOB_TYPE)
     job = async_jobs.claim_due_job(job_type=JOB_TYPE, newest_first=True)
     if not job:
@@ -152,6 +197,7 @@ def enqueue_due_daily_briefings(*, now_utc: datetime | None = None) -> int:
             enqueued,
             resolved_now.isoformat(),
         )
+    cancel_superseded_briefings(now_utc=resolved_now)
     return enqueued
 
 
@@ -228,7 +274,7 @@ def log_queue_health():
         cur.execute(
             """SELECT status,COUNT(*) AS count,
             MAX(EXTRACT(EPOCH FROM NOW()-requested_at))::int AS oldest_age_s
-            FROM async_jobs WHERE job_type=%s AND status<>'succeeded'
+            FROM async_jobs WHERE job_type=%s AND status NOT IN ('succeeded','cancelled')
             GROUP BY status ORDER BY status""",
             (JOB_TYPE,),
         )

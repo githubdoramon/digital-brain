@@ -48,7 +48,7 @@ def is_background():
 
 
 @contextmanager
-def background_work(lane="background"):
+def background_work(lane="background", *, poll_seconds=0, before_request=None):
     token = _BACKGROUND.set(True)
     session = {
         "lane": lane,
@@ -57,6 +57,10 @@ def background_work(lane="background"):
         "deferred": None,
         "request_lock": threading.RLock(),
         "endpoint": os.getenv("LLM_BASE_URL", ""),
+        # Keep a live worker's FIFO position across polls, including scheduler
+        # jitter and one missed poll. Stopped workers must still expire.
+        "waiter_seconds": max(60, 3 * poll_seconds),
+        "before_request": before_request,
     }
     session_token = _SESSION.set(session)
     try:
@@ -89,9 +93,12 @@ def _state(endpoint):
 
 
 def _register(state, lane, now):
-    for stale in [name for name, stamp in state.waiting.items() if now - stamp > 60]:
+    for stale in [name for name, deadline in state.waiting.items() if deadline <= now]:
         state.waiting.pop(stale, None)
-    state.waiting[lane] = now
+    session = _SESSION.get()
+    lifetime = session["waiter_seconds"] if session else 60
+    # Replacing a value retains insertion order: refreshing must not requeue it.
+    state.waiting[lane] = now + lifetime
 
 
 def _blocked(state, now, lane):
@@ -124,6 +131,8 @@ def background_ready():
 def request_slot(endpoint):
     background = is_background()
     session = _SESSION.get()
+    if session and session["before_request"]:
+        session["before_request"]()
     with _LOCK:
         state = _state(endpoint)
         if background and (session is None or session["held"] is not state):
