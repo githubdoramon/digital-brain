@@ -12,8 +12,46 @@ import knowledge_demand
 import knowledge_jobs
 import learning_ownership
 import learning_progress
+import llm_admission
 from tests.test_intelligence import FUTURE, OWNER, database, ingest, setup_owner  # noqa: F401
 from tests.test_learning_batches import queue, states
+
+
+def test_skipped_sources_commit_bounded_receipts_while_provider_is_busy(database, monkeypatch):
+    setup_owner(database)
+    monkeypatch.setattr(llm_admission, "_STATES", {})
+    monkeypatch.setenv("LLM_BASE_URL", "https://models.example.test/v1")
+    llm_admission._state("https://models.example.test/v1").background = True
+    with database() as conn:
+        conn.execute("UPDATE intelligence_runs SET reviewed=TRUE")
+        conn.execute(
+            """INSERT INTO intelligence_sources(kind,entity_id,owner_email,fingerprint,payload,historical)
+            SELECT 'event','removed-'||n,%s,'removed-'||n,
+                '{"text":"Cancelled meeting.","deleted":true,"sent_at":"2026-01-03T12:00:00Z"}'::jsonb,FALSE
+            FROM generate_series(1,205) n""",
+            (OWNER,),
+        )
+
+    def unexpected_model(*args, **kwargs):
+        pytest.fail("Deleted sources must drain without invoking the model")
+
+    monkeypatch.setattr(model, "analyze", unexpected_model)
+    assert jobs.process_once([OWNER])
+    with database() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 192
+        )
+        conn.execute("UPDATE intelligence_runs SET next_attempt_at=NOW()")
+    assert jobs.process_once([OWNER])
+    with database() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) AS n FROM intelligence_processed").fetchone()["n"] == 205
+        )
+        assert (
+            conn.execute("SELECT status FROM intelligence_runs").fetchone()["status"] == "succeeded"
+        )
+        assert not conn.execute("SELECT 1 FROM intelligence_failures").fetchone()
+        assert not conn.execute("SELECT 1 FROM intelligence_proposals").fetchone()
 
 
 def reviewed_failure(database):

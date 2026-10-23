@@ -21,6 +21,7 @@ JOB_TYPE = "scheduled_intelligence"
 TIMEZONE = "Europe/Lisbon"
 HOURS = (5, 19)
 POLL_SECONDS = 30
+MAX_SKIPPED_BATCHES_PER_TURN = 16
 _STOP = threading.Event()
 _THREAD = None
 logger = get_runtime_logger(__name__)
@@ -159,8 +160,6 @@ def finish_run(run, *, more=False, failed=False):
 
 @llm_admission.background_work("intelligence")
 def process_once(owners):
-    if not llm_admission.background_ready():
-        return False
     run = claim_run(owners)
     if not run:
         return False
@@ -209,7 +208,8 @@ def _process_run(run):
         run["run_id"],
         run["cutoff"],
     )
-    for _ in range(learning_fairness.INTELLIGENCE_BATCHES_PER_TURN):
+    model_batches = 0
+    for _ in range(MAX_SKIPPED_BATCHES_PER_TURN):
         if _STOP.is_set():
             finish_run(run, more=True)
             return True
@@ -244,16 +244,21 @@ def _process_run(run):
                         run["user_email"], run, review_batch, exc.code, review=True
                     )
                     logger.warning("[intelligence] review deferred reason=%s", exc.code)
-                    continue
+                    break
                 intelligence.apply_batch(
                     run["user_email"], run, review_batch, context, findings, review=True
                 )
             finish_run(run, more=review_retry)
             return True
+        needs_model = bool(intelligence_model.eligible_sources(batch))
         try:
-            context, findings = intelligence_model.analyze(
-                run["user_email"], batch, knowledge_only=run["knowledge_only"]
-            )
+            if needs_model:
+                model_batches += 1
+                context, findings = intelligence_model.analyze(
+                    run["user_email"], batch, knowledge_only=run["knowledge_only"]
+                )
+            else:
+                context, findings = {}, []
         except (
             intelligence_model.InvalidModelOutput,
             intelligence_model.LLMOutputExhaustedError,
@@ -261,11 +266,16 @@ def _process_run(run):
         ) as exc:
             intelligence.defer_batch(run["user_email"], run, batch, exc.code)
             logger.warning("[intelligence] batch deferred reason=%s", exc.code)
-            continue
+            break
         if _STOP.is_set():
             finish_run(run, more=True)
             return True
         intelligence.apply_batch(run["user_email"], run, batch, context, findings)
+        if needs_model:
+            if model_batches >= learning_fairness.INTELLIGENCE_BATCHES_PER_TURN:
+                break
+        else:
+            logger.info("[intelligence] skipped_sources_drained source_parts=%d", len(batch))
     finish_run(run, more=True)
     return True
 

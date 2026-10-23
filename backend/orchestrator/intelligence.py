@@ -439,6 +439,7 @@ def _current(cur, row, owner):
 
 
 def evidence_for(finding, batch):
+    from evidence_quotes import source_quote
     from learning_validation import reject
 
     refs = {r["ref"]: r for r in batch}
@@ -449,11 +450,13 @@ def evidence_for(finding, batch):
     for e in evidence:
         row = refs.get(e.get("ref"))
         quote = e.get("quote", "")
+        exact_quote = source_quote(quote, row["text"]) if row else None
         if (
             not row
             or not isinstance(quote, str)
             or not 8 <= len(quote.strip()) <= 1200
-            or quote not in row["text"]
+            or exact_quote is None
+            or not 8 <= len(exact_quote.strip()) <= 1200
         ):
             reject(
                 "invalid_evidence",
@@ -469,7 +472,7 @@ def evidence_for(finding, batch):
             {
                 "source_id": row["source_id"],
                 "part": row["part"],
-                "quote": quote,
+                "quote": exact_quote,
                 "kind": row["kind"],
                 "entity_id": row["entity_id"],
                 "sent_at": row["payload"].get("sent_at"),

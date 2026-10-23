@@ -453,6 +453,8 @@ def source_spans(text):
 
 
 def expand_citations(result, batch):
+    from evidence_quotes import source_quote
+
     refs = {r["ref"]: source_spans(r["text"]) for r in batch}
     findings = []
     for finding in result["findings"]:
@@ -477,7 +479,8 @@ def expand_citations(result, batch):
                 quote = item.get("quote") if item.get("quote") is not None else spans[index]
                 # An exact excerpt of the selected span is valid too; both fields
                 # must point to the same evidence, not necessarily the whole span.
-                if quote not in spans[index]:
+                exact_quote = source_quote(quote, spans[index])
+                if exact_quote is None:
                     details = {
                         "reason": "quote_not_in_selected_span",
                         "citation": item,
@@ -485,7 +488,7 @@ def expand_citations(result, batch):
                     }
                     diagnostic("intelligence_citation_rejected", **details)
                     raise InvalidModelOutput("invalid_evidence", details)
-                item = {**item, "quote": quote}
+                item = {**item, "quote": exact_quote}
             evidence.append(item)
         findings.append({**finding, "evidence": evidence})
     return {**result, "findings": findings}
@@ -627,6 +630,8 @@ def _reconciliation_sources(sources, findings):
 
 
 def _check_reconciliation_citations(result, sources):
+    from evidence_quotes import source_quote
+
     allowed = {source["ref"]: source for source in sources}
     for finding in result["findings"]:
         for citation in finding["evidence"]:
@@ -654,7 +659,9 @@ def _check_reconciliation_citations(result, sources):
                     },
                 )
             if citation.get("quote") and not any(
-                citation["quote"] in text for text in [*spans, *source["exact_quotes"]] if text
+                source_quote(citation["quote"], text) is not None
+                for text in [*spans, *source["exact_quotes"]]
+                if text
             ):
                 raise InvalidModelOutput(
                     "invalid_evidence",
@@ -769,8 +776,8 @@ def _analyze_repaired(owner, batch, *, knowledge_only=False):
     raise InvalidModelOutput(repair_hint["code"], repair_hint["details"])
 
 
-def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
-    eligible = [
+def eligible_sources(batch):
+    return [
         r
         for r in batch
         if not r.get("skip")
@@ -778,6 +785,10 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
         and not r["payload"].get("deleted")
         and r["text"].strip()
     ]
+
+
+def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
+    eligible = eligible_sources(batch)
     diagnostic(
         "intelligence_sources_selected",
         eligible_refs=[r["ref"] for r in eligible],

@@ -57,13 +57,19 @@ derived knowledge is retained when a group is subsequently excluded.
   knowledge queue. Intelligence selects current evidence only; it no longer claims
   a second historical pass. Late historical imports enter the canonical learner.
   Shared background admission rotates workflows and respects provider cooldown.
-  Model calls finish before yielding.
+  Model calls finish before yielding. Batches containing only deleted, excluded,
+  stale or empty sources bypass model admission and drain up to sixteen batches
+  per turn, with the usual transactional receipts and lease checks. A batch with
+  eligible evidence still uses shared LLM admission and the model-batch limit.
 - A source/part receipt commits in the same transaction as its findings. Failed
   inference or a lost lease advances no receipts. Receipts, rather than a sequence
   high-water mark, also cover transactions that commit out of order.
 - Model output is schema-checked (including knowledge status and ASCII predicate)
   and controller-checked. A rejection gets one fresh extraction/reconciliation
-  attempt with safe validation feedback. Exact quote matching remains mandatory;
+  attempt with safe validation feedback. Citation matching tolerates whitespace
+  runs and straight/curly single/double quotation-mark differences, resolving
+  them back to verbatim source excerpts before storage. Words, case, numbers and
+  other punctuation must match, within the selected span and supplied evidence;
   evidence is never fuzzily matched or invented to pass validation.
 - Persistently rejected batches are retained in `intelligence_failures`, without
   successful receipts, so other source parts can proceed. Retry after five minutes;
