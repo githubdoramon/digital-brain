@@ -1,4 +1,4 @@
-fastapi==0.146.0
+fastapi==0.153.0
 uvicorn[standard]==0.54.0
 psycopg[binary]==3.3.6
 python-dateutil==2.9.0.post0
@@ -7,7 +7,7 @@ rapidfuzz==3.14.5
 pydantic==2.14.1
 requests==2.34.2
 tiktoken==0.14.0
-boto3>=1.43.114,<2
+boto3>=1.43.115,<2
 httpx==0.28.1
 # Build this local wheel with scripts/build_tryx_history.py; Docker/CI do so automatically.
 tryx==1.5.0+digitalbrain.1
@@ -16,9 +16,9 @@ ollama==0.6.3
 google-auth==2.62.0
 python-jose[cryptography]==3.5.0
 pdfminer.six==20260107
-pymupdf==1.28.2
-pymupdf4llm==1.28.2
-pymupdf-layout==1.28.2
+pymupdf==2.0
+pymupdf4llm==2.0
+pymupdf-layout==2.0
 python-docx==1.2.0
 python-multipart
 pyyaml==6.0.3
