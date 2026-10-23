@@ -1,6 +1,7 @@
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=1.4.0
+jsonschema==4.26.0
 
 # Linting & Formatting
 ruff==0.17.1
