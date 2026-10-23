@@ -18,7 +18,7 @@ python-jose[cryptography]==3.5.0
 pdfminer.six==20260107
 pymupdf==1.28.2
 pymupdf4llm==1.28.2
-pymupdf-layout==1.28.2
+pymupdf-layout==2.0
 python-docx==1.2.0
 python-multipart
 pyyaml==6.0.3
