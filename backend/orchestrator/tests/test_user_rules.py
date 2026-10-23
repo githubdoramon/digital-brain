@@ -142,7 +142,8 @@ def test_obsolete_fact_and_duplicate_knowledge_routes_are_removed():
         routes.create_rules_router,
     ]:
         app.include_router(factory())
-    paths = {r.path for r in app.routes}
+    # Included routers may be lazy wrappers; inspect the resolved public API.
+    paths = set(app.openapi()["paths"])
     assert "/user/facts" not in paths and "/mobile/user/facts" not in paths
     assert "/user/facts/{fact_id}" not in paths and "/mobile/user/facts/{fact_id}" not in paths
     assert (
