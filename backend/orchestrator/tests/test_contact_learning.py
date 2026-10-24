@@ -376,11 +376,13 @@ def test_parallel_replays_create_only_one_contact_graph(database):
         assert conn.execute("SELECT COUNT(*) AS n FROM contact_relationships").fetchone()["n"] == 1
 
 
-def test_proposal_route_accepts_explicit_contact_selection(database):
+def test_proposal_route_accepts_explicit_contact_selection(database, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from routes.proposals import create_proposals_router, get_current_user
+
+    monkeypatch.setattr("contact_enrichment_proposals.list_proposals", lambda owner: [])
 
     with database() as conn:
         conn.execute("INSERT INTO contacts(contact_id,display_name) VALUES('mia','Mia Brooks')")
@@ -390,9 +392,20 @@ def test_proposal_route_accepts_explicit_contact_selection(database):
     app.include_router(create_proposals_router())
     app.dependency_overrides[get_current_user] = lambda: {"email": OWNER}
     with TestClient(app) as client:
+        # The mobile contract must carry a typed operation, not a profession
+        # inferred from its general subject or human-readable statement.
+        listed = client.get("/mobile/proposals").json()["proposals"]
+        typed = next(p for p in listed if p["proposal_id"] == proposal["proposal_id"])
+        assert typed["kind"] == "contact_change"
+        assert typed["payload"]["contact_changes"]["people"][1]["birthday"] == "--05-12"
         url = f"/mobile/proposals/{proposal['proposal_id']}/accept"
         assert client.post(url).status_code == 409
         assert client.post(url, json={"contact_resolutions": {"new:mia": "mia"}}).status_code == 200
+    with database() as conn:
+        person = conn.execute("SELECT * FROM contacts WHERE contact_id='mia'").fetchone()
+        assert birthday_value(person) == "--05-12"
+        edge = conn.execute("SELECT * FROM contact_relationships").fetchone()
+        assert edge["from_contact_id"] == "mia" and edge["to_contact_id"] == "alex"
 
 
 def test_existing_unknown_year_can_be_filled_without_a_conflict(database):

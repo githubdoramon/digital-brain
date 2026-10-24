@@ -14,6 +14,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test:background-runtime": "node scripts/test-background-runtime.cjs",
+    "test:proposal-actions": "node --test scripts/test-proposal-actions.cjs",
     "eas:build:android:apk": "source .env; set +a; bash ./scripts/eas-build-android-apk.sh"
   },
   "dependencies": {

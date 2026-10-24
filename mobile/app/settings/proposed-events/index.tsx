@@ -40,6 +40,7 @@ import type {
 import { normalizeSearch } from '@/utils/text';
 import { formatBirthday } from '@/utils/birthdays';
 import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
+import { proposalAction, type ContactChangeGraph } from '@/utils/proposalActions';
 
 type ProposedEvent = {
   proposal_id: string;
@@ -93,15 +94,7 @@ type ProposedEnrichment = {
     assignee_name?: string | null;
     requested_status?: string;
     target_status?: string;
-    contact_changes?: {
-      people: { ref: string; display_name: string; birthday: string | null }[];
-      relationships: {
-        from_ref: string;
-        to_ref: string;
-        relationship_type: string;
-        reciprocal_type: string;
-      }[];
-    };
+    contact_changes?: ContactChangeGraph;
     contact_plan?: {
       choices: {
         ref: string;
@@ -501,6 +494,10 @@ export default function ProposedEventsScreen() {
 
   const updateEnrichmentProposal = React.useCallback(
     async (proposal: ProposedEnrichment, action: 'accept' | 'dismiss') => {
+      if (action === 'accept' && !proposalAction(proposal).supported) {
+        showError('This suggestion needs review before it can be applied.');
+        return;
+      }
       setSavingId(proposal.proposal_id);
       try {
         await apiFetch(`/mobile/proposals/${encodeURIComponent(proposal.proposal_id)}/${action}`, {
@@ -517,7 +514,7 @@ export default function ProposedEventsScreen() {
         setEnrichmentProposals((current) =>
           current.filter((item) => item.proposal_id !== proposal.proposal_id),
         );
-        showSuccess(action === 'accept' ? 'Suggestion added.' : 'Suggestion dismissed.');
+        showSuccess(action === 'accept' ? 'Changes applied.' : 'Suggestion dismissed.');
       } catch (error) {
         showError(error instanceof Error ? error.message : 'Could not update suggestion.');
       } finally {
@@ -929,6 +926,7 @@ export default function ProposedEventsScreen() {
                 const isContactChange = proposal.kind === 'contact_change';
                 const isWork = ['task', 'project', 'task_change'].includes(proposal.kind);
                 const graph = proposal.payload?.contact_changes;
+                const action = proposalAction(proposal, contactResolutions[proposal.proposal_id]);
                 const choices = proposal.payload?.contact_plan?.choices || [];
                 const needsContactChoice = choices.some(
                   (choice) => !contactResolutions[proposal.proposal_id]?.[choice.ref],
@@ -950,21 +948,25 @@ export default function ProposedEventsScreen() {
                       <View style={styles.proposalTitleBlock}>
                         <Text style={styles.proposalTitle}>
                           {isContactChange
-                            ? 'Contact changes'
+                            ? action.title || 'Contact changes'
                             : isWork
                               ? proposal.suggested_value
                               : isRelationship
                                 ? `${proposal.contact_name} · ${proposal.related_contact_name || 'Contact'}`
-                                : proposal.contact_name}
+                                : proposal.kind === 'profession'
+                                  ? proposal.contact_name
+                                  : 'Suggested change'}
                         </Text>
                         <Text style={styles.proposalMeta}>
                           {isContactChange
-                            ? graph?.people.map((person) => person.display_name).join(' · ')
+                            ? action.label
                             : isWork
                               ? `${proposal.kind === 'project' ? 'Project' : proposal.kind === 'task_change' ? (proposal.payload?.requested_status === 'cancelled' ? 'Task cancellation' : 'Task update') : 'Task'}${proposal.payload?.due_date ? ` · Due ${proposal.payload.due_date}` : ''}`
                               : isRelationship
                                 ? `${proposal.suggested_value}${proposal.reciprocal_value ? ` · ${proposal.reciprocal_value}` : ''}`
-                                : `Profession: ${proposal.suggested_value}`}
+                                : proposal.kind === 'profession'
+                                  ? `Profession: ${proposal.suggested_value}`
+                                  : proposal.suggested_value}
                         </Text>
                         {!isWork && !isContactChange ? (
                           <Text style={styles.proposalMeta}>
@@ -1054,26 +1056,10 @@ export default function ProposedEventsScreen() {
                     ) : null}
                     <View style={styles.actions}>
                       <Button
-                        label={
-                          isContactChange
-                            ? 'Apply contact changes'
-                            : isWork
-                              ? proposal.kind === 'project'
-                                ? 'Create project'
-                                : proposal.kind === 'task_change'
-                                  ? proposal.payload?.requested_status === 'cancelled'
-                                    ? 'Cancel task'
-                                    : proposal.payload?.target_status === 'completed'
-                                      ? 'Reopen task'
-                                      : 'Update task'
-                                  : 'Create task'
-                              : isRelationship
-                                ? 'Add relationship'
-                                : 'Add profession'
-                        }
+                        label={action.label}
                         onPress={() => void updateEnrichmentProposal(proposal, 'accept')}
                         loading={isSaving}
-                        disabled={isContactChange && needsContactChoice}
+                        disabled={!action.supported || (isContactChange && needsContactChoice)}
                         style={styles.primaryAction}
                       />
                       <Button
@@ -1122,7 +1108,7 @@ export default function ProposedEventsScreen() {
 
         <CollapsingTopBar
           title="Proposed"
-          secondaryTitle="Events and contact suggestions"
+          secondaryTitle="Suggested stuff"
           scrollY={scrollY}
           onPressBack={() => router.back()}
         />
