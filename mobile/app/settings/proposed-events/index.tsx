@@ -507,10 +507,13 @@ export default function ProposedEventsScreen() {
 
   const updateEnrichmentProposal = React.useCallback(
     async (proposal: ProposedEnrichment, action: 'accept' | 'dismiss') => {
+      if (action === 'accept' && !proposalAction(proposal).supported) {
+        showError('This suggestion needs review before it can be applied.');
+        return;
+      }
       if (
         action === 'accept' &&
-        (!proposalAction(proposal).supported ||
-          pendingContactChoices(proposal, contactResolutions[proposal.proposal_id]).length > 0)
+        pendingContactChoices(proposal, contactResolutions[proposal.proposal_id]).length > 0
       ) {
         showError('Answer the questions before applying this suggestion.');
         return;
@@ -977,7 +980,7 @@ export default function ProposedEventsScreen() {
                         </Text>
                         <Text style={styles.proposalMeta}>
                           {isContactChange
-                            ? action.label
+                            ? `${pendingChoices.length ? 'Needs your answer · ' : ''}${action.label}`
                             : isWork
                               ? `${proposal.kind === 'project' ? 'Project' : proposal.kind === 'task_change' ? (proposal.payload?.requested_status === 'cancelled' ? 'Task cancellation' : 'Task update') : 'Task'}${proposal.payload?.due_date ? ` · Due ${proposal.payload.due_date}` : ''}`
                               : isRelationship
@@ -1059,7 +1062,10 @@ export default function ProposedEventsScreen() {
                                   Who is {choice.display_name}?
                                 </Text>
                                 <Text style={styles.proposalMeta}>
-                                  {answer?.label || 'Choose an existing contact or a new person.'}
+                                  {answer?.label ||
+                                    (choice.can_create
+                                      ? 'Choose an existing contact or a new person.'
+                                      : 'Choose an existing contact.')}
                                 </Text>
                               </View>
                               <Ionicons
@@ -1074,7 +1080,13 @@ export default function ProposedEventsScreen() {
                     ) : null}
                     <View style={styles.actions}>
                       <Button
-                        label={pendingChoices.length ? 'Choose person' : action.label}
+                        label={
+                          pendingChoices.length > 1
+                            ? `Answer ${pendingChoices.length} questions`
+                            : pendingChoices.length
+                              ? 'Choose person'
+                              : action.label
+                        }
                         onPress={() => {
                           if (pendingChoices.length) {
                             setContactQuestion({
