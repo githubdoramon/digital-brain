@@ -31,6 +31,7 @@ import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { LinkedPlacesCard } from '@/components/contact/LinkedPlacesCard';
+import { MessengerLinksCard } from '@/components/contact/MessengerLinksCard';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
 import { formatDateOnlyLocal } from '@/utils/date';
@@ -479,6 +480,9 @@ export default function ContactDetailScreen() {
         ) : null}
 
         {!isCreating && contactParam ? <LinkedPlacesCard contactId={contactParam} /> : null}
+        {!isCreating && contactParam && contact ? (
+          <MessengerLinksCard contactId={contactParam} contactName={contact.display_name} />
+        ) : null}
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Contact</Text>

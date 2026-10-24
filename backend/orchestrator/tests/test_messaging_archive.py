@@ -1317,3 +1317,70 @@ async def test_whatsapp_requester_invokes_bound_method_with_cursor_and_safe_fail
         assert row["state"] == "ready" and row["reason"] == "request_failed"
         assert "private" not in json.dumps(row, default=str)
     assert history.claim_request(account["account_id"], account["generation"]) is None
+
+
+@pytest.mark.parametrize('provider', ['whatsapp', 'telegram'])
+def test_mobile_identity_management_search_link_move_and_unlink(database, telegram_types, provider):
+    from messaging_normalization import Provider
+
+    source = Provider(provider)
+    if provider == 'telegram':
+        telegram_ingest(telegram_types)
+    else:
+        ingest()
+    identity = next(row for row in archive.identities(OWNER, provider=source) if not row['is_self'])
+    with database() as conn:
+        conn.execute("INSERT INTO contacts VALUES ('second-contact', 'Second Contact', ARRAY[]::text[])")
+        conn.execute("UPDATE messaging_conversations SET source_username='unique_handle' WHERE external_id=%s",
+                     (identity['external_id'],))
+    app = FastAPI()
+    app.include_router(create_messaging_router())
+    app.dependency_overrides[get_current_user] = lambda: {'email': OWNER}
+    client = TestClient(app)
+    base = '/mobile/messaging/identities'
+    params = {'provider': provider, 'q': 'UNIQUE_HANDLE', 'limit': 1}
+    found = client.get(base, params=params).json()['identities']
+    assert [row['identity_id'] for row in found] == [identity['identity_id']]
+    assert client.get(base, params={**params, 'offset': 1}).json()['identities'] == []
+    assert client.get(base, params={**params, 'q': '%_'}).json()['identities'] == []
+    path = f"{base}/{identity['identity_id']}/contact?provider={provider}"
+    other_provider = 'whatsapp' if provider == 'telegram' else 'telegram'
+    assert client.put(path.replace(f'provider={provider}', f'provider={other_provider}'),
+                      json={'contact_id': 'sample-contact'}).status_code == 404
+    assert client.put(path, json={'contact_id': 'missing-contact'}).status_code == 404
+    assert client.put(path, json={'contact_id': 'sample-contact',
+                                  'expected_contact_id': None}).status_code == 200
+    linked = client.get(base, params={'provider': provider, 'contact_id': 'sample-contact'}).json()['identities']
+    assert [row['identity_id'] for row in linked] == [identity['identity_id']]
+    assert client.put(path, json={'contact_id': 'second-contact',
+                                  'expected_contact_id': None}).status_code == 409
+    assert client.put(path, json={'contact_id': 'second-contact',
+                                  'expected_contact_id': 'sample-contact'}).status_code == 200
+    assert client.put(path, json={'contact_id': None,
+                                  'expected_contact_id': 'sample-contact'}).status_code == 409
+    assert client.put(path, json={'contact_id': None,
+                                  'expected_contact_id': 'second-contact'}).status_code == 200
+    app.dependency_overrides[get_current_user] = lambda: {'email': OTHER}
+    assert client.get(base, params=params).json()['identities'] == []
+    assert client.put(path, json={'contact_id': 'sample-contact'}).status_code == 404
+    app.dependency_overrides[get_current_user] = lambda: {"email": None}
+    assert client.get(base).status_code == 401
+    with database() as conn:
+        assert conn.execute('SELECT count(*) AS count FROM messaging_identity_links WHERE identity_id=%s',
+                            (identity['identity_id'],)).fetchone()['count'] == 3
+
+
+def test_mobile_identity_search_paginates_equal_names_without_losing_links(database):
+    for index in range(4):
+        ingest(sender=f'1555000001{index}@s.whatsapp.net', id=f'PERSON-{index}')
+    app = FastAPI()
+    app.include_router(create_messaging_router())
+    app.dependency_overrides[get_current_user] = lambda: {'email': OWNER}
+    client = TestClient(app)
+    params = {'q': 'Sample Contact', 'limit': 2}
+    first = client.get('/mobile/messaging/identities', params=params).json()['identities']
+    second = client.get('/mobile/messaging/identities', params={**params, 'offset': 2}).json()['identities']
+    assert len(first) == len(second) == 2
+    assert len({row['identity_id'] for row in first + second}) == 4
+    assert client.get('/mobile/messaging/identities', params={'limit': 501}).status_code == 422
+    assert client.get('/mobile/messaging/identities', params={'offset': -1}).status_code == 422

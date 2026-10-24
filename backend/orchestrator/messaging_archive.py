@@ -400,11 +400,12 @@ def drain_once() -> int:
 
 
 def identities(
-    owner: str, contact_id: str | None = None, provider: Provider = Provider.WHATSAPP
+    owner: str, contact_id: str | None = None, provider: Provider = Provider.WHATSAPP,
+    *, query: str = "", limit: int = 500, offset: int = 0,
 ) -> list[dict]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT i.*, c.display_name AS contact_name,
+            """SELECT i.*, c.display_name AS contact_name, d.source_username, d.source_phone,
             COALESCE((SELECT jsonb_agg(suggestion) FROM (
                 SELECT p.contact_id, p.display_name FROM contacts p
                 WHERE i.contact_id IS NULL AND i.external_id LIKE '%%@s.whatsapp.net'
@@ -414,15 +415,21 @@ def identities(
             FROM messaging_identities i
             JOIN messaging_accounts a USING (account_id)
             LEFT JOIN contacts c USING (contact_id)
+            LEFT JOIN messaging_conversations d ON d.account_id = i.account_id
+                AND d.external_id = i.external_id AND d.kind = 'direct'
             WHERE a.user_email = %s AND a.provider = %s AND (%s::text IS NULL OR i.contact_id = %s)
-            ORDER BY i.display_name, i.external_id LIMIT 500""",
-            (owner, provider.value, contact_id, contact_id),
+              AND (%s = '' OR strpos(lower(concat_ws(' ', i.display_name, i.external_id,
+                    d.source_username, d.source_phone, c.display_name)), lower(%s)) > 0)
+            ORDER BY i.display_name, i.external_id, i.identity_id LIMIT %s OFFSET %s""",
+            (owner, provider.value, contact_id, contact_id, query.strip(), query.strip(),
+             min(max(limit, 1), 500), max(offset, 0)),
         )
         return cur.fetchall()
 
 
 def link_identity(
-    owner: str, identity_id: str, contact_id: str | None, provider: Provider = Provider.WHATSAPP
+    owner: str, identity_id: str, contact_id: str | None, provider: Provider = Provider.WHATSAPP,
+    *, expected_contact_id: str | None = None, require_unchanged: bool = False,
 ):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -434,6 +441,8 @@ def link_identity(
         old = cur.fetchone()
         if not old:
             raise LookupError("not_found")
+        if require_unchanged and old["contact_id"] != expected_contact_id:
+            raise ValueError("link_changed")
         if contact_id:
             cur.execute("SELECT contact_id FROM contacts WHERE contact_id = %s", (contact_id,))
             if not cur.fetchone():

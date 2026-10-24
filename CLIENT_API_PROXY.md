@@ -42,4 +42,12 @@ through the authenticated frontend proxy (hybrid session/bearer authentication).
 The `provider=whatsapp|telegram` query parameter scopes management calls; requests
 without it default to WhatsApp. `POST /messaging/telegram/password` accepts only an
 authenticated, transient two-step-verification challenge/password.
-Mobile consumes message knowledge through normal search and contact flows.
+Mobile consumes message knowledge through normal search and contact flows. Saved
+contact pages also manage WhatsApp/Telegram identity links through
+`GET /mobile/messaging/identities` and
+`PUT /mobile/messaging/identities/{identity_id}/contact`. Both retain the same
+authenticated owner/provider checks as the web routes. Identity listing supports
+`contact_id`, `q`, `limit` (1–500) and `offset`; search matches names, usernames,
+phone numbers and provider identifiers. Mobile sends `expected_contact_id`
+(including explicit null for an unlinked identity) so concurrent link changes
+return 409 rather than overwriting a stale association.

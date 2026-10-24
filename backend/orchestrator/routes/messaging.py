@@ -29,6 +29,7 @@ class TelegramPassword(BaseModel):
 
 class IdentityLink(BaseModel):
     contact_id: str | None = Field(default=None, max_length=256)
+    expected_contact_id: str | None = Field(default=None, max_length=256)
 
 
 class AnnouncementGroup(BaseModel):
@@ -45,6 +46,7 @@ def _owner(user: dict) -> str:
 
 def create_messaging_router() -> APIRouter:
     router = APIRouter(prefix="/messaging", tags=["messaging"])
+    mobile = APIRouter(prefix="/mobile/messaging", tags=["messaging"])
 
     @router.put("/analysis")
     def analysis(payload: AnnouncementGroup, provider: Provider = Provider.WHATSAPP,
@@ -152,14 +154,21 @@ def create_messaging_router() -> APIRouter:
             raise HTTPException(404, "Conversation not found.")
         return {"ok": True}
 
+    @mobile.get("/identities")
     @router.get("/identities")
     def identities(
         contact_id: str | None = None,
         provider: Provider = Provider.WHATSAPP,
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=500, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
         user: dict = Depends(get_current_user),
     ):
-        return {"identities": archive.identities(_owner(user), contact_id, provider)}
+        return {"identities": archive.identities(
+            _owner(user), contact_id, provider, query=q, limit=limit, offset=offset
+        )}
 
+    @mobile.put("/identities/{identity_id}/contact")
     @router.put("/identities/{identity_id}/contact")
     def link(
         identity_id: str,
@@ -168,9 +177,15 @@ def create_messaging_router() -> APIRouter:
         user: dict = Depends(get_current_user),
     ):
         try:
-            archive.link_identity(_owner(user), identity_id, payload.contact_id, provider)
+            archive.link_identity(
+                _owner(user), identity_id, payload.contact_id, provider,
+                expected_contact_id=payload.expected_contact_id,
+                require_unchanged="expected_contact_id" in payload.model_fields_set,
+            )
         except LookupError:
             raise HTTPException(404, "Identity or contact not found.")
+        except ValueError:
+            raise HTTPException(409, "This link has changed. Refresh and try again.")
         return {"ok": True}
 
     @router.get("/conversations")
@@ -219,4 +234,7 @@ def create_messaging_router() -> APIRouter:
         except LookupError:
             raise HTTPException(404, "Message not found.")
 
-    return router
+    combined = APIRouter()
+    combined.include_router(router)
+    combined.include_router(mobile)
+    return combined

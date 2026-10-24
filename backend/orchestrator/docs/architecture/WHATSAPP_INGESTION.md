@@ -40,8 +40,13 @@ intelligence builds on the same evidence rather than bypassing archive storage.
   browsing/search, message context, and people linking (Unlinked, Suggested
   matches, Linked). People can be linked, corrected, unlinked, or created from
   the web. Web Contacts links directly to the relevant management view.
-  Mobile has no WhatsApp management screens; archived knowledge remains available
-  through normal search/chat and confirmed contact associations.
+  Mobile saved contact pages show linked WhatsApp/Telegram identities and support
+  searching the archive, linking, moving links with confirmation, and unlinking.
+  Search is paginated on the server; explicit expected-contact checks reject stale
+  changes. Mobile uses `/mobile/messaging/identities` through the frontend proxy.
+  Pairing and connection settings remain on web System → Messengers. Archived
+  knowledge also remains available through normal search/chat and confirmed
+  contact associations.
 - `search_memories` includes source `message`; `get_message` inspects the matched
   exchange. Dates/sender attribution survive tool compaction, and the verifier
   requires inspection of the actual matching message before final synthesis.
