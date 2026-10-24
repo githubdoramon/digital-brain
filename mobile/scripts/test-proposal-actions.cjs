@@ -11,7 +11,7 @@ const code = ts.transpileModule(
 ).outputText;
 const helpers = {};
 new Function('exports', code)(helpers);
-const { proposalAction } = helpers;
+const { proposalAction, pendingContactChoices, contactChoiceOptions } = helpers;
 const person = (ref, display_name, birthday = null) => ({ ref, display_name, birthday });
 const contactProposal = (people, relationships = []) => ({
   kind: 'contact_change',
@@ -71,4 +71,43 @@ test('only the explicit profession kind offers Add profession', () => {
     assert.equal(action.label, 'Review suggestion');
   }
   assert.equal(proposalAction({ kind: 'task' }).label, 'Create task');
+});
+
+test('clarifications require a valid answer for every person, without defaulting to create', () => {
+  const proposal = contactProposal([
+    person('new:mira', 'Mira', '--05-12'),
+    person('new:alex', 'Alex'),
+  ]);
+  const choices = [
+    {
+      ref: 'new:mira',
+      display_name: 'Mira',
+      can_create: true,
+      candidates: [{ contact_id: 'mira-brooks', display_name: 'Mira Brooks' }],
+    },
+    {
+      ref: 'new:alex',
+      display_name: 'Alex',
+      can_create: false,
+      candidates: [{ contact_id: 'alex-hill', display_name: 'Alex Hill' }],
+    },
+  ];
+  proposal.payload.contact_plan = { choices };
+  assert.deepEqual(pendingContactChoices(proposal), choices);
+  assert.equal(contactChoiceOptions(choices[0]).at(-1).value, 'create');
+  assert.equal(contactChoiceOptions(choices[1]).length, 1);
+  assert.deepEqual(pendingContactChoices(proposal, { 'new:mira': 'create' }), [choices[1]]);
+  assert.deepEqual(
+    pendingContactChoices(proposal, {
+      'new:mira': 'unknown-contact',
+      'new:alex': 'create',
+    }),
+    choices,
+  );
+  const resolutions = { 'new:mira': 'mira-brooks', 'new:alex': 'alex-hill' };
+  assert.deepEqual(pendingContactChoices(proposal, resolutions), []);
+  assert.equal(proposalAction(proposal, resolutions).label, 'Add birthday');
+  // A refreshed candidate list must invalidate an answer that is no longer offered.
+  choices[0].candidates = [];
+  assert.deepEqual(pendingContactChoices(proposal, resolutions), [choices[0]]);
 });

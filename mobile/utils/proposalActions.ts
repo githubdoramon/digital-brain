@@ -8,14 +8,45 @@ export type ContactChangeGraph = {
   }[];
 };
 
+export type ContactChoice = {
+  ref: string;
+  display_name: string;
+  can_create: boolean;
+  candidates: { contact_id: string; display_name: string }[];
+};
+
 type ProposalActionInput = {
   kind: string;
   payload?: {
     contact_changes?: ContactChangeGraph;
+    contact_plan?: { choices: ContactChoice[] };
     requested_status?: string;
     target_status?: string;
   };
 };
+
+export function contactChoiceOptions(choice: ContactChoice) {
+  return [
+    ...choice.candidates.map((candidate) => ({
+      value: candidate.contact_id,
+      label: candidate.display_name,
+    })),
+    ...(choice.can_create
+      ? [{ value: 'create', label: `Create a new contact for ${choice.display_name}` }]
+      : []),
+  ];
+}
+
+export function pendingContactChoices(
+  proposal: ProposalActionInput,
+  resolutions: Record<string, string> = {},
+): ContactChoice[] {
+  if (proposal.kind !== 'contact_change') return [];
+  return (proposal.payload?.contact_plan?.choices || []).filter(
+    (choice) =>
+      !contactChoiceOptions(choice).some((option) => option.value === resolutions[choice.ref]),
+  );
+}
 
 export function proposalAction(
   proposal: ProposalActionInput,

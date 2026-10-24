@@ -40,7 +40,14 @@ import type {
 import { normalizeSearch } from '@/utils/text';
 import { formatBirthday } from '@/utils/birthdays';
 import { fetchContactGroups, type ContactGroup } from '@/utils/contactGroups';
-import { proposalAction, type ContactChangeGraph } from '@/utils/proposalActions';
+import {
+  proposalAction,
+  pendingContactChoices,
+  contactChoiceOptions,
+  type ContactChangeGraph,
+  type ContactChoice,
+} from '@/utils/proposalActions';
+import { ProposalContactQuestionSheet } from '@/components/ProposalContactQuestionSheet';
 
 type ProposedEvent = {
   proposal_id: string;
@@ -96,12 +103,7 @@ type ProposedEnrichment = {
     target_status?: string;
     contact_changes?: ContactChangeGraph;
     contact_plan?: {
-      choices: {
-        ref: string;
-        display_name: string;
-        can_create: boolean;
-        candidates: { contact_id: string; display_name: string }[];
-      }[];
+      choices: ContactChoice[];
       review_reasons: string[];
     };
   };
@@ -205,6 +207,17 @@ export default function ProposedEventsScreen() {
   const [contactResolutions, setContactResolutions] = React.useState<
     Record<string, Record<string, string>>
   >({});
+
+  const [contactQuestion, setContactQuestion] = React.useState<{
+    proposalId: string;
+    ref: string;
+  } | null>(null);
+  const questionProposal = enrichmentProposals.find(
+    (proposal) => proposal.proposal_id === contactQuestion?.proposalId,
+  );
+  const activeContactChoice = questionProposal?.payload?.contact_plan?.choices.find(
+    (choice) => choice.ref === contactQuestion?.ref,
+  );
 
   const loadProposals = React.useCallback(async () => {
     setLoading(true);
@@ -494,8 +507,12 @@ export default function ProposedEventsScreen() {
 
   const updateEnrichmentProposal = React.useCallback(
     async (proposal: ProposedEnrichment, action: 'accept' | 'dismiss') => {
-      if (action === 'accept' && !proposalAction(proposal).supported) {
-        showError('This suggestion needs review before it can be applied.');
+      if (
+        action === 'accept' &&
+        (!proposalAction(proposal).supported ||
+          pendingContactChoices(proposal, contactResolutions[proposal.proposal_id]).length > 0)
+      ) {
+        showError('Answer the questions before applying this suggestion.');
         return;
       }
       setSavingId(proposal.proposal_id);
@@ -928,8 +945,9 @@ export default function ProposedEventsScreen() {
                 const graph = proposal.payload?.contact_changes;
                 const action = proposalAction(proposal, contactResolutions[proposal.proposal_id]);
                 const choices = proposal.payload?.contact_plan?.choices || [];
-                const needsContactChoice = choices.some(
-                  (choice) => !contactResolutions[proposal.proposal_id]?.[choice.ref],
+                const pendingChoices = pendingContactChoices(
+                  proposal,
+                  contactResolutions[proposal.proposal_id],
                 );
                 return (
                   <Card key={proposal.proposal_id} style={styles.enrichmentCard}>
@@ -1003,49 +1021,6 @@ export default function ProposedEventsScreen() {
                             {`: ${rel.relationship_type} / ${rel.reciprocal_type}`}
                           </Text>
                         ))}
-                        {choices.map((choice) => (
-                          <View key={choice.ref} style={{ gap: 6 }}>
-                            <Text style={styles.proposalMeta}>Who is {choice.display_name}?</Text>
-                            {[
-                              ...choice.candidates.map((c) => ({
-                                value: c.contact_id,
-                                label: c.display_name,
-                              })),
-                              ...(choice.can_create
-                                ? [
-                                    {
-                                      value: 'create',
-                                      label: `Create a new contact for ${choice.display_name}`,
-                                    },
-                                  ]
-                                : []),
-                            ].map((option) => {
-                              const selected =
-                                contactResolutions[proposal.proposal_id]?.[choice.ref] ===
-                                option.value;
-                              return (
-                                <Pressable
-                                  key={option.value}
-                                  accessibilityRole="radio"
-                                  accessibilityState={{ checked: selected }}
-                                  onPress={() =>
-                                    setContactResolutions((current) => ({
-                                      ...current,
-                                      [proposal.proposal_id]: {
-                                        ...current[proposal.proposal_id],
-                                        [choice.ref]: option.value,
-                                      },
-                                    }))
-                                  }
-                                >
-                                  <Text style={styles.reasonText}>
-                                    {selected ? '●' : '○'} {option.label}
-                                  </Text>
-                                </Pressable>
-                              );
-                            })}
-                          </View>
-                        ))}
                       </View>
                     ) : null}
                     {proposal.evidence ? (
@@ -1054,12 +1029,64 @@ export default function ProposedEventsScreen() {
                     {proposal.source_evidence?.length ? (
                       <ArchiveEvidence sources={proposal.source_evidence} />
                     ) : null}
+                    {choices.length ? (
+                      <View style={styles.contactAnswers}>
+                        <Text style={styles.proposalTitle}>
+                          {pendingChoices.length ? 'Needs your answer' : 'Your choices'}
+                        </Text>
+                        {choices.map((choice) => {
+                          const answer = contactChoiceOptions(choice).find(
+                            (option) =>
+                              option.value ===
+                              contactResolutions[proposal.proposal_id]?.[choice.ref],
+                          );
+                          return (
+                            <Pressable
+                              key={choice.ref}
+                              accessibilityRole="button"
+                              accessibilityLabel={`${answer ? 'Change answer' : 'Choose person'}: ${choice.display_name}`}
+                              disabled={isSaving}
+                              onPress={() =>
+                                setContactQuestion({
+                                  proposalId: proposal.proposal_id,
+                                  ref: choice.ref,
+                                })
+                              }
+                              style={styles.contactAnswer}
+                            >
+                              <View style={styles.proposalTitleBlock}>
+                                <Text style={styles.proposalTitle}>
+                                  Who is {choice.display_name}?
+                                </Text>
+                                <Text style={styles.proposalMeta}>
+                                  {answer?.label || 'Choose an existing contact or a new person.'}
+                                </Text>
+                              </View>
+                              <Ionicons
+                                name={answer ? 'create-outline' : 'chevron-forward'}
+                                size={20}
+                                color={theme.colors.teal}
+                              />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                     <View style={styles.actions}>
                       <Button
-                        label={action.label}
-                        onPress={() => void updateEnrichmentProposal(proposal, 'accept')}
+                        label={pendingChoices.length ? 'Choose person' : action.label}
+                        onPress={() => {
+                          if (pendingChoices.length) {
+                            setContactQuestion({
+                              proposalId: proposal.proposal_id,
+                              ref: pendingChoices[0].ref,
+                            });
+                          } else {
+                            void updateEnrichmentProposal(proposal, 'accept');
+                          }
+                        }}
                         loading={isSaving}
-                        disabled={!action.supported || (isContactChange && needsContactChoice)}
+                        disabled={!action.supported || isSaving}
                         style={styles.primaryAction}
                       />
                       <Button
@@ -1076,6 +1103,29 @@ export default function ProposedEventsScreen() {
             </>
           ) : null}
         </Animated.ScrollView>
+
+        <ProposalContactQuestionSheet
+          choice={activeContactChoice}
+          selectedValue={
+            contactQuestion
+              ? contactResolutions[contactQuestion.proposalId]?.[contactQuestion.ref]
+              : undefined
+          }
+          onClose={() => setContactQuestion(null)}
+          onSelect={(value) => {
+            if (!contactQuestion || !questionProposal || !activeContactChoice) return;
+            const resolutions = {
+              ...contactResolutions[contactQuestion.proposalId],
+              [activeContactChoice.ref]: value,
+            };
+            setContactResolutions((current) => ({
+              ...current,
+              [contactQuestion.proposalId]: resolutions,
+            }));
+            const next = pendingContactChoices(questionProposal, resolutions)[0];
+            setContactQuestion(next ? { ...contactQuestion, ref: next.ref } : null);
+          }}
+        />
 
         {activePicker ? (
           <UiDirectiveDateTimePickerSheet
@@ -1360,6 +1410,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: theme.colors.mutedInk,
     lineHeight: 18,
+  },
+  contactAnswers: {
+    marginTop: 16,
+    gap: 10,
+  },
+  contactAnswer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.md,
   },
   actions: {
     marginTop: 16,

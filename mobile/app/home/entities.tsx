@@ -384,6 +384,7 @@ export default function EntitiesScreen() {
     events: '',
     documents: '',
   });
+  const [debouncedQueries, setDebouncedQueries] = React.useState(queries);
   const [filters, setFilters] = React.useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
   const [showFilterSheet, setShowFilterSheet] = React.useState(false);
   const [contacts, setContacts] = React.useState<ContactListItem[]>([]);
@@ -402,6 +403,12 @@ export default function EntitiesScreen() {
 
   const filterSignature = React.useMemo(() => JSON.stringify(filters), [filters]);
   const query = queries[selectedEntity];
+  const searchQuery = debouncedQueries[selectedEntity];
+
+  React.useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedQueries(queries), 350);
+    return () => clearTimeout(timeout);
+  }, [queries]);
 
   const combinedFilterOptions = React.useMemo(() => {
     const optionsByKey = new Map<string, EntityFilterOption>();
@@ -606,7 +613,7 @@ export default function EntitiesScreen() {
 
   const buildCommonSearchParams = React.useCallback(() => {
     const searchParams = new URLSearchParams();
-    const trimmed = query.trim();
+    const trimmed = searchQuery.trim();
     if (trimmed) {
       searchParams.set('query', trimmed);
     }
@@ -620,7 +627,7 @@ export default function EntitiesScreen() {
       appendIds(searchParams, 'event_ids', filters.eventIds);
     }
     return searchParams;
-  }, [filters.contactIds, filters.eventIds, filters.placeIds, query, selectedEntity]);
+  }, [filters.contactIds, filters.eventIds, filters.placeIds, searchQuery, selectedEntity]);
 
   const loadContacts = React.useCallback(
     async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
@@ -630,6 +637,7 @@ export default function EntitiesScreen() {
       setLoadError(null);
       try {
         const searchParams = buildCommonSearchParams();
+        if (searchQuery.trim()) searchParams.set('include_knowledge', 'false');
         const path = searchParams.toString()
           ? `/mobile/contacts?${searchParams.toString()}`
           : '/mobile/contacts';
@@ -647,7 +655,7 @@ export default function EntitiesScreen() {
         }
       }
     },
-    [buildCommonSearchParams],
+    [buildCommonSearchParams, searchQuery],
   );
 
   const loadPlaces = React.useCallback(
@@ -659,8 +667,8 @@ export default function EntitiesScreen() {
       try {
         const searchParams = buildCommonSearchParams();
         searchParams.set('limit', '500');
-        if (query.trim()) {
-          searchParams.set('q', query.trim());
+        if (searchQuery.trim()) {
+          searchParams.set('q', searchQuery.trim());
           searchParams.delete('query');
         }
         const result = (await apiFetch(`/mobile/places?${searchParams.toString()}`)) as {
@@ -679,7 +687,7 @@ export default function EntitiesScreen() {
         }
       }
     },
-    [buildCommonSearchParams, query],
+    [buildCommonSearchParams, searchQuery],
   );
 
   const loadEvents = React.useCallback(
@@ -749,11 +757,11 @@ export default function EntitiesScreen() {
       setLoadError(null);
       try {
         let result: DocumentCollectionResponse;
-        if (query.trim()) {
+        if (searchQuery.trim()) {
           result = (await apiFetch('/mobile/documents/search', {
             method: 'POST',
             body: JSON.stringify({
-              query: query.trim(),
+              query: searchQuery.trim(),
               contact_ids: filters.contactIds,
               limit: 50,
             }),
@@ -778,7 +786,7 @@ export default function EntitiesScreen() {
         }
       }
     },
-    [filters.contactIds, query],
+    [filters.contactIds, searchQuery],
   );
 
   const loadCurrentEntity = React.useCallback(
@@ -820,11 +828,8 @@ export default function EntitiesScreen() {
 
   React.useEffect(() => {
     const shouldShowInitialLoader = !hasLoadedOnceRef.current[selectedEntity];
-    const timeout = setTimeout(() => {
-      void loadCurrentEntity({ showInitialLoader: shouldShowInitialLoader });
-      hasLoadedOnceRef.current[selectedEntity] = true;
-    }, 180);
-    return () => clearTimeout(timeout);
+    void loadCurrentEntity({ showInitialLoader: shouldShowInitialLoader });
+    hasLoadedOnceRef.current[selectedEntity] = true;
   }, [focusTick, filterSignature, loadCurrentEntity, selectedEntity]);
 
   const handleRefresh = React.useCallback(() => {
@@ -1350,6 +1355,8 @@ const styles = StyleSheet.create({
   rowShell: {
     flexDirection: 'row',
     alignItems: 'stretch',
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
   },
   simpleCardTapArea: {
     borderRadius: theme.radius.lg,

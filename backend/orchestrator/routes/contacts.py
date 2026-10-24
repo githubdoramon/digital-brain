@@ -41,6 +41,7 @@ def _search_mobile_contacts(
     place_ids: list[str] | None,
     event_ids: list[str] | None,
     include_voice_profile: bool = False,
+    include_knowledge: bool = True,
     user_email: str | None = None,
 ) -> list[dict[str, Any]]:
     filters = [
@@ -52,7 +53,7 @@ def _search_mobile_contacts(
     clean_query = str(query or "").strip()
 
     knowledge_ids = []
-    if clean_query and user_email:
+    if clean_query and include_knowledge and user_email:
         import knowledge
 
         knowledge_ids = list(knowledge.contact_matches(user_email, clean_query))
@@ -185,6 +186,7 @@ def create_contacts_router() -> APIRouter:
         request: Request,
         user: dict = Depends(get_current_user),
         query: str | None = Query(default=None),
+        include_knowledge: bool = Query(default=True),
         contact_ids: list[str] | None = Query(default=None),
         place_ids: list[str] | None = Query(default=None),
         event_ids: list[str] | None = Query(default=None),
@@ -206,6 +208,7 @@ def create_contacts_router() -> APIRouter:
                     place_ids=clean_place_ids,
                     event_ids=clean_event_ids,
                     include_voice_profile=include_voice_profile,
+                    include_knowledge=include_knowledge,
                     user_email=user["email"],
                 )
             }
