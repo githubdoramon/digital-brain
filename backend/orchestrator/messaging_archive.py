@@ -403,6 +403,8 @@ def identities(
     owner: str, contact_id: str | None = None, provider: Provider = Provider.WHATSAPP,
     *, query: str = "", limit: int = 500, offset: int = 0,
 ) -> list[dict]:
+    from messaging_links import source_link
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT i.*, c.display_name AS contact_name, d.source_username, d.source_phone,
@@ -424,7 +426,17 @@ def identities(
             (owner, provider.value, contact_id, contact_id, query.strip(), query.strip(),
              min(max(limit, 1), 500), max(offset, 0)),
         )
-        return cur.fetchall()
+        return [
+            {
+                **row,
+                "source_link": source_link(
+                    provider.value, row["external_id"],
+                    source_username=row.get("source_username"),
+                    source_phone=row.get("source_phone"),
+                ),
+            }
+            for row in cur.fetchall()
+        ]
 
 
 def link_identity(

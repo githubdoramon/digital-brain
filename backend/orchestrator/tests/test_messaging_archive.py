@@ -1341,6 +1341,10 @@ def test_mobile_identity_management_search_link_move_and_unlink(database, telegr
     params = {'provider': provider, 'q': 'UNIQUE_HANDLE', 'limit': 1}
     found = client.get(base, params=params).json()['identities']
     assert [row['identity_id'] for row in found] == [identity['identity_id']]
+    expected_url = ('https://t.me/unique_handle' if provider == 'telegram'
+                    else 'https://wa.me/15550000001')
+    assert found[0]['source_link']['url'] == expected_url
+    assert found[0]['source_link']['target'] == 'conversation'
     assert client.get(base, params={**params, 'offset': 1}).json()['identities'] == []
     assert client.get(base, params={**params, 'q': '%_'}).json()['identities'] == []
     path = f"{base}/{identity['identity_id']}/contact?provider={provider}"
@@ -1352,6 +1356,7 @@ def test_mobile_identity_management_search_link_move_and_unlink(database, telegr
                                   'expected_contact_id': None}).status_code == 200
     linked = client.get(base, params={'provider': provider, 'contact_id': 'sample-contact'}).json()['identities']
     assert [row['identity_id'] for row in linked] == [identity['identity_id']]
+    assert linked[0]['source_link']['url'] == expected_url
     assert client.put(path, json={'contact_id': 'second-contact',
                                   'expected_contact_id': None}).status_code == 409
     assert client.put(path, json={'contact_id': 'second-contact',

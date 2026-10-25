@@ -44,6 +44,11 @@ intelligence builds on the same evidence rather than bypassing archive storage.
   searching the archive, linking, moving links with confirmation, and unlinking.
   Search is paginated on the server; explicit expected-contact checks reject stale
   changes. Mobile uses `/mobile/messaging/identities` through the frontend proxy.
+  Linked account rows open controller-derived WhatsApp conversation or Telegram
+  username/phone URLs through the platform link handler. Identities without a
+  supported destination retain their link management actions without an open
+  action; numeric Telegram IDs and WhatsApp LIDs are not converted into guessed
+  destinations. Physical app handoff still depends on installed app/link settings.
   Pairing and connection settings remain on web System → Messengers. Archived
   knowledge also remains available through normal search/chat and confirmed
   contact associations.

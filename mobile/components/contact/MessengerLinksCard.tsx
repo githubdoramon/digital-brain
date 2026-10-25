@@ -4,6 +4,7 @@ import React from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -29,6 +30,7 @@ type Identity = {
   source_phone: string | null;
   contact_id: string | null;
   contact_name: string | null;
+  source_link?: { url: string; label: string; target: 'conversation' | 'message' } | null;
 };
 type LinkedIdentity = Identity & { provider: Provider };
 const providers: Provider[] = ['whatsapp', 'telegram'];
@@ -199,19 +201,41 @@ export function MessengerLinksCard({
       ) : linked.length ? (
         linked.map((identity) => (
           <View key={`${identity.provider}:${identity.identity_id}`} style={styles.row}>
-            <Ionicons
-              name={identity.provider === 'whatsapp' ? 'logo-whatsapp' : 'paper-plane-outline'}
-              size={20}
-              color={theme.colors.teal}
-            />
-            <View style={styles.copy}>
-              <Text style={styles.name}>
-                {identity.display_name || providerName(identity.provider)}
-              </Text>
-              <Text style={styles.muted}>
-                {providerName(identity.provider)} · {identityDetails(identity)}
-              </Text>
-            </View>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={
+                identity.source_link
+                  ? `${identity.source_link.label}: ${identity.display_name || contactName}`
+                  : identity.display_name || providerName(identity.provider)
+              }
+              disabled={!identity.source_link}
+              onPress={() => {
+                if (!identity.source_link) return;
+                void Linking.openURL(identity.source_link.url).catch(() =>
+                  showError(
+                    `Unable to open ${providerName(identity.provider)}. Try opening the app directly.`,
+                  ),
+                );
+              }}
+              style={styles.accountLink}
+            >
+              <Ionicons
+                name={identity.provider === 'whatsapp' ? 'logo-whatsapp' : 'paper-plane-outline'}
+                size={20}
+                color={theme.colors.teal}
+              />
+              <View style={styles.copy}>
+                <Text style={styles.name}>
+                  {identity.display_name || providerName(identity.provider)}
+                </Text>
+                <Text style={styles.muted}>
+                  {providerName(identity.provider)} · {identityDetails(identity)}
+                </Text>
+              </View>
+              {identity.source_link ? (
+                <Ionicons name="open-outline" size={18} color={theme.colors.teal} />
+              ) : null}
+            </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Unlink ${identity.display_name || providerName(identity.provider)}`}
@@ -355,6 +379,13 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: '600', color: theme.colors.ink },
   muted: { fontSize: 13, lineHeight: 19, color: theme.colors.mutedInk },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  accountLink: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
   copy: { flex: 1, gap: 4 },
   unlink: { padding: 12 },
   picker: { flex: 1, gap: 12 },

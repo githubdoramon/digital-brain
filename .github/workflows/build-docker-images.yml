@@ -373,7 +373,7 @@ jobs:
         run: npx eslint .
 
   lint-mobile:
-    name: Lint Mobile
+    name: Lint and Typecheck Mobile
     needs: detect-changes
     if: needs.detect-changes.outputs.mobile == 'true'
     runs-on: ubuntu-latest
@@ -397,6 +397,9 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
+
+      - name: Check TypeScript types
+        run: npm run typecheck
 
   build-frontend:
     name: Build Frontend Image
@@ -574,7 +577,7 @@ jobs:
 
           if [ "${MOBILE_CHANGED}" = "true" ]; then
             if [ "${LINT_MOBILE_RESULT}" != "success" ]; then
-              echo "Mobile lint did not succeed."
+              echo "Mobile lint or type checking did not succeed."
               exit 1
             fi
           fi
