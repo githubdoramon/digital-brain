@@ -9,9 +9,8 @@ updates:
     open-pull-requests-limit: 0
     ignore:
       # Defer breaking web toolchain upgrades until a coordinated migration.
+      # Ignore all Next.js updates until a coordinated upgrade.
       - dependency-name: next
-        update-types:
-          - version-update:semver-major
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
