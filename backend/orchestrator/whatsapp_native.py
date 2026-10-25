@@ -141,10 +141,34 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     await state(ConnectionState.ATTENTION, "history_incomplete")
                 await asyncio.sleep(10)
 
+        async def refresh_identities():
+            from messaging_identity import (
+                observe_mappings,
+                refresh_whatsapp_mappings,
+                verified_pair,
+            )
+
+            while True:
+                await connected_event.wait()
+                client = client_holder[0]
+                try:
+                    pair = verified_pair(client.advanced.get_pn(), client.advanced.get_lid())
+                    if pair:
+                        await asyncio.to_thread(observe_mappings, account_id, generation, [pair])
+                    await refresh_whatsapp_mappings(client, account_id, generation)
+                except Exception:
+                    # Metadata recovery never blocks live/history capture.
+                    pass
+                await asyncio.sleep(60)
+
         requester = asyncio.create_task(request_history())
+        identities = asyncio.create_task(refresh_identities())
         try:
             await app.run()
         finally:
+            identities.cancel()
+            with suppress(asyncio.CancelledError):
+                await identities
             requester.cancel()
             with suppress(asyncio.CancelledError):
                 await requester

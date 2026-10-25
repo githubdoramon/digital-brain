@@ -72,7 +72,15 @@ def message_record(message, self_id: int, chat, sender=None, origin: Origin = Or
         return None
     actor = message.from_id or (PeerUser(self_id) if message.out else message.peer_id)
     reply = getattr(message.reply_to, "reply_to_msg_id", None)
+    from messaging_identity import telegram_profile
+
+    profiles = {}
+    for entity in (chat, sender):
+        profile = telegram_profile(entity)
+        if profile and profile['external_id'] in (peer_id(actor), peer_id(message.peer_id)):
+            profiles[profile['external_id']] = profile
     return {
+        "profiles": list(profiles.values()),
         "kind": RecordKind.EDIT.value if message.edit_date else RecordKind.MESSAGE.value,
         "origin": origin.value,
         "chat": peer_id(message.peer_id),

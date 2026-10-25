@@ -82,6 +82,7 @@ def database(monkeypatch, request):
                 "0088_command_learning_ownership.sql",
                 "0089_learning_scope.sql",
                 "0090_learning_evidence_recovery.sql",
+                "0092_messenger_identity_profiles.sql",
             ):
                 if (
                     name == "0088_command_learning_ownership.sql"
@@ -93,6 +94,7 @@ def database(monkeypatch, request):
                     "0087_background_learning_recovery.sql",
                     "0089_learning_scope.sql",
                     "0090_learning_evidence_recovery.sql",
+                "0092_messenger_identity_profiles.sql",
                 } and getattr(request, "param", None) in {
                     "pre_efficiency",
                     "pre_fairness",

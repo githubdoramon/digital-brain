@@ -148,3 +148,21 @@ focused ESLint pass. These are local/offline checks, not live account proof.
 The six-month cutoff change passes 41 messaging tests, including calendar/month-end
 boundaries, both-provider staging, old edits, queued history, and Telegram stopping
 on the initial or a resumed page.
+
+## Participant profile recovery
+
+Migration `0092_messenger_identity_profiles.sql` stores current username/phone
+metadata on individual identities, including people observed in groups. Existing
+direct-chat metadata is copied once during migration. Full provider User objects
+refresh names and profile details; partial (`min`) entities cannot erase a known
+profile. Observation timestamps prevent older snapshots from overwriting newer
+ones. A full current profile may clear a removed username or unavailable phone.
+
+An independent native-runtime worker refreshes five due archived people per minute,
+including people whose messages predate the import window. It uses exact Telegram
+user IDs and the authenticated session, never name matching. Successful snapshots
+refresh after 24 hours; failures back off for an hour, and Telegram flood waits
+pause this lane. Unresolvable/private details remain absent. Disconnect/generation
+checks reject late writes. This lane does not run an LLM or require new messages.
+Live/history profile observations commit with staging but are excluded from the
+message receipt hash, so metadata-only refreshes do not requeue message evidence.

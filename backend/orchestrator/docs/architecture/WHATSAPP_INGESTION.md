@@ -56,6 +56,25 @@ intelligence builds on the same evidence rather than bypassing archive storage.
   exchange. Dates/sender attribution survive tool compaction, and the verifier
   requires inspection of the actual matching message before final synthesis.
 
+### Verified account aliases and existing identity recovery
+
+Migration `0092_messenger_identity_profiles.sql` retains provider-verified phone/LID
+pairs separately from source message identifiers. Live `sender`/`sender_alt` pairs
+and exact keyed `contact.get_user_info` responses are accepted; names, linked contact
+names and message prose are never mapping evidence. The independent runtime refresh
+lane checks five due archived phone identities per minute, including existing data,
+with 24-hour success cadence and one-hour retry backoff. It needs no new messages
+and makes no LLM calls. The existing SDK API is used without a native wheel change.
+
+Identity listing groups verified aliases **before** filtering/pagination, preferring
+the phone identity for opening a conversation. `source_identities` retains every
+original identity ID/address, and message, conversation and revision keys never
+change. A compatible existing contact association propagates to the other alias;
+manual link/unlink updates the displayed account's aliases atomically with audit
+rows and stale-selection checks. Different manual contact assignments remain
+separate until explicitly corrected. Contradictory provider mappings are retained
+as conflicts and excluded from grouping. No production data needs a manual rewrite.
+
 ### Historical import window and explicit requests
 
 Historical imports are limited to six calendar months before the current UTC

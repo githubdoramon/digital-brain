@@ -231,7 +231,7 @@ def live_record(event: Any, self_jid: str) -> dict | None:
     data = event.data
     info = data.message_info
     source = info.source
-    return normalize_message(
+    record = normalize_message(
         proto=data.raw_proto,
         chat=source.chat,
         sender=source.sender,
@@ -242,6 +242,12 @@ def live_record(event: Any, self_jid: str) -> dict | None:
         name=info.push_name,
         self_jid=self_jid,
     )
+    if record:
+        from messaging_identity import verified_pair
+
+        pair = verified_pair(source.sender, getattr(source, 'sender_alt', None))
+        record['identity_mappings'] = [pair] if pair else []
+    return record
 
 
 def history_records(proto: Any, self_jid: str, on_error=None, *, cutoff: datetime | None = None):

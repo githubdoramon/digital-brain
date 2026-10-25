@@ -203,6 +203,7 @@ def database(monkeypatch):
         conn.execute(migration.with_name("0074_telegram_archive.sql").read_text())
         conn.execute(migration.with_name("0075_whatsapp_history_requests.sql").read_text())
         conn.execute(migration.with_name("0078_messaging_source_links.sql").read_text())
+        conn.execute(migration.with_name("0092_messenger_identity_profiles.sql").read_text())
         # This fixture intentionally models only archive tables. Full migration
         # 0076 and its shared-domain dependencies are exercised by test_intelligence.
         conn.execute("ALTER TABLE messaging_messages ADD COLUMN forwarded BOOLEAN NOT NULL DEFAULT TRUE")
@@ -1331,7 +1332,7 @@ def test_mobile_identity_management_search_link_move_and_unlink(database, telegr
     identity = next(row for row in archive.identities(OWNER, provider=source) if not row['is_self'])
     with database() as conn:
         conn.execute("INSERT INTO contacts VALUES ('second-contact', 'Second Contact', ARRAY[]::text[])")
-        conn.execute("UPDATE messaging_conversations SET source_username='unique_handle' WHERE external_id=%s",
+        conn.execute("UPDATE messaging_identities SET source_username='unique_handle' WHERE external_id=%s",
                      (identity['external_id'],))
     app = FastAPI()
     app.include_router(create_messaging_router())
@@ -1389,3 +1390,231 @@ def test_mobile_identity_search_paginates_equal_names_without_losing_links(datab
     assert len({row['identity_id'] for row in first + second}) == 4
     assert client.get('/mobile/messaging/identities', params={'limit': 501}).status_code == 422
     assert client.get('/mobile/messaging/identities', params={'offset': -1}).status_code == 422
+
+
+def test_verified_whatsapp_aliases_preserve_messages_and_manage_links_atomically(database):
+    from messaging_identity import observe_mappings
+
+    lid = '900000000001@lid'
+    pn = '15550000001@s.whatsapp.net'
+    account = ingest()
+    ingest(chat=lid, sender=lid, id='LID-MESSAGE')
+    before = archive.identities(OWNER)
+    assert len(before) == 2
+    lid_row = next(row for row in before if row['external_id'] == lid)
+    pn_row = next(row for row in before if row['external_id'] == pn)
+    archive.link_identity(OWNER, lid_row['identity_id'], 'sample-contact')
+    with database() as conn:
+        original_messages = conn.execute('SELECT message_id,sender_identity_id,conversation_id FROM messaging_messages ORDER BY message_id').fetchall()
+    observe_mappings(account['account_id'], account['generation'], [{'lid': lid, 'phone': pn}])
+    merged = archive.identities(OWNER, 'sample-contact')
+    assert len(merged) == 1
+    assert merged[0]['identity_id'] == pn_row['identity_id']
+    assert {row['external_id'] for row in merged[0]['source_identities']} == {lid, pn}
+    assert merged[0]['source_link']['url'] == 'https://wa.me/15550000001'
+    assert len(archive.identities(OWNER, query=lid.split('@')[0], limit=1)) == 1
+    assert archive.identities(OWNER, limit=1, offset=1) == []
+    assert archive.identities(OTHER) == []
+    # Old identity refs still work, but apply to the complete verified account.
+    archive.link_identity(OWNER, lid_row['identity_id'], None,
+                          expected_contact_id='sample-contact', require_unchanged=True)
+    with database() as conn:
+        assert all(row['contact_id'] is None for row in conn.execute('SELECT contact_id FROM messaging_identities'))
+        assert conn.execute('SELECT message_id,sender_identity_id,conversation_id FROM messaging_messages ORDER BY message_id').fetchall() == original_messages
+    archive.link_identity(OWNER, merged[0]['identity_id'], 'sample-contact',
+                          expected_contact_id=None, require_unchanged=True)
+    assert len(archive.search(OWNER, contact_ids=['sample-contact'])) == 2
+    with pytest.raises(ValueError, match='link_changed'):
+        archive.link_identity(OWNER, lid_row['identity_id'], None,
+                              expected_contact_id=None, require_unchanged=True)
+    with database() as conn:
+        assert {row['contact_id'] for row in conn.execute('SELECT contact_id FROM messaging_identities')} == {'sample-contact'}
+
+
+def test_mapping_conflicts_and_manual_contact_conflicts_are_never_silently_merged(database):
+    from messaging_identity import observe_mappings
+
+    lid = '900000000001@lid'
+    pn = '15550000001@s.whatsapp.net'
+    account = ingest()
+    ingest(chat=lid, sender=lid, id='LID-MESSAGE')
+    with database() as conn:
+        conn.execute("INSERT INTO contacts VALUES ('second', 'Second Contact', ARRAY[]::text[])")
+    for row in archive.identities(OWNER):
+        archive.link_identity(OWNER, row['identity_id'], 'second' if row['external_id'] == lid else 'sample-contact')
+    observe_mappings(account['account_id'], account['generation'], [{'lid': lid, 'phone': pn}])
+    assert len(archive.identities(OWNER)) == 2
+    with database() as conn:
+        assert {row['contact_id'] for row in conn.execute('SELECT contact_id FROM messaging_identities')} == {'second', 'sample-contact'}
+    lid_row = next(row for row in archive.identities(OWNER) if row['external_id'] == lid)
+    archive.link_identity(OWNER, lid_row['identity_id'], 'sample-contact', expected_contact_id='second', require_unchanged=True)
+    assert len(archive.identities(OWNER)) == 1
+    # A contradictory provider mapping disables grouping, retaining both proofs.
+    observe_mappings(account['account_id'], account['generation'], [{'lid': lid, 'phone': '15550000002@s.whatsapp.net'}])
+    assert len(archive.identities(OWNER)) == 2
+    with database() as conn:
+        assert all(row['conflicted'] for row in conn.execute('SELECT conflicted FROM messaging_identity_mappings'))
+    # Stopped generations cannot insert new mappings.
+    archive.set_connection(OWNER, False)
+    observe_mappings(account['account_id'], account['generation'], [{'lid': '900000000002@lid', 'phone': pn}])
+    with database() as conn:
+        assert conn.execute('SELECT count(*) AS n FROM messaging_identity_mappings').fetchone()['n'] == 2
+
+
+def test_telegram_group_profiles_refresh_without_reimport_and_partial_entities_do_not_erase(database, telegram_types):
+    from messaging_normalization import Provider
+    from telegram_normalization import message_record
+
+    t = telegram_types
+    chat = t.Chat(id=500, title='Team', photo=t.ChatPhotoEmpty(), participants_count=2,
+                  date=datetime(2026, 1, 1, tzinfo=timezone.utc), version=1)
+    message = t.Message(id=1, peer_id=t.PeerChat(500), from_id=t.PeerUser(12),
+                        date=datetime(2026, 1, 1, tzinfo=timezone.utc), message='Group update')
+    sender = t.User(id=12, first_name='Person', username='first_handle', phone='15550000001')
+    account = archive.set_connection(OWNER, True, Provider.TELEGRAM)
+    def capture(entity):
+        item = message_record(message, 99, chat, entity)
+        archive.stage_records(account['account_id'], account['generation'], [item])
+        archive.drain_once()
+    capture(sender)
+    row = archive.identities(OWNER, provider=Provider.TELEGRAM)[0]
+    assert row['source_link']['url'] == 'https://t.me/first_handle'
+    assert row['external_id'] == '12@telegram.user'
+    sender.username = 'changed_handle'
+    capture(sender)
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_link']['url'] == 'https://t.me/changed_handle'
+    capture(t.User(id=12, first_name='Person', min=True))
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_username'] == 'changed_handle'
+    # A full, current profile can remove a username; phone is the fallback.
+    sender.username = None
+    capture(sender)
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_link']['url'] == 'https://t.me/+15550000001'
+    sender.phone = None
+    capture(sender)
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_link'] is None
+    with database() as conn:
+        assert conn.execute('SELECT count(*) AS n FROM messaging_messages').fetchone()['n'] == 1
+        assert conn.execute('SELECT count(*) AS n FROM messaging_revisions').fetchone()['n'] == 1
+        assert conn.execute('SELECT count(*) AS n FROM messaging_inbox').fetchone()['n'] == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_telegram_group_people_are_refreshed_with_generation_checks(database, telegram_types):
+    from messaging_identity import refresh_telegram_profiles
+    from messaging_normalization import Provider
+
+    account = telegram_ingest(telegram_types, chat=telegram_types.PeerChat(500))
+    # This person was archived before participant profile capture existed.
+    peer = next(row for row in archive.identities(OWNER, provider=Provider.TELEGRAM) if row['external_id'] == '12@telegram.user')
+    with database() as conn:
+        conn.execute('UPDATE messaging_identities SET profile_observed_at=NULL, profile_next_refresh_at=NULL WHERE identity_id=%s',
+                     (peer['identity_id'],))
+    class Client:
+        async def get_entity(self, user):
+            assert user.user_id == 12
+            return telegram_types.User(id=12, first_name='Person', username='recovered_handle')
+    await refresh_telegram_profiles(Client(), account['account_id'], account['generation'])
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_link']['url'] == 'https://t.me/recovered_handle'
+    with database() as conn:
+        assert conn.execute('SELECT count(*) AS n FROM messaging_messages').fetchone()['n'] == 1
+        conn.execute('UPDATE messaging_identities SET profile_next_refresh_at=NULL WHERE identity_id=%s', (peer['identity_id'],))
+    class DisconnectedClient:
+        async def get_entity(self, user):
+            archive.set_connection(OWNER, False, Provider.TELEGRAM)
+            return telegram_types.User(id=12, first_name='Person', username='stale_handle')
+    await refresh_telegram_profiles(DisconnectedClient(), account['account_id'], account['generation'])
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_username'] == 'recovered_handle'
+
+
+def test_profile_migration_backfills_existing_direct_metadata_and_preserves_ids(database):
+    from messaging_normalization import Provider
+
+    account = archive.set_connection(OWNER, True, Provider.TELEGRAM)
+    item = record(sender='12@telegram.user', chat='12@telegram.user')
+    item.update(self_jid='99@telegram.user', source_username='old_handle', source_phone='+15550000001', source_metadata_known=True)
+    archive.stage_records(account['account_id'], account['generation'], [item])
+    archive.drain_once()
+    with database() as conn:
+        before = conn.execute('SELECT message_id,sender_identity_id FROM messaging_messages').fetchall()
+        conn.execute('DROP TABLE messaging_identity_mappings')
+        conn.execute('ALTER TABLE messaging_identities DROP COLUMN source_username, DROP COLUMN source_phone, DROP COLUMN profile_observed_at, DROP COLUMN profile_next_refresh_at')
+        migration = Path(__file__).resolve().parents[1] / 'db_migrations/0092_messenger_identity_profiles.sql'
+        conn.execute(migration.read_text())
+        assert conn.execute('SELECT message_id,sender_identity_id FROM messaging_messages').fetchall() == before
+        row = conn.execute('SELECT * FROM messaging_identities').fetchone()
+        assert row['source_username'] == 'old_handle'
+        assert row['profile_next_refresh_at'] is None
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_link']['url'] == 'https://t.me/old_handle'
+
+
+def test_live_verified_alternate_ids_group_without_changing_message_sender(database, proto):
+    from messaging_normalization import live_record
+
+    lid = '900000000001@lid'
+    pn = '15550000001@s.whatsapp.net'
+    account = archive.set_connection(OWNER, True)
+    event = SimpleNamespace(data=SimpleNamespace(
+        raw_proto=proto.Message(conversation='A live update'),
+        message_info=SimpleNamespace(id='LIVE-ALIAS', timestamp=1767268800, push_name='Person',
+            source=SimpleNamespace(sender=lid, sender_alt=pn, chat=lid, is_from_me=False))))
+    item = live_record(event, '15550000000@s.whatsapp.net')
+    assert item['identity_mappings'] == [{'lid': lid, 'phone': pn}]
+    archive.stage_records(account['account_id'], account['generation'], [item])
+    archive.drain_once()
+    assert len(archive.identities(OWNER)) == 1
+    assert archive.identities(OWNER)[0]['source_link']['url'] == 'https://wa.me/15550000001'
+    with database() as conn:
+        sender = conn.execute('SELECT i.external_id FROM messaging_messages m JOIN messaging_identities i ON i.identity_id=m.sender_identity_id').fetchone()
+        assert sender['external_id'] == lid
+    event.data.message_info.source.sender_alt = '900000000002@lid'
+    assert live_record(event, '15550000000@s.whatsapp.net')['identity_mappings'] == []
+
+
+@pytest.mark.asyncio
+async def test_existing_whatsapp_numbers_recover_only_exact_provider_mapping(database):
+    pytest.importorskip('tryx')
+    from tryx.types import JID
+
+    from messaging_identity import refresh_whatsapp_mappings
+
+    account = ingest()
+    lid = '900000000001@lid'
+    ingest(chat=lid, sender=lid, id='OLD-LID')
+    class Client:
+        contact = None
+        def __init__(self, exact):
+            self.contact = self
+            self.exact = exact
+        async def get_user_info(self, target):
+            assert target.user == '15550000001'
+            key = target if self.exact else JID('15550000002', 's.whatsapp.net')
+            return {key: SimpleNamespace(lid=JID('900000000001', 'lid'))}
+    await refresh_whatsapp_mappings(Client(False), account['account_id'], account['generation'])
+    assert len(archive.identities(OWNER)) == 2
+    with database() as conn:
+        conn.execute('UPDATE messaging_identities SET profile_next_refresh_at=NULL')
+    await refresh_whatsapp_mappings(Client(True), account['account_id'], account['generation'])
+    assert len(archive.identities(OWNER)) == 1
+    with database() as conn:
+        row = conn.execute("SELECT profile_next_refresh_at>NOW()+INTERVAL '23 hours' AS backed_off FROM messaging_identities WHERE external_id='15550000001@s.whatsapp.net'").fetchone()
+        assert row['backed_off']
+
+
+def test_old_profile_snapshots_and_cross_provider_observations_are_rejected(database, telegram_types):
+    from messaging_identity import retain_profile, telegram_profile
+    from messaging_normalization import Provider
+
+    account = telegram_ingest(telegram_types)
+    current = telegram_profile(telegram_types.User(id=12, first_name='Person', username='current_handle'))
+    old = {**current, 'username': 'old_handle', 'observed_at': '2000-01-01T00:00:00+00:00'}
+    with database() as conn, conn.cursor() as cur:
+        retain_profile(cur, account['account_id'], current)
+        retain_profile(cur, account['account_id'], old)
+    assert archive.identities(OWNER, provider=Provider.TELEGRAM)[0]['source_username'] == 'current_handle'
+    bad = record()
+    bad['profiles'] = [current]
+    whatsapp = archive.set_connection(OWNER, True)
+    with pytest.raises(ValueError, match='provider_mismatch'):
+        archive.stage_records(whatsapp['account_id'], whatsapp['generation'], [bad])
+    with database() as conn:
+        assert conn.execute('SELECT count(*) AS n FROM messaging_identities WHERE account_id=%s', (whatsapp['account_id'],)).fetchone()['n'] == 0

@@ -225,6 +225,7 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
 
         await client.connect()
         capture_task = None
+        profile_task = None
         try:
             await authorize(client, pipe, state)
             me = await client.get_me()
@@ -237,6 +238,20 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
             pipe.send({"kind": "clear_password"})
             await state(ConnectionState.CONNECTED)
             capture_task = asyncio.create_task(capture(me.id))
+
+            async def refresh_profiles():
+                from messaging_identity import refresh_telegram_profiles
+
+                while client.is_connected():
+                    try:
+                        await refresh_telegram_profiles(client, account_id, generation)
+                        await asyncio.sleep(60)
+                    except FloodWaitError as exc:
+                        await asyncio.sleep(max(1, exc.seconds))
+                    except Exception:
+                        await asyncio.sleep(60)
+
+            profile_task = asyncio.create_task(refresh_profiles())
             while client.is_connected():
                 try:
                     async for dialog in client.iter_dialogs():
@@ -252,6 +267,10 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     await state(ConnectionState.ATTENTION, "history_incomplete")
                     await asyncio.sleep(60)
         finally:
+            if profile_task:
+                profile_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await profile_task
             if capture_task:
                 capture_task.cancel()
                 with suppress(asyncio.CancelledError):

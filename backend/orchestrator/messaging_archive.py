@@ -151,6 +151,10 @@ def validate_record(record: dict) -> dict:
     result["source_username"] = username(record.get("source_username"))
     result["source_phone"] = phone(record.get("source_phone"))
     result["source_metadata_known"] = record.get("source_metadata_known") is True
+    from messaging_identity import validate_mappings, validate_profiles
+
+    result["profiles"] = validate_profiles(record.get("profiles", []))
+    result["identity_mappings"] = validate_mappings(record.get("identity_mappings", []))
     result["forwarded"] = bool(record.get("forwarded", True))
     if result["conversation_kind"] not in (None, "direct", "group", "channel"):
         raise ValueError("unsupported_conversation_kind")
@@ -197,6 +201,19 @@ def stage_records(account_id: str, generation: int, records: list[dict]) -> int:
                     row["provider"] == Provider.TELEGRAM.value
                 ):
                     raise ValueError("provider_mismatch")
+        from messaging_identity import retain_mapping, retain_profile
+
+        for record in records:
+            if record['profiles'] and row['provider'] != Provider.TELEGRAM.value:
+                raise ValueError('provider_mismatch')
+            if record['identity_mappings'] and row['provider'] != Provider.WHATSAPP.value:
+                raise ValueError('provider_mismatch')
+            for profile in record.pop('profiles'):
+                if profile['external_id'] not in (record['sender'], record['chat']):
+                    raise ValueError('profile_identity_mismatch')
+                retain_profile(cur, account_id, profile, row['self_jid'] or record['self_jid'])
+            for mapping in record.pop('identity_mappings'):
+                retain_mapping(cur, account_id, mapping)
         if row["self_jid"] and any(
             r["self_jid"] and r["self_jid"] != row["self_jid"] for r in records
         ):
@@ -406,37 +423,44 @@ def identities(
     from messaging_links import source_link
 
     with get_conn() as conn, conn.cursor() as cur:
+        # Collapse only a provider-verified pair with compatible contact links.
+        # Filtering/pagination happen after grouping; message identities stay intact.
         cur.execute(
-            """SELECT i.*, c.display_name AS contact_name, d.source_username, d.source_phone,
-            COALESCE((SELECT jsonb_agg(suggestion) FROM (
-                SELECT p.contact_id, p.display_name FROM contacts p
-                WHERE i.contact_id IS NULL AND i.external_id LIKE '%%@s.whatsapp.net'
-                  AND EXISTS (SELECT 1 FROM unnest(p.phones) AS phone
-                    WHERE regexp_replace(phone, '[^0-9]', '', 'g') = split_part(i.external_id, '@', 1))
-                ORDER BY p.contact_id LIMIT 3) suggestion), '[]'::jsonb) AS suggested_contacts
-            FROM messaging_identities i
-            JOIN messaging_accounts a USING (account_id)
-            LEFT JOIN contacts c USING (contact_id)
-            LEFT JOIN messaging_conversations d ON d.account_id = i.account_id
-                AND d.external_id = i.external_id AND d.kind = 'direct'
-            WHERE a.user_email = %s AND a.provider = %s AND (%s::text IS NULL OR i.contact_id = %s)
-              AND (%s = '' OR strpos(lower(concat_ws(' ', i.display_name, i.external_id,
-                    d.source_username, d.source_phone, c.display_name)), lower(%s)) > 0)
-            ORDER BY i.display_name, i.external_id, i.identity_id LIMIT %s OFFSET %s""",
+            """WITH resolved AS (
+                SELECT i.*, CASE WHEN p.identity_id IS NOT NULL
+                    AND p.contact_id IS NOT DISTINCT FROM i.contact_id
+                    THEN p.identity_id ELSE i.identity_id END AS canonical_id
+                FROM messaging_identities i JOIN messaging_accounts a USING(account_id)
+                LEFT JOIN messaging_identity_mappings m ON m.account_id=i.account_id
+                    AND m.lid=i.external_id AND NOT m.conflicted
+                LEFT JOIN messaging_identities p ON p.account_id=i.account_id AND p.external_id=m.phone
+                WHERE a.user_email=%s AND a.provider=%s
+            ) SELECT r.*, c.display_name AS contact_name,
+                COALESCE(NULLIF(r.display_name,''),
+                    (SELECT NULLIF(alias.display_name,'') FROM resolved alias
+                     WHERE alias.canonical_id=r.identity_id AND alias.display_name<>'' LIMIT 1),
+                    c.display_name,'') AS resolved_display_name,
+                (SELECT jsonb_agg(jsonb_build_object('identity_id',alias.identity_id,
+                    'external_id',alias.external_id) ORDER BY alias.external_id)
+                 FROM resolved alias WHERE alias.canonical_id=r.identity_id) AS source_identities,
+                COALESCE((SELECT jsonb_agg(suggestion) FROM (
+                    SELECT p.contact_id,p.display_name FROM contacts p
+                    WHERE r.contact_id IS NULL AND r.external_id LIKE '%%@s.whatsapp.net'
+                      AND EXISTS (SELECT 1 FROM unnest(p.phones) AS phone
+                        WHERE regexp_replace(phone,'[^0-9]','','g')=split_part(r.external_id,'@',1))
+                    ORDER BY p.contact_id LIMIT 3) suggestion),'[]'::jsonb) AS suggested_contacts
+            FROM resolved r LEFT JOIN contacts c USING(contact_id)
+            WHERE r.identity_id=r.canonical_id AND (%s::text IS NULL OR r.contact_id=%s)
+              AND (%s='' OR EXISTS (SELECT 1 FROM resolved alias
+                WHERE alias.canonical_id=r.identity_id AND strpos(lower(concat_ws(' ',
+                  alias.display_name,alias.external_id,alias.source_username,alias.source_phone,c.display_name)),lower(%s))>0))
+            ORDER BY resolved_display_name,r.external_id,r.identity_id LIMIT %s OFFSET %s""",
             (owner, provider.value, contact_id, contact_id, query.strip(), query.strip(),
              min(max(limit, 1), 500), max(offset, 0)),
         )
-        return [
-            {
-                **row,
-                "source_link": source_link(
-                    provider.value, row["external_id"],
-                    source_username=row.get("source_username"),
-                    source_phone=row.get("source_phone"),
-                ),
-            }
-            for row in cur.fetchall()
-        ]
+        return [{**row, 'display_name': row['resolved_display_name'], 'source_link': source_link(provider.value, row['external_id'],
+                    source_username=row.get('source_username'), source_phone=row.get('source_phone'))}
+                for row in cur.fetchall()]
 
 
 def link_identity(
@@ -444,31 +468,34 @@ def link_identity(
     *, expected_contact_id: str | None = None, require_unchanged: bool = False,
 ):
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """SELECT i.contact_id FROM messaging_identities i
-            JOIN messaging_accounts a USING(account_id)
-            WHERE a.user_email = %s AND i.identity_id = %s AND a.provider = %s FOR UPDATE OF i""",
-            (owner, identity_id, provider.value),
-        )
+        # Match the metadata writer's account-first locking order.
+        cur.execute("""SELECT a.account_id FROM messaging_accounts a JOIN messaging_identities i USING(account_id)
+            WHERE a.user_email=%s AND a.provider=%s AND i.identity_id=%s FOR UPDATE OF a""",
+                    (owner, provider.value, identity_id))
+        account = cur.fetchone()
+        if not account:
+            raise LookupError('not_found')
+        cur.execute('SELECT * FROM messaging_identities WHERE identity_id=%s FOR UPDATE', (identity_id,))
         old = cur.fetchone()
-        if not old:
-            raise LookupError("not_found")
-        if require_unchanged and old["contact_id"] != expected_contact_id:
-            raise ValueError("link_changed")
+        if require_unchanged and old['contact_id'] != expected_contact_id:
+            raise ValueError('link_changed')
         if contact_id:
-            cur.execute("SELECT contact_id FROM contacts WHERE contact_id = %s", (contact_id,))
+            cur.execute('SELECT contact_id FROM contacts WHERE contact_id=%s', (contact_id,))
             if not cur.fetchone():
-                raise LookupError("contact_not_found")
-        cur.execute(
-            """UPDATE messaging_identities SET contact_id = %s, link_origin = %s
-            WHERE identity_id = %s""",
-            (contact_id, "manual" if contact_id else None, identity_id),
-        )
-        cur.execute(
-            """INSERT INTO messaging_identity_links(identity_id, old_contact_id, new_contact_id)
-            VALUES (%s, %s, %s)""",
-            (identity_id, old["contact_id"], contact_id),
-        )
+                raise LookupError('contact_not_found')
+        cur.execute("""SELECT i.identity_id,i.contact_id FROM messaging_identities i
+            WHERE i.account_id=%s AND (i.identity_id=%s OR EXISTS (
+              SELECT 1 FROM messaging_identity_mappings m WHERE m.account_id=i.account_id AND NOT m.conflicted
+              AND (m.lid=%s OR m.phone=%s) AND i.external_id IN (m.lid,m.phone)))
+            ORDER BY i.identity_id FOR UPDATE""",
+                    (account['account_id'], identity_id, old['external_id'], old['external_id']))
+        for row in cur.fetchall():
+            if row['identity_id'] != identity_id and row['contact_id'] != old['contact_id']:
+                continue  # Conflicting assignments remain independent and reviewable.
+            cur.execute('UPDATE messaging_identities SET contact_id=%s,link_origin=%s WHERE identity_id=%s',
+                        (contact_id, 'manual' if contact_id else None, row['identity_id']))
+            cur.execute('INSERT INTO messaging_identity_links(identity_id,old_contact_id,new_contact_id) VALUES (%s,%s,%s)',
+                        (row['identity_id'], row['contact_id'], contact_id))
         conn.commit()
 
 
