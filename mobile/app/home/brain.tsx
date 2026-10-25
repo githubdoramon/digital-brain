@@ -1317,7 +1317,7 @@ export function ChatConversationScreen({
 
   const allowedEmails = (process.env.EXPO_PUBLIC_ALLOWED_EMAILS ?? '')
     .split(',')
-    .map((e) => e.trim().toLowerCase())
+    .map((email: string) => email.trim().toLowerCase())
     .filter(Boolean);
   const allowed =
     allowedEmails.length === 0 || (email ? allowedEmails.includes(email.toLowerCase()) : false);
