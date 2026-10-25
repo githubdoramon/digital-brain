@@ -9,8 +9,9 @@ updates:
     open-pull-requests-limit: 0
     ignore:
       # Defer breaking web toolchain upgrades until a coordinated migration.
-      # Ignore all Next.js updates until a coordinated upgrade.
       - dependency-name: next
+        update-types:
+          - version-update:semver-major
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
@@ -35,6 +36,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     ignore:
+      # Hold Expo Router on the current Expo SDK until a coordinated migration.
+      - dependency-name: expo-router
       # Keep React Native and React aligned with the current Expo SDK.
       - dependency-name: react-native
         update-types:
