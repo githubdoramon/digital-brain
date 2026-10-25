@@ -13,6 +13,9 @@ logger = get_runtime_logger(__name__)
 
 TIME_TOLERANCE = timedelta(minutes=30)
 DEFAULT_EVENT_DURATION = timedelta(hours=1)
+# Time-only matching across a multi-day event can include an entire camera roll.
+# Longer events need deliberate media selection instead of automatic linking.
+MAX_AUTOMATIC_MEDIA_WINDOW = timedelta(hours=12)
 MAX_DISTANCE_METERS = 250.0
 
 
@@ -40,6 +43,15 @@ def suggest_event_media(
             "[event_media] search skipped because event end precedes start start=%s end=%s",
             start.isoformat(),
             end.isoformat(),
+        )
+        return []
+
+    if end - start > MAX_AUTOMATIC_MEDIA_WINDOW:
+        logger.info(
+            "[event_media] search skipped because event window is too broad "
+            "duration_hours=%.1f max_duration_hours=%.1f",
+            (end - start).total_seconds() / 3600,
+            MAX_AUTOMATIC_MEDIA_WINDOW.total_seconds() / 3600,
         )
         return []
 

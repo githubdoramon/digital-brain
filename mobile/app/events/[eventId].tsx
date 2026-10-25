@@ -459,7 +459,14 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
                       token,
                     },
                   );
-                  await reloadEvent();
+                  setEvent((current) =>
+                    current
+                      ? {
+                          ...current,
+                          photos: (current.photos || []).filter((photo) => photo.asset_id !== assetId),
+                        }
+                      : current,
+                  );
                   showSuccess('Photo unlinked.');
                 } catch (error) {
                   console.warn('[events] photo unlink failed', error);
@@ -471,7 +478,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
         ],
       );
     },
-    [eventId, reloadEvent, showError, showSuccess, token],
+    [eventId, showError, showSuccess, token],
   );
 
   const content = (

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, StyleSheet, Text, View } from 'react-native';
 
 import { API_BASE_URL } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -76,12 +76,16 @@ export function EventPhotoCard({
       {photos.length === 0 ? (
         <Text style={styles.emptyText}>No photos linked yet.</Text>
       ) : (
-        <ScrollView
+        <FlatList
           horizontal
+          data={photos}
+          keyExtractor={(photo) => photo.asset_id}
+          initialNumToRender={4}
+          maxToRenderPerBatch={4}
+          windowSize={3}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.photoRow}
-        >
-          {photos.map((photo) => {
+          renderItem={({ item: photo }) => {
             const taggedContacts = photo.tagged_contacts || [];
             const detectedPeople = (photo.detected_people || [])
               .filter(
@@ -164,8 +168,8 @@ export function EventPhotoCard({
                 ) : null}
               </View>
             );
-          })}
-        </ScrollView>
+          }}
+        />
       )}
     </>
   );

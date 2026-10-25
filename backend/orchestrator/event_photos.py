@@ -194,7 +194,6 @@ def list_event_photos_for_events(event_ids: Sequence[str]) -> dict[str, list[dic
         photo = photos_by_key.get(key)
         if photo is None:
             photo = _serialize_photo_row(row)
-            photo = _refresh_photo_people_metadata(event_id, photo)
             photos_by_key[key] = photo
             photos_by_event.setdefault(event_id, []).append(photo)
         contact_id = str(row.get("contact_id") or "").strip()
