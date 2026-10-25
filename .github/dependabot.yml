@@ -1,11 +1,14 @@
 version: 2
+# Open automatic PRs only for known security vulnerabilities.
+# Plan routine dependency upgrades as occasional maintenance batches.
 updates:
   - package-ecosystem: npm
     directory: /frontend/web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     ignore:
-      # Defer breaking web toolchain upgrades until we plan a coordinated migration.
+      # Defer breaking web toolchain upgrades until a coordinated migration.
       - dependency-name: next
         update-types:
           - version-update:semver-major
@@ -22,16 +25,16 @@ updates:
         update-types:
           - version-update:semver-major
     groups:
-      frontend-non-security:
-        applies-to: version-updates
-        update-types:
-          - minor
-          - patch
+      frontend-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /mobile
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     ignore:
       # Keep React Native and React aligned with the current Expo SDK.
       - dependency-name: react-native
@@ -109,55 +112,78 @@ updates:
         update-types:
           - version-update:semver-major
     groups:
-      mobile-non-security:
-        applies-to: version-updates
-        update-types:
-          - minor
-          - patch
+      mobile-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: pip
     directory: /backend/orchestrator
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
-      orchestrator-non-security:
-        applies-to: version-updates
-        update-types:
-          - minor
-          - patch
+      orchestrator-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: pip
     directory: /backend/robot-gateway
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
-      robot-gateway-non-security:
-        applies-to: version-updates
-        update-types:
-          - minor
-          - patch
+      robot-gateway-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /frontend/web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     ignore:
-      # Stay on the supported Node 24 LTS line; revisit Node 26 with app validation.
+      # Stay on the supported Node 24 LTS line.
       - dependency-name: node
         update-types:
           - version-update:semver-major
+    groups:
+      frontend-docker-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /backend/orchestrator
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      orchestrator-docker-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /backend/robot-gateway
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      robot-gateway-docker-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
