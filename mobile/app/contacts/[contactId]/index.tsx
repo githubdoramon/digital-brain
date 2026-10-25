@@ -73,9 +73,33 @@ const textToList = (value: string) =>
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+const sameStringList = (left: string[] | null | undefined, right: string[]) => {
+  const normalizedLeft = (left ?? []).map((item) => item.trim()).filter(Boolean);
+  return (
+    normalizedLeft.length === right.length &&
+    normalizedLeft.every((item, index) => item === right[index])
+  );
+};
 
 function formatIsoDate(value: Date) {
   return formatDateOnlyLocal(value);
+}
+
+function changeYearPreservingMonthAndDay(value: Date, year: number) {
+  const month = value.getMonth();
+  const day = value.getDate();
+  const next = new Date(value);
+  next.setDate(1);
+  next.setFullYear(year);
+  next.setMonth(month);
+  next.setDate(Math.min(day, new Date(year, month + 1, 0).getDate()));
+  return next;
+}
+
+function floatingOffset(insetBottom: number, keyboardHeight: number) {
+  const keyboardInset =
+    Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
+  return insetBottom + 20 + keyboardInset;
 }
 
 function resolvePickerDate(value: DateType): Date | null {
@@ -143,6 +167,7 @@ export default function ContactDetailScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [includeBirthYear, setIncludeBirthYear] = useState(true);
   const [draftDate, setDraftDate] = useState<Date | null>(null);
@@ -232,11 +257,13 @@ export default function ContactDetailScreen() {
   }, [heroOpacity, heroTranslate]);
 
   useEffect(() => {
-    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
       setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates.height);
     });
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
       setKeyboardVisible(false);
+      setKeyboardHeight(0);
     });
     return () => {
       showSubscription.remove();
@@ -280,28 +307,27 @@ export default function ContactDetailScreen() {
       );
     }
     if (!contact) return false;
-    const base = {
-      display_name: contact.display_name,
-      aliases: contact.aliases,
-      emails: contact.emails,
-      phones: contact.phones,
-      links: contact.links,
-      tags: contact.tags,
-      comments: contact.comments,
-      birthday: contact.birthday,
-    };
-    const current = {
-      display_name: draft.display_name,
-      aliases: parsedAliases,
-      emails: parsedEmails,
-      phones: parsedPhones,
-      links: parsedLinks,
-      tags: parsedTags,
-      comments: draft.comments,
-      birthday: draft.birthday,
-    };
-    return JSON.stringify(base) !== JSON.stringify(current);
-  }, [aliasesText, contact, draft, emailsText, isCreating, linksText, phonesText, tagsText]);
+    return (
+      contact.display_name !== draft.display_name ||
+      !sameStringList(contact.aliases, parsedAliases) ||
+      !sameStringList(contact.emails, parsedEmails) ||
+      !sameStringList(contact.phones, parsedPhones) ||
+      !sameStringList(contact.links, parsedLinks) ||
+      !sameStringList(contact.tags, parsedTags) ||
+      contact.comments !== draft.comments ||
+      (contact.birthday ?? null) !== (draft.birthday ?? null)
+    );
+  }, [
+    aliasesText,
+    birthdayValue,
+    contact,
+    draft,
+    emailsText,
+    isCreating,
+    linksText,
+    phonesText,
+    tagsText,
+  ]);
 
   const handleSave = async () => {
     if (!draft) return;
@@ -604,6 +630,7 @@ export default function ContactDetailScreen() {
         onPress={handleSave}
         disabled={isSaving}
         loading={isSaving}
+        bottomOffset={floatingOffset(insets.bottom, keyboardHeight)}
       />
       <BottomSheet visible={showDatePicker} onClose={handleCloseDatePicker} baseBottomPadding={12}>
         <View style={styles.datePickerHeader}>
@@ -641,6 +668,11 @@ export default function ContactDetailScreen() {
         <LightDateTimePicker
           mode="single"
           date={activePickerDate}
+          onYearChange={(year) => {
+            setDraftDate((current) =>
+              current ? changeYearPreservingMonthAndDay(current, year) : current,
+            );
+          }}
           onChange={({ date }: { date: DateType }) => {
             const resolved = resolvePickerDate(date);
             if (resolved) {
