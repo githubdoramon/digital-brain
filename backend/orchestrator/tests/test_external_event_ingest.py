@@ -234,6 +234,9 @@ def test_generate_and_persist_event_tags_cleans_existing_fragments(monkeypatch):
 
     assert result["updated"] is True
     assert result["tags"] == ["Work"]
+    assert result["input_fingerprint"] == events.event_tag_fingerprint(
+        {"title": "Team sync", "summary": "Discussed project status.", "tags": ["Work"]}
+    )
     assert updates == [(["Work"], [0.1, 0.2], "event:dirty-tags")]
 
 

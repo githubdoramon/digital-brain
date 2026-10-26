@@ -16,6 +16,8 @@ def test_enqueue_event_tag_enrichment_uses_replacing_job(monkeypatch):
         }
 
     monkeypatch.setattr(event_tag_jobs.async_jobs, "enqueue_job", fake_enqueue_job)
+    event = {"title": "Sample meeting", "summary": "Review the report", "tags": []}
+    monkeypatch.setattr(event_tag_jobs.events_service, "get_event_by_id", lambda _: event)
 
     result = event_tag_jobs.enqueue_event_tag_enrichment(" event:123 ", source="event_command")
 
@@ -28,6 +30,7 @@ def test_enqueue_event_tag_enrichment_uses_replacing_job(monkeypatch):
             "status_message": "Queued",
             "delay_seconds": 0,
             "replace_existing": True,
+            "input_fingerprint": event_tag_jobs.events_service.event_tag_fingerprint(event),
         }
     ]
     assert result == {

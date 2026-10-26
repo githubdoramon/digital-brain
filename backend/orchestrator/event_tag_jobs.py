@@ -29,6 +29,10 @@ def enqueue_event_tag_enrichment(
     if not cleaned_event_id:
         return None
 
+    event = events_service.get_event_by_id(cleaned_event_id)
+    if event is None:
+        return None
+
     job = async_jobs.enqueue_job(
         job_type=JOB_TYPE,
         user_email="system",
@@ -40,14 +44,18 @@ def enqueue_event_tag_enrichment(
         status_message="Queued",
         delay_seconds=delay_seconds,
         replace_existing=True,
+        input_fingerprint=events_service.event_tag_fingerprint(event),
     )
-    logger.info(
-        "[event_tag_jobs] queued job_id=%s revision=%s event_id=%s source=%s",
-        job.get("job_id"),
-        job.get("revision"),
-        cleaned_event_id,
-        source,
-    )
+    if job.get("should_schedule") is False:
+        logger.debug("[event_tag_jobs] unchanged_input_skipped event_id=%s", cleaned_event_id)
+    else:
+        logger.info(
+            "[event_tag_jobs] queued job_id=%s revision=%s event_id=%s source=%s",
+            job.get("job_id"),
+            job.get("revision"),
+            cleaned_event_id,
+            source,
+        )
     return {
         "job_id": job.get("job_id"),
         "status": job.get("status"),

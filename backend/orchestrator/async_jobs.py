@@ -126,21 +126,36 @@ def enqueue_job(
     status_message: str | None = None,
     delay_seconds: int = 0,
     replace_existing: bool = False,
+    input_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Create a pending job.
 
     By default, pending/running jobs are left untouched. When replace_existing is set,
     the existing row is updated in place, its revision is incremented, and its delay
     restarts. Revision-aware completion calls then ignore superseded in-flight work.
+    Opt-in fingerprints preserve identical work, including successful results and
+    failed-job backoff. A result may return its post-enrichment input_fingerprint
+    so derived output does not trigger its own replacement job.
     """
-    payload_json = _to_json(payload or {})
+    job_payload = dict(payload or {})
+    if input_fingerprint is not None:
+        job_payload["input_fingerprint"] = input_fingerprint
+    payload_json = _to_json(job_payload)
     with get_conn() as conn, conn.cursor() as cur:
+        if input_fingerprint is not None:
+            # Serialize first insertion too: SELECT FOR UPDATE cannot lock a
+            # missing row. This is scoped to jobs opting into input deduplication.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (json.dumps([job_type, user_email, dedupe_key]),),
+            )
         cur.execute(
             """
             SELECT
                 job_id,
                 status,
                 revision,
+                payload,
                 result,
                 error
             FROM async_jobs
@@ -153,6 +168,25 @@ def enqueue_job(
         )
         existing_raw = cur.fetchone()
         existing = dict(existing_raw) if existing_raw else None
+
+        if (
+            existing
+            and input_fingerprint is not None
+            and existing["status"] != AsyncJobStatus.CANCELLED.value
+            and (
+                (existing.get("payload") or {}).get("input_fingerprint") == input_fingerprint
+                or (
+                    existing["status"] == AsyncJobStatus.SUCCEEDED.value
+                    and (existing.get("result") or {}).get("input_fingerprint") == input_fingerprint
+                )
+            )
+        ):
+            conn.commit()
+            return {
+                **existing,
+                "should_schedule": False,
+                "created": False,
+            }
 
         if (
             existing

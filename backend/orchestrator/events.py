@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1480,6 +1481,7 @@ def generate_and_persist_event_tags(event_id: str) -> dict[str, Any]:
             "updated": False,
             "reason": "no_new_tags",
             "tags": existing_tags,
+            "input_fingerprint": event_tag_fingerprint(event),
         }
 
     embedding_payload = {
@@ -1514,7 +1516,18 @@ def generate_and_persist_event_tags(event_id: str) -> dict[str, Any]:
         "updated": updated,
         "tags": merged_tags,
         "suggested_tags": suggested_tags,
+        "input_fingerprint": event_tag_fingerprint({**event, "tags": merged_tags}),
     }
+
+
+def event_tag_fingerprint(event: dict[str, Any]) -> str:
+    """Only tag-generation inputs; ignore calendar polling metadata and dates."""
+    payload = [
+        str(event.get("title") or "").strip(),
+        str(event.get("summary") or "").strip(),
+        sorted(_normalize_strings(event.get("tags") or [])),
+    ]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
 def get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
