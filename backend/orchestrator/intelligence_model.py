@@ -172,6 +172,9 @@ Copy contacts/people subject_ref values exactly, including in related_subjects
 and contact_changes person/relationship refs. IDs are opaque and may already
 contain contact:; do not construct, shorten or remove prefixes from subject_ref.
 For assignee_kind=contact, assignee_ref is the supplied opaque contact_id instead.
+The people field mention_tokens contains exact WhatsApp mentions resolved to that
+account. Use those supplied links to identify a mentioned person; a mention alone
+does not prove that person is the assignee. Never infer a link from similar digits.
 Use canonical lower-case predicate keys such as employment or dietary_preference;
 predicate keys must use only ASCII a-z, 0-9, underscore, period or hyphen, up to 100 characters.
 for independent facts about a general topic, include the topic in the predicate.
@@ -698,7 +701,10 @@ def _reconcile(owner, batch, payload, candidates, context):
     anchors = {
         ref
         for f in candidates
-        for ref in [f.get("subject_ref"), *f.get("related_subjects", [])]
+        for ref in [f.get("subject_ref"), *f.get("related_subjects", []),
+                    (f.get("assignee_kind") + ':' + f.get("assignee_ref"))
+                    if f.get("assignee_kind") in {'identity', 'contact'} and f.get("assignee_ref")
+                    else None]
         if ref
     }
     for section, field, prefix in (

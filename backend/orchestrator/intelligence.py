@@ -216,12 +216,43 @@ def _query(text):
     return " | ".join(words[:40]) or "intelligenceemptyquery"
 
 
+def whatsapp_mentions(text):
+    """Return bounded literal mention tokens, not phone numbers embedded in prose."""
+    return list(dict.fromkeys(re.findall(r'(?<![\w@])@([1-9][0-9]{5,19})(?![\w@])', text)))[:50]
+
+
 def context_for(owner, batch, extra_text=""):
     """Bound related retrieval, including dismissed proposals and completed tasks."""
     query = _query(extra_text or " ".join(r["text"] for r in batch))
     identities = list({r["payload"].get("identity_id") for r in batch} - {None})
     conversations = list({r["payload"].get("conversation_id") for r in batch} - {None})
     with get_conn() as conn, conn.cursor() as cur:
+        anchors = [
+            {"conversation_id": r["payload"].get("conversation_id"), "token": token}
+            for r in batch if r["kind"] == "message"
+            for token in whatsapp_mentions(r["text"])
+            if r["payload"].get("conversation_id")
+        ]
+        cur.execute("""SELECT DISTINCT anchor.conversation_id, anchor.token,
+                i.identity_id, i.contact_id, i.display_name, i.is_self
+            FROM jsonb_to_recordset(%s) AS anchor(conversation_id TEXT, token TEXT)
+            JOIN messaging_conversations c ON c.conversation_id=anchor.conversation_id
+            JOIN messaging_accounts a ON a.account_id=c.account_id
+                AND a.user_email=%s AND a.provider='whatsapp'
+            JOIN messaging_identities i ON i.account_id=a.account_id
+                AND i.external_id IN (anchor.token || '@lid', anchor.token || '@s.whatsapp.net')
+            WHERE NOT EXISTS (SELECT 1 FROM messaging_identity_mappings m
+                WHERE m.account_id=i.account_id AND m.conflicted
+                  AND i.external_id IN (m.lid,m.phone))""", (Jsonb(anchors), owner))
+        candidates = {}
+        for candidate in cur.fetchall():
+            candidates.setdefault((candidate['conversation_id'], candidate['token']), []).append(dict(candidate))
+        mentioned = {}
+        for (_, token), matches in candidates.items():
+            if len(matches) == 1:
+                person = matches[0]
+                if person['contact_id'] or person['is_self']:
+                    mentioned.setdefault(person['identity_id'], set()).add('@' + token)
         cur.execute(
             """SELECT i.identity_id, i.contact_id, i.display_name, i.is_self
             FROM messaging_identities i JOIN messaging_accounts a USING(account_id)
@@ -231,6 +262,16 @@ def context_for(owner, batch, extra_text=""):
             (owner, identities, conversations, identities),
         )
         people = [dict(r) for r in cur.fetchall()]
+        # Mention targets need not have sent a message in the conversation.
+        by_id = {p['identity_id']: p for p in people}
+        for matches in candidates.values():
+            for person in matches:
+                if person['identity_id'] in mentioned:
+                    by_id.setdefault(person['identity_id'], {k: person[k] for k in
+                        ('identity_id', 'contact_id', 'display_name', 'is_self')})
+        people = list(by_id.values())
+        for person in people:
+            person['mention_tokens'] = sorted(mentioned.get(person['identity_id'], ()))
         contact_ids = list(
             (
                 {r["contact_id"] for r in people}

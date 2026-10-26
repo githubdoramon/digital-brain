@@ -225,3 +225,13 @@ only when there is no existing unfinished run for that owner. Pending runs rotat
 by their last claim (`started_at`), with never-started new runs first, rather than
 letting the oldest cutoff monopolize every turn. Historical action restrictions,
 leases, source freshness and manual-override checks are unchanged.
+
+## WhatsApp mentions
+
+For message extraction, literal numeric WhatsApp mentions are resolved against
+identities in the source conversation's owner-scoped WhatsApp account. A linked
+contact or the account's self flag must already exist. Ambiguous identifiers and
+conflicted provider mappings are excluded. The exact mention token and resolved
+identity are retained in the bounded model context; a mention alone is not proof
+of an assignee. This affects subsequent analysis and does not rewrite existing
+proposals or reopen completed work.

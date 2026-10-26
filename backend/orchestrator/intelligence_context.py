@@ -12,7 +12,7 @@ from llm_context import estimate_input, request_budget
 from llm_policy import LLMRequestRejected, model_constraints
 
 FIELDS = {
-    "people": ("identity_id", "contact_id", "display_name", "is_self"),
+    "people": ("identity_id", "contact_id", "display_name", "is_self", "mention_tokens"),
     "contacts": (
         "contact_id",
         "display_name",
@@ -106,6 +106,11 @@ def request_limits():
 
 def source_pins(sources, people, relationships):
     pinned = set()
+    source_text = " ".join(
+        str(s.get("text") or "") + " ".join(span or "" for span in s.get("text_spans", []))
+        for s in sources
+    )
+    mentions = set(re.findall(r'(?<![\w@])@[1-9][0-9]{5,19}(?![\w@])', source_text))
     for source in sources:
         metadata = source.get("metadata") or source.get("payload") or {}
         pinned.update(
@@ -113,6 +118,8 @@ def source_pins(sources, people, relationships):
         )
         pinned.update(metadata.get("confirmed_contact_ids") or [])
     for person in people:
+        if mentions.intersection(person.get("mention_tokens", [])):
+            pinned.add(person["identity_id"])
         if person.get("identity_id") in pinned and person.get("contact_id"):
             pinned.add(person["contact_id"])
     direct = set(pinned)

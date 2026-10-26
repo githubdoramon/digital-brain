@@ -304,6 +304,28 @@ def test_prompt_filter_keeps_source_identity_and_all_ambiguous_names():
     assert projected["people"][0]["identity_id"] == "author"
 
 
+def test_whatsapp_mention_pins_exact_identity_and_contact():
+    import intelligence_context
+    from intelligence import whatsapp_mentions
+
+    text = '@900000000001 please help'
+    assert whatsapp_mentions(text) == ['900000000001']
+    assert whatsapp_mentions('x@900000000001 and @9000000000012') == ['9000000000012']
+    context = {
+        'source_context': [{'text': text, 'payload': {'identity_id': 'author'}}],
+        'people': [
+            {'identity_id': 'author'},
+            {'identity_id': 'target', 'contact_id': 'person', 'mention_tokens': ['@900000000001']},
+            {'identity_id': 'other', 'contact_id': 'other', 'mention_tokens': ['@9000000000012']},
+        ],
+        'contacts': [{'contact_id': 'person', 'display_name': 'Rosa'},
+                     {'contact_id': 'other', 'display_name': 'Sam'}],
+    }
+    projected = intelligence_context.compact_context(context, extraction=True, query=text)
+    assert {p['identity_id'] for p in projected['people']} == {'author', 'target'}
+    assert [c['contact_id'] for c in projected['contacts']] == ['person']
+
+
 def test_uncached_malformed_tag_output_and_changed_prompt_rules(database, monkeypatch):
     monkeypatch.setattr(cache, "get_conn", database)
     responses = iter(["not a JSON object", '{"tags":[]}', '{"tags":["Personal"]}'])

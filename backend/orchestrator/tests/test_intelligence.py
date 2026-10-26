@@ -424,6 +424,29 @@ def test_completion_requires_direct_actor_fresh_version_and_review(
         ] == (1 if expected == "completed" else 0)
 
 
+def test_whatsapp_mention_resolves_linked_identity_and_excludes_conflicts(database):
+    import intelligence_context
+
+    setup_owner(database)
+    ingest(database, body='@900000000001 please check this', outgoing=False)
+    with database() as conn:
+        account = conn.execute('SELECT account_id FROM messaging_accounts WHERE user_email=%s', (OWNER,)).fetchone()['account_id']
+        conn.execute("""INSERT INTO messaging_identities(identity_id,account_id,external_id,contact_id)
+            VALUES ('mentioned',%s,'900000000001@lid','alex')""", (account,))
+    batch = store.next_batch(OWNER, FUTURE)
+    context = store.context_for(OWNER, batch)
+    person = next(p for p in context['people'] if p['identity_id'] == 'mentioned')
+    assert person['mention_tokens'] == ['@900000000001']
+    projected = intelligence_context.compact_context(context, extraction=True, query=batch[0]['text'])
+    assert any(p['identity_id'] == 'mentioned' for p in projected['people'])
+    assert any(c['contact_id'] == 'alex' for c in projected['contacts'])
+    with database() as conn:
+        conn.execute("""INSERT INTO messaging_identity_mappings(account_id,lid,phone,conflicted)
+            VALUES (%s,'900000000001@lid','15550000001@s.whatsapp.net',TRUE)""", (account,))
+    context = store.context_for(OWNER, batch)
+    assert not any(p.get('mention_tokens') for p in context['people'])
+
+
 def test_proposal_acceptance_dismissal_and_replay_are_atomic(database):
     setup_owner(database)
     ingest(database)
