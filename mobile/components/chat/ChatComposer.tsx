@@ -81,7 +81,6 @@ type Props = {
   onAttachPhoto: () => void;
   onAttachPdf: () => void;
   onInputFocus: () => void;
-  onInputBlur: () => void;
   onErrorMessage: (message: string) => void;
   attachDisabled: boolean;
 };
@@ -106,7 +105,6 @@ export function ChatComposer({
   onAttachPhoto,
   onAttachPdf,
   onInputFocus,
-  onInputBlur,
   onErrorMessage,
   attachDisabled,
 }: Props) {
@@ -508,7 +506,6 @@ export function ChatComposer({
           placeholderTextColor="#A7AFB7"
           multiline
           onFocus={onInputFocus}
-          onBlur={onInputBlur}
           scrollEnabled
         />
         <View style={styles.sendButtonDock} pointerEvents="box-none">

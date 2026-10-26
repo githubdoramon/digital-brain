@@ -63,3 +63,25 @@ def test_ingest_contact_route_can_ensure_contact_id_from_email(monkeypatch):
         "created": True,
     }
     assert calls == [("alex@example.test", "Alex Example")]
+
+
+def test_contact_detail_can_skip_knowledge_without_changing_default(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "routes.contacts.contacts_service.get_contact",
+        lambda contact_id, **kwargs: {"contact_id": contact_id, "display_name": "Alex Example"},
+    )
+    monkeypatch.setattr(
+        "intelligence.knowledge_for",
+        lambda owner, **kwargs: calls.append((owner, kwargs)) or [{"statement": "A fact"}],
+    )
+    client = _client()
+
+    lightweight = client.get("/mobile/contacts/alex?include_knowledge=false")
+    assert lightweight.status_code == 200
+    assert "knowledge" not in lightweight.json()
+    assert calls == []
+
+    standard = client.get("/mobile/contacts/alex")
+    assert standard.json()["knowledge"] == [{"statement": "A fact"}]
+    assert calls == [("user@example.test", {"contact_id": "alex"})]

@@ -309,18 +309,24 @@ def create_contacts_router() -> APIRouter:
 
     @router.get("/contacts/{contact_id}")
     @router.get("/mobile/contacts/{contact_id}")
-    def get_contact(contact_id: str, request: Request, user: dict = Depends(get_current_user)):
+    def get_contact(
+        contact_id: str,
+        request: Request,
+        include_knowledge: bool = Query(default=True),
+        user: dict = Depends(get_current_user),
+    ):
         contact = contacts_service.get_contact(
             contact_id,
             include_voice_profile=not _is_mobile_request(request),
         )
         if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
             raise HTTPException(status_code=404, detail="Contact not found")
-        import intelligence
+        if include_knowledge:
+            import intelligence
 
-        contact["knowledge"] = intelligence.knowledge_for(
-            user.get("email") or user.get("user_email"), contact_id=contact_id
-        )
+            contact["knowledge"] = intelligence.knowledge_for(
+                user.get("email") or user.get("user_email"), contact_id=contact_id
+            )
         return contact
 
     @router.get("/mobile/contacts/{contact_id}/places")

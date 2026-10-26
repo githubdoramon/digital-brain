@@ -30,6 +30,8 @@ type Identity = {
   source_phone: string | null;
   contact_id: string | null;
   contact_name: string | null;
+  recent_message?: { title: string; body: string; sent_at: string } | null;
+  suggested_contacts?: { contact_id: string; display_name: string }[];
   source_link?: { url: string; label: string; target: 'conversation' | 'message' } | null;
 };
 type LinkedIdentity = Identity & { provider: Provider };
@@ -85,6 +87,7 @@ export function MessengerLinksCard({
           for (let start = 0; ; start += 500) {
             const page = await fetchIdentities(value, {
               contact_id: contactId,
+              include_recent_message: 'false',
               limit: '500',
               offset: String(start),
             });
@@ -323,7 +326,29 @@ export function MessengerLinksCard({
                   <Text style={styles.name}>
                     {identity.display_name || identityDetails(identity)}
                   </Text>
-                  <Text style={styles.muted}>{identityDetails(identity)}</Text>
+                  {identity.display_name !== identityDetails(identity) ? (
+                    <Text style={styles.muted}>{identityDetails(identity)}</Text>
+                  ) : null}
+                  {identity.recent_message ? (
+                    <>
+                      <Text style={styles.muted}>
+                        {[
+                          identity.recent_message.title,
+                          new Date(identity.recent_message.sent_at).toLocaleDateString(),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
+                      <Text style={styles.muted} numberOfLines={3}>
+                        “{identity.recent_message.body}”
+                      </Text>
+                    </>
+                  ) : null}
+                  {identity.suggested_contacts?.some(
+                    (suggestion) => suggestion.contact_id === contactId,
+                  ) ? (
+                    <Text style={styles.muted}>Phone number matches this contact</Text>
+                  ) : null}
                   {identity.contact_id ? (
                     <Text style={styles.muted}>
                       {identity.contact_id === contactId

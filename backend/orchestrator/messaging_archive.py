@@ -418,7 +418,7 @@ def drain_once() -> int:
 
 def identities(
     owner: str, contact_id: str | None = None, provider: Provider = Provider.WHATSAPP,
-    *, query: str = "", limit: int = 500, offset: int = 0,
+    *, query: str = "", limit: int = 500, offset: int = 0, include_recent_message: bool = True,
 ) -> list[dict]:
     from messaging_links import source_link
 
@@ -435,6 +435,7 @@ def identities(
                     AND m.lid=i.external_id AND NOT m.conflicted
                 LEFT JOIN messaging_identities p ON p.account_id=i.account_id AND p.external_id=m.phone
                 WHERE a.user_email=%s AND a.provider=%s
+                    AND (%s::text IS NULL OR i.contact_id=%s)
             ) SELECT r.*, c.display_name AS contact_name,
                 COALESCE(NULLIF(r.display_name,''),
                     (SELECT NULLIF(alias.display_name,'') FROM resolved alias
@@ -455,12 +456,26 @@ def identities(
                 WHERE alias.canonical_id=r.identity_id AND strpos(lower(concat_ws(' ',
                   alias.display_name,alias.external_id,alias.source_username,alias.source_phone,c.display_name)),lower(%s))>0))
             ORDER BY resolved_display_name,r.external_id,r.identity_id LIMIT %s OFFSET %s""",
-            (owner, provider.value, contact_id, contact_id, query.strip(), query.strip(),
+            (owner, provider.value, contact_id, contact_id, contact_id, contact_id, query.strip(), query.strip(),
              min(max(limit, 1), 500), max(offset, 0)),
         )
+        rows = cur.fetchall()
+        # Show a recent message as evidence for identifying otherwise opaque IDs.
+        # Only include messages actually sent by the account, never infer identity
+        # from a mention or from the contents of the message.
+        for row in rows if include_recent_message else []:
+            aliases = [alias['identity_id'] for alias in row['source_identities']]
+            cur.execute("""SELECT c.title, m.sent_at, left(m.body, 180) AS body
+                FROM messaging_messages m JOIN messaging_conversations c
+                  ON c.account_id=m.account_id AND c.conversation_id=m.conversation_id
+                WHERE m.account_id=%s AND m.sender_identity_id=ANY(%s)
+                  AND NOT m.deleted AND m.body<>''
+                ORDER BY m.sent_at DESC, m.message_id DESC LIMIT 1""",
+                (row['account_id'], aliases))
+            row['recent_message'] = cur.fetchone()
         return [{**row, 'display_name': row['resolved_display_name'], 'source_link': source_link(provider.value, row['external_id'],
                     source_username=row.get('source_username'), source_phone=row.get('source_phone'))}
-                for row in cur.fetchall()]
+                for row in rows]
 
 
 def link_identity(

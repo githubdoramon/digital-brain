@@ -162,10 +162,12 @@ def create_messaging_router() -> APIRouter:
         q: str = Query(default="", max_length=200),
         limit: int = Query(default=500, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        include_recent_message: bool = True,
         user: dict = Depends(get_current_user),
     ):
         return {"identities": archive.identities(
-            _owner(user), contact_id, provider, query=q, limit=limit, offset=offset
+            _owner(user), contact_id, provider, query=q, limit=limit, offset=offset,
+            include_recent_message=include_recent_message,
         )}
 
     @mobile.put("/identities/{identity_id}/contact")

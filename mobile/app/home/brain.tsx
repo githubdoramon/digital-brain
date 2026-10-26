@@ -1306,7 +1306,7 @@ export function ChatConversationScreen({
   const hasHydratedSessionRef = useRef(false);
   const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const commandsEnabled = isMainChat;
   // KeyboardAvoidingView already moves the composer above the keyboard.
   const composerBottomOffset = 0;
@@ -1704,12 +1704,24 @@ export function ChatConversationScreen({
     const hideListener = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
     });
+    const appStateListener = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        setKeyboardVisible(Keyboard.isVisible());
+      }
+    });
 
     return () => {
       showListener.remove();
       hideListener.remove();
+      appStateListener.remove();
     };
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      setKeyboardVisible(Keyboard.isVisible());
+    }, []),
+  );
 
   const removeComposerMediaAttachment = useCallback((attachmentId: string) => {
     setComposerMediaAttachments((prev) =>
@@ -2785,8 +2797,11 @@ export function ChatConversationScreen({
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={keyboardVisible ? (Platform.OS === 'ios' ? 'padding' : 'height') : undefined}
         keyboardVerticalOffset={0}
+        // Ignore a stale internal offset after dismissal/resume. The composer
+        // and avoiding view must switch keyboard spacing together.
+        enabled={keyboardVisible}
       >
         <View style={[styles.screen, !isMainChat && styles.threadScreen]}>
         <FlatList
@@ -3186,11 +3201,6 @@ export function ChatConversationScreen({
           }}
           onInputFocus={() => {
             setForceScrollNext(true);
-          }}
-          onInputBlur={() => {
-            if (Platform.OS === 'android') {
-              setKeyboardVisible(false);
-            }
           }}
           onErrorMessage={showError}
           attachDisabled={

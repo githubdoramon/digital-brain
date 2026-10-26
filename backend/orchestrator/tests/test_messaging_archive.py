@@ -310,6 +310,25 @@ def test_owner_scope_in_search_detail_identity_and_classification(database):
     assert foreign["account_id"] != archive.account(OWNER)["account_id"]
 
 
+def test_identity_recent_message_uses_sender_evidence_and_excludes_deleted(database):
+    lid = '900000000001@lid'
+    ingest(chat='100@g.us', sender=lid, body='See you tomorrow')
+    ingest(chat='100@g.us', sender='900000000002@lid',
+           body='Someone else', id='OTHER')
+    with database() as conn:
+        conn.execute("UPDATE messaging_conversations SET title='Friends'")
+    row = next(i for i in archive.identities(OWNER) if i['external_id'] == lid)
+    assert row['recent_message']['title'] == 'Friends'
+    assert row['recent_message']['body'] == 'See you tomorrow'
+    assert row['recent_message']['sent_at'].isoformat().startswith('2026-01-01')
+    with database() as conn:
+        conn.execute('UPDATE messaging_messages SET deleted=TRUE WHERE sender_identity_id=%s',
+                     (row['identity_id'],))
+    row = next(i for i in archive.identities(OWNER) if i['external_id'] == lid)
+    assert row['recent_message'] is None
+    assert archive.identities(OTHER) == []
+
+
 def test_late_history_does_not_undo_edit_and_deletion_retains_evidence(database):
     ingest(kind="edit", body="Revised amount", time="2026-01-02T12:00:00+00:00")
     ingest(origin="history")
@@ -1456,6 +1475,11 @@ def test_verified_whatsapp_aliases_preserve_messages_and_manage_links_atomically
     assert merged[0]['identity_id'] == pn_row['identity_id']
     assert {row['external_id'] for row in merged[0]['source_identities']} == {lid, pn}
     assert merged[0]['source_link']['url'] == 'https://wa.me/15550000001'
+    lightweight = archive.identities(OWNER, 'sample-contact', include_recent_message=False)
+    assert len(lightweight) == 1
+    assert lightweight[0]['identity_id'] == merged[0]['identity_id']
+    assert lightweight[0]['source_identities'] == merged[0]['source_identities']
+    assert 'recent_message' not in lightweight[0]
     assert len(archive.identities(OWNER, query=lid.split('@')[0], limit=1)) == 1
     assert archive.identities(OWNER, limit=1, offset=1) == []
     assert archive.identities(OTHER) == []

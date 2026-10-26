@@ -54,7 +54,12 @@
       ],
       "expo-router",
       "expo-font",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png"
+        }
+      ],
       [
         "expo-location",
         {

@@ -1,5 +1,5 @@
-import { KnowledgeFacts } from '@/components/knowledge/KnowledgeFacts';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFocusEffect } from '@react-navigation/native';
 import { DateType } from 'react-native-ui-datepicker';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -15,7 +15,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -26,7 +26,6 @@ import { Avatar } from '@/components/Avatar';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
-import { type ArchiveSource } from '@/components/ArchiveEvidence';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LightDateTimePicker } from '@/components/LightDateTimePicker';
@@ -59,12 +58,6 @@ type Contact = {
   external_id: string | null;
   avatar_url?: string | null;
   relationships: Relationship[];
-  knowledge?: {
-    knowledge_id: string;
-    statement: string;
-    status: string;
-    evidence: ArchiveSource[];
-  }[];
 };
 
 const listToText = (items: string[]) => items.join(', ');
@@ -165,6 +158,7 @@ export default function ContactDetailScreen() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [knowledgeSummary, setKnowledgeSummary] = useState<string | null>(null);
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -189,6 +183,24 @@ export default function ContactDetailScreen() {
     setTagsText(listToText(emptyContact.tags));
   }, [contactParam, isCreating]);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+      setKnowledgeSummary(null);
+      if (contactParam && !isCreating) {
+        const subject = `contact:${contactParam}`;
+        void apiFetch(`/mobile/knowledge/summary?subject=${encodeURIComponent(subject)}`)
+          .then((result) => {
+            if (active) setKnowledgeSummary((result as { summary: string | null }).summary);
+          })
+          .catch(() => {});
+      }
+      return () => {
+        active = false;
+      };
+    }, [contactParam, isCreating]),
+  );
+
   useEffect(() => {
     let mounted = true;
     if (!contactParam || isCreating) {
@@ -201,7 +213,7 @@ export default function ContactDetailScreen() {
       setLoadError(null);
       try {
         const result = (await apiFetch(
-          `/mobile/contacts/${encodeURIComponent(contactParam)}`,
+          `/mobile/contacts/${encodeURIComponent(contactParam)}?include_knowledge=false`,
         )) as Contact;
         if (mounted) {
           setContact(result);
@@ -229,17 +241,30 @@ export default function ContactDetailScreen() {
   }, [contactParam, isCreating]);
 
   useEffect(() => {
+    let active = true;
+    const relatedIds = [...new Set((contact?.relationships ?? []).map((rel) => rel.contact_id))];
+    if (!relatedIds.length) {
+      setContactsIndex(new Map());
+      return () => {
+        active = false;
+      };
+    }
     (async () => {
       try {
-        const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
+        const params = new URLSearchParams();
+        relatedIds.forEach((id) => params.append('contact_ids', id));
+        const result = (await apiFetch(`/mobile/contacts?${params}`)) as { contacts: Contact[] };
         const map = new Map<string, string>();
         result.contacts.forEach((item) => map.set(item.contact_id, item.display_name));
-        setContactsIndex(map);
+        if (active) setContactsIndex(map);
       } catch (error) {
         console.warn('[contacts] map load failed', error);
       }
     })();
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [contact]);
 
   useEffect(() => {
     Animated.parallel([
@@ -358,7 +383,7 @@ export default function ContactDetailScreen() {
         }),
       });
       const refreshed = (await apiFetch(
-        `/mobile/contacts/${encodeURIComponent(targetContactId)}`,
+        `/mobile/contacts/${encodeURIComponent(targetContactId)}?include_knowledge=false`,
       )) as Contact;
       setContact(refreshed);
       setDraft(refreshed);
@@ -603,7 +628,25 @@ export default function ContactDetailScreen() {
         </Card>
 
         {contact && !isCreating ? (
-          <KnowledgeFacts subject={`contact:${contact.contact_id}`} />
+          <Card style={styles.section}>
+            <Text style={styles.sectionTitle}>What your Brain knows</Text>
+            {knowledgeSummary ? (
+              <Text style={{ color: theme.colors.ink, fontSize: 17, lineHeight: 25 }}>
+                {knowledgeSummary}
+              </Text>
+            ) : null}
+            <Pressable
+              style={styles.linkButton}
+              accessibilityRole="button"
+              onPress={() =>
+                router.push(
+                  `/knowledge/${encodeURIComponent(`contact:${contact.contact_id}`)}?title=${encodeURIComponent(contact.display_name)}` as Href,
+                )
+              }
+            >
+              <Text style={styles.linkText}>View all facts</Text>
+            </Pressable>
+          </Card>
         ) : null}
 
         {!isCreating ? (
