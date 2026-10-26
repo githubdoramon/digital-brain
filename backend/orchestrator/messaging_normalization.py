@@ -231,12 +231,18 @@ def live_record(event: Any, self_jid: str) -> dict | None:
     data = event.data
     info = data.message_info
     source = info.source
+    sent_at = info.timestamp
+    if isinstance(sent_at, datetime) and sent_at.tzinfo is None:
+        # Pinned Tryx MessageInfo.timestamp uses datetime.fromtimestamp(epoch)
+        # without tz. Reverse that local-time conversion, preserving DST fold.
+        # Do not attach UTC: non-UTC processes would shift the source instant.
+        sent_at = sent_at.timestamp()
     record = normalize_message(
         proto=data.raw_proto,
         chat=source.chat,
         sender=source.sender,
         message_id=info.id,
-        sent_at=info.timestamp,
+        sent_at=sent_at,
         outgoing=source.is_from_me,
         origin=Origin.LIVE,
         name=info.push_name,

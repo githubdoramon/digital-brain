@@ -34,6 +34,7 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
         jid,
         live_record,
     )
+    from whatsapp_diagnostics import report_failure
     from whatsapp_history import capture_history, request_once
 
     async def main():
@@ -75,7 +76,8 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                 if not own:
                     raise ValueError("missing_self_identity")
                 await asyncio.to_thread(bind_self, account_id, generation, Provider.WHATSAPP, own)
-            except Exception:
+            except Exception as exc:
+                report_failure(pipe, "bind_account", exc)
                 connected_event.clear()
                 await state(ConnectionState.ATTENTION, "account_mismatch")
                 return
@@ -100,12 +102,15 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
         @app.on(EvMessage)
         async def message(client, event):
             async with lane:
+                stage = "live_normalize"
                 try:
                     record = live_record(event, own_jid(client))
                     if record:
+                        stage = "live_stage"
                         await asyncio.to_thread(stage_records, account_id, generation, [record])
-                except Exception:
+                except Exception as exc:
                     # Do not leak raw protobuf, callback exception, or message text.
+                    report_failure(pipe, stage, exc)
                     await state(ConnectionState.ATTENTION, "capture_incomplete")
 
         @app.on(EvHistorySync)
@@ -120,7 +125,8 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     await asyncio.to_thread(
                         capture_history, account_id, generation, proto, own_jid(client)
                     )
-                except Exception:
+                except Exception as exc:
+                    report_failure(pipe, "history_capture", exc)
                     await state(ConnectionState.ATTENTION, "history_incomplete")
 
         async def request_history():
@@ -129,6 +135,7 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                 await connected_event.wait()
                 epoch = connection_epoch
                 client = client_holder[0]
+                stage = "history_startup"
                 try:
                     if synced_epoch != epoch:
                         await asyncio.wait_for(
@@ -136,8 +143,10 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                         )
                         synced_epoch = epoch
                     if connected_event.is_set() and epoch == connection_epoch:
+                        stage = "history_request"
                         await request_once(client, account_id, generation)
-                except Exception:
+                except Exception as exc:
+                    report_failure(pipe, stage, exc)
                     await state(ConnectionState.ATTENTION, "history_incomplete")
                 await asyncio.sleep(10)
 
@@ -156,9 +165,9 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     if pair:
                         await asyncio.to_thread(observe_mappings, account_id, generation, [pair])
                     await refresh_whatsapp_mappings(client, account_id, generation)
-                except Exception:
+                except Exception as exc:
                     # Metadata recovery never blocks live/history capture.
-                    pass
+                    report_failure(pipe, "identity_refresh", exc)
                 await asyncio.sleep(60)
 
         requester = asyncio.create_task(request_history())
@@ -176,7 +185,8 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
     try:
         fcntl.flock(session_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         asyncio.run(main())
-    except Exception:
+    except Exception as exc:
+        report_failure(pipe, "session_run", exc)
         # Only a static failure code crosses the process boundary.
         with suppress(BrokenPipeError, EOFError, OSError):
             pipe.send({"kind": "error", "code": "connection_failed"})

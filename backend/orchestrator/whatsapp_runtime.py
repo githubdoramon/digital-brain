@@ -152,6 +152,11 @@ def _supervise():
                         elif event.get("kind") == "clear_password":
                             with _QR_LOCK:
                                 _PASSWORDS.pop(key, None)
+                        elif event.get("kind") == "capture_failure":
+                            logger.warning(
+                                "[messaging] capture_failed provider=whatsapp stage=%s category=%s reason=%s",
+                                event["stage"], event["category"], event["reason"],
+                            )
                         elif event.get("kind") == "error":
                             runtime_state(
                                 key,

@@ -77,6 +77,24 @@ as conflicts and excluded from grouping. No production data needs a manual rewri
 
 ### Historical import window and explicit requests
 
+The pinned Tryx `MessageInfo.timestamp` getter returns a naive **process-local**
+datetime (`PyDateTime::from_timestamp(epoch, None)`). The live adapter reverses
+that conversion through `datetime.timestamp()` before shared UTC normalization.
+Attaching UTC directly would shift timestamps on non-UTC hosts. Shared staging
+continues to reject naive timestamps from other inputs. Regression tests cover
+UTC, Lisbon summer time and both sides of its repeated DST hour through inbox
+staging and archive commit.
+
+Native child failures emit `[messaging] capture_failed` through the supervisor
+with allow-listed stage, exception category and validation reason. Stages separate
+live normalization/staging, history capture/startup/request, identity refresh and
+session startup. Raw exception strings, source identifiers and message content
+remain suppressed. `capture_failures` combines live and history failures; it is
+not a count of lost messages. Transport `connected` alone does not prove capture:
+check advancing `last_capture_at` and a unique newly sent incoming probe reaching
+`messaging_messages`. After deploying a capture fix, repeat that probe. The SDK's
+observer callbacks cannot guarantee replay of messages missed before deployment.
+
 Historical imports are limited to six calendar months before the current UTC
 instant, inclusive. `whatsapp_native.py` passes this boundary to `history_records`
 so older messages are skipped before normalizing bodies/attachment metadata.

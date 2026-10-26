@@ -2,6 +2,7 @@
 
 import json
 import os
+import time as system_time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,7 +117,9 @@ def test_history_self_group_and_live_share_keys(proto):
             message_info=SimpleNamespace(
                 source=SimpleNamespace(chat="100@g.us", sender=own, is_from_me=True),
                 id="ABC",
-                timestamp=datetime.fromtimestamp(1700000000, timezone.utc),
+                # Real pinned Tryx uses local datetime.fromtimestamp(epoch),
+                # not an aware UTC datetime.
+                timestamp=datetime.fromtimestamp(1700000000),
                 push_name="",
             ),
         )
@@ -128,6 +131,47 @@ def test_history_self_group_and_live_share_keys(proto):
         live["id"],
     )
     assert historical["body"] == live["body"]
+    assert historical["sent_at"] == live["sent_at"]
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Europe/Lisbon", "America/New_York"])
+@pytest.mark.parametrize("epoch", [1792888200, 1792891800, 1782907200])
+def test_tryx_local_timestamp_preserves_instant_and_archives(database, proto, zone, epoch):
+    from messaging_normalization import timestamp
+
+    previous = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = zone
+        system_time.tzset()
+        # Same conversion as Tryx's PyDateTime::from_timestamp(..., None).
+        sdk_time = datetime.fromtimestamp(epoch)
+        with pytest.raises(ValueError, match="missing_timezone"):
+            timestamp(sdk_time)  # Shared validation must remain strict.
+        message = proto.Message(conversation="Please review the sample report")
+        event = SimpleNamespace(data=SimpleNamespace(
+            raw_proto=message,
+            message_info=SimpleNamespace(
+                source=SimpleNamespace(chat="15550000001@s.whatsapp.net",
+                                       sender="15550000001@s.whatsapp.net", is_from_me=False),
+                id="LOCAL-TIME", timestamp=sdk_time, push_name="Sample Person",
+            ),
+        ))
+        account = archive.set_connection(OWNER, True)
+        item = live_record(event, "15550000000@s.whatsapp.net")
+        assert item["sent_at"] == datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+        assert archive.stage_records(account["account_id"], account["generation"], [item]) == 1
+        archive.drain_once()
+        with database() as conn:
+            row = conn.execute("SELECT sent_at, body FROM messaging_messages").fetchone()
+            assert row["sent_at"].timestamp() == epoch
+            assert row["body"] == message.conversation
+            assert conn.execute("SELECT last_capture_at FROM messaging_accounts").fetchone()["last_capture_at"]
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        system_time.tzset()
 
 
 def test_edit_and_revoke_are_typed_and_attributed_to_original_sender(proto):
