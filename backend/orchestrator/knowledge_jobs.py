@@ -18,6 +18,7 @@ import learning_ownership
 import llm_admission
 from db import get_conn
 from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
+from learning_failures import rejection_details
 from llm_policy import failure_code
 from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
@@ -190,12 +191,14 @@ def source_batch(job):
         return batch
 
 
-def _finish(job, status, error=None):
+def _finish(job, status, error=None, details=None):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE knowledge_learning SET status=%s,error_code=%s,lease_until=NULL,
+            error_details=%s,failed_at=CASE WHEN %s::text IS NOT NULL THEN NOW() ELSE failed_at END,
             next_attempt_at=NOW()+INTERVAL '5 minutes' WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s""",
-            (status, error, job["user_email"], job["source_id"], job["part"], job["lease_token"]),
+            (status, error, intelligence.json_value(details or {}), error,
+             job["user_email"], job["source_id"], job["part"], job["lease_token"]),
         )
         conn.commit()
 
@@ -365,7 +368,7 @@ def process_once(owners):
             statuses.count("deferred"),
         )
     except intelligence_model.SourceBatchSplit as exc:
-        _split_learning(jobs, exc.size, exc.reason)
+        _split_learning(jobs, exc.size, exc.reason, rejection_details(exc, jobs))
     except llm_admission.BackgroundDeferred as exc:
         _defer_learning(jobs, exc)
     except Exception as exc:
@@ -377,11 +380,11 @@ def process_once(owners):
         if code in {"model_unavailable", "model_timeout", "model_rate_limited"}:
             _defer_learning(jobs, llm_admission.BackgroundDeferred("provider_unavailable", 30))
             return True
-        if code == "invalid_evidence" and len(jobs) > 1:
-            _split_learning(jobs, max(1, len(jobs) // 2), code)
+        if code in {"invalid_evidence", "invalid_schema", "invalid_contact_change", "output_exhausted"} and len(jobs) > 1:
+            _split_learning(jobs, max(1, len(jobs) // 2), code, rejection_details(exc, jobs))
             return True
         for item in jobs:
-            _finish(item, "failed", code)
+            _finish(item, "failed", code, rejection_details(exc, jobs))
         diagnostic(
             "knowledge_learning_failed",
             owner=job["user_email"],
@@ -402,17 +405,19 @@ def process_once(owners):
     return True
 
 
-def _split_learning(jobs, size, reason):
+def _split_learning(jobs, size, reason, details=None):
     with get_conn() as conn, conn.cursor() as cur:
         for item in jobs:
             cur.execute(
                 """UPDATE knowledge_learning SET batch_limit=LEAST(batch_limit,%s),
                 status='pending',attempts=GREATEST(0,attempts-1),next_attempt_at=NOW(),
-                lease_token=NULL,lease_until=NULL,error_code=NULL
+                lease_token=NULL,lease_until=NULL,error_code=%s,error_details=%s,failed_at=NOW()
                 WHERE user_email=%s AND source_id=%s AND part=%s AND lease_token=%s
                 AND lease_until>NOW()""",
                 (
                     size,
+                    reason,
+                    intelligence.json_value(details or {}),
                     item["user_email"],
                     item["source_id"],
                     item["part"],
@@ -639,7 +644,7 @@ def retry_failed(owner):
     historical = intelligence.retry_failures(owner)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """UPDATE knowledge_learning j SET status='pending',attempts=0,error_code=NULL,
+            """UPDATE knowledge_learning j SET status='pending',attempts=0,batch_limit=1,
             lease_token=NULL,lease_until=NULL,next_attempt_at=NOW()
             FROM intelligence_sources s WHERE j.source_id=s.source_id AND s.duplicate_of_source_id IS NULL
                 AND j.user_email=%s AND j.status='failed'""",

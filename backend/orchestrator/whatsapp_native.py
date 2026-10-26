@@ -31,10 +31,14 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
     from messaging_normalization import (
         ConnectionState,
         Provider,
-        jid,
         live_record,
     )
-    from whatsapp_diagnostics import report_failure
+    from whatsapp_diagnostics import (
+        ExcludedWhatsAppSource,
+        health_event,
+        project_identity,
+        report_failure,
+    )
     from whatsapp_history import capture_history, request_once
 
     async def main():
@@ -56,9 +60,17 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
         connected_event = asyncio.Event()
         client_holder = []
         connection_epoch = 0
+        from collections import Counter
+
+        counters = Counter(dict.fromkeys((
+            "live_received", "live_stage_accepted", "live_stage_rejected",
+            "live_empty_or_control", "live_excluded", "live_failed",
+            "history_chunks_received", "history_chunks_completed", "history_chunks_failed",
+        ), 0))
+        last_staged = None
 
         def own_jid(client):
-            return jid(client.advanced.get_pn())
+            return project_identity(client.advanced.get_pn(), "self")
 
         async def state(value, error=None):
             await asyncio.to_thread(runtime_state, account_id, generation, value, error)
@@ -101,14 +113,27 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
 
         @app.on(EvMessage)
         async def message(client, event):
+            nonlocal last_staged
             async with lane:
+                counters["live_received"] += 1
                 stage = "live_normalize"
                 try:
                     record = live_record(event, own_jid(client))
                     if record:
                         stage = "live_stage"
-                        await asyncio.to_thread(stage_records, account_id, generation, [record])
+                        accepted = await asyncio.to_thread(stage_records, account_id, generation, [record])
+                        counters["live_stage_accepted"] += accepted
+                        if accepted:
+                            last_staged = time.monotonic()
+                        else:
+                            counters["live_stage_rejected"] += 1
+                    else:
+                        counters["live_empty_or_control"] += 1
+                except ExcludedWhatsAppSource as exc:
+                    counters["live_excluded"] += 1
+                    report_failure(pipe, stage, exc)
                 except Exception as exc:
+                    counters["live_failed"] += 1
                     # Do not leak raw protobuf, callback exception, or message text.
                     report_failure(pipe, stage, exc)
                     await state(ConnectionState.ATTENTION, "capture_incomplete")
@@ -118,6 +143,7 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
             # Normalize in a blocking worker, never serialize the raw chunk.
             # Live callbacks have their own lane and need not await full history.
             async with history_lane:
+                counters["history_chunks_received"] += 1
                 try:
                     proto = event.proto
                     if proto.ByteSize() > 32 * 1024 * 1024:
@@ -125,7 +151,9 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     await asyncio.to_thread(
                         capture_history, account_id, generation, proto, own_jid(client)
                     )
+                    counters["history_chunks_completed"] += 1
                 except Exception as exc:
+                    counters["history_chunks_failed"] += 1
                     report_failure(pipe, "history_capture", exc)
                     await state(ConnectionState.ATTENTION, "history_incomplete")
 
@@ -146,6 +174,7 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                         stage = "history_request"
                         await request_once(client, account_id, generation)
                 except Exception as exc:
+                    counters[stage + "_failed"] += 1
                     report_failure(pipe, stage, exc)
                     await state(ConnectionState.ATTENTION, "history_incomplete")
                 await asyncio.sleep(10)
@@ -170,11 +199,21 @@ def run(account_id: str, generation: int, session_path: str, pipe, parent_pid: i
                     report_failure(pipe, "identity_refresh", exc)
                 await asyncio.sleep(60)
 
+        async def capture_health():
+            while True:
+                await asyncio.sleep(60)
+                with suppress(BrokenPipeError, EOFError, OSError):
+                    pipe.send(health_event(counters, connected_event.is_set(), last_staged, time.monotonic()))
+
         requester = asyncio.create_task(request_history())
         identities = asyncio.create_task(refresh_identities())
+        health = asyncio.create_task(capture_health())
         try:
             await app.run()
         finally:
+            health.cancel()
+            with suppress(asyncio.CancelledError):
+                await health
             identities.cancel()
             with suppress(asyncio.CancelledError):
                 await identities

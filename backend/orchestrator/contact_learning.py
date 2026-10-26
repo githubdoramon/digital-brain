@@ -9,10 +9,11 @@ from __future__ import annotations
 import re
 
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from birthdays import birthday_label, birthday_parts, birthday_value, parse_birthday
 from knowledge_references import contact_ref, normalize_finding
+from learning_validation import reject
 
 
 class PersonChange(BaseModel):
@@ -50,20 +51,24 @@ def validate(finding, context, evidence):
     import knowledge
 
     finding = normalize_finding(finding, context)
-    graph = ContactChanges.model_validate(finding.get("contact_changes")).model_dump()
+    try:
+        graph = ContactChanges.model_validate(finding.get("contact_changes")).model_dump()
+    except ValidationError as exc:
+        reject("invalid_contact_change", "invalid_contact_schema",
+               errors=exc.errors(include_input=False, include_context=False))
     if finding.get("inferred") and not finding.get("inference_reason"):
-        raise ValueError("invalid_contact_change")
+        reject("invalid_contact_change", "missing_inference_reason")
     known = {contact_ref(c["contact_id"]): c for c in context.get("contacts", [])}
     refs = {p["ref"] for p in graph["people"]}
     if len(refs) != len(graph["people"]):
-        raise ValueError("invalid_contact_change")
+        reject("invalid_contact_change", "duplicate_person_refs")
     quotes = " ".join(e["quote"] for e in evidence)
     confirmed, anchored_contacts = [], []
     for person in graph["people"]:
         ref = person["ref"]
         if ref.startswith("contact:"):
             if ref not in known:
-                raise ValueError("invalid_contact_change")
+                reject("invalid_contact_change", "unknown_contact_ref", person_ref=ref)
             person["display_name"] = known[ref]["display_name"]
             anchored = any(
                 r.get("payload", {}).get("contact_id") == known[ref]["contact_id"]
@@ -86,21 +91,22 @@ def validate(finding, context, evidence):
             if anchored:
                 anchored_contacts.append(ref)
         elif not re.search(r"(?<!\w)" + re.escape(person["display_name"]) + r"(?!\w)", quotes):
-            raise ValueError("invalid_contact_change")
+            reject("invalid_contact_change", "new_person_name_not_in_evidence", person_ref=ref,
+                   suggested_name=person["display_name"])
         if person.get("birthday") and not person["birthday"].startswith("--"):
             if not re.search(r"\b" + person["birthday"][:4] + r"\b", quotes):
-                raise ValueError("invalid_contact_change")
+                reject("invalid_contact_change", "birth_year_not_in_evidence")
     for rel in graph["relationships"]:
         if (
             rel["from_ref"] not in refs
             or rel["to_ref"] not in refs
             or rel["from_ref"] == rel["to_ref"]
         ):
-            raise ValueError("invalid_contact_change")
+            reject("invalid_contact_change", "invalid_relationship_endpoints")
         rel["relationship_type"] = rel["relationship_type"].strip().title()
         rel["reciprocal_type"] = rel["reciprocal_type"].strip().title()
         if not rel["relationship_type"] or not rel["reciprocal_type"]:
-            raise ValueError("invalid_contact_change")
+            reject("invalid_contact_change", "empty_relationship_type")
     return {
         **finding,
         "subject_ref": "general",

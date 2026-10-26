@@ -1,5 +1,25 @@
 # WhatsApp ingestion through Tryx
 
+### Capture diagnostics
+
+The child reports cumulative session counters every minute as
+`[messaging] capture_health`: live events received, stage-accepted projections,
+empty/control skips, excluded sources, staging rejections, live failures and
+history chunk outcomes. `last_live_staged_age_s` is null until a live projection
+commits to the inbox; transport readiness alone is not capture proof. Counters
+reset with the child process, and stage acceptance includes deduplicated input,
+not necessarily a newly archived unique message.
+
+Known status/broadcast/newsletter chat sources are outside the archive contract
+and produce `capture_ignored` at INFO without setting attention or incrementing
+capture failures. Unexpected unsupported identities still fail closed and emit
+`capture_failed` at WARNING with the failing identity field (chat/sender/self)
+and an allow-listed address category. Database failures include SQLSTATE. No full
+addresses, phone numbers, message text, pairing data or raw protocol exceptions
+are included. The supervisor logs these events because the native child's stdout
+and stderr remain suppressed. These classifications identify future failures;
+they do not establish which sources caused previously generic rejections.
+
 Status: first archive milestone implemented in source on 2026-10-17. Deployment,
 live pairing, account history coverage, and device UI acceptance remain unverified.
 The later sections retain the researched target contracts and future work; the

@@ -95,6 +95,9 @@ def next_batch(
         cur.execute(
             """
             SELECT s.*, p.part, st.started_at,
+                COALESCE((SELECT f.batch_limit FROM intelligence_failures f
+                    WHERE f.user_email=st.user_email AND f.source_id=s.source_id
+                    AND f.part=p.part AND f.review=%s),%s) AS batch_limit,
                 substring(s.payload->>'text' FROM p.part * %s + 1 FOR %s) AS text
             FROM intelligence_sources s CROSS JOIN intelligence_state st
             CROSS JOIN LATERAL generate_series(0,
@@ -118,6 +121,8 @@ def next_batch(
             ORDER BY s.historical, s.source_id, p.part LIMIT %s
         """,
             (
+                review,
+                BATCH_SIZE,
                 CHUNK_SIZE,
                 CHUNK_SIZE + 400,
                 CHUNK_SIZE,
@@ -138,6 +143,8 @@ def next_batch(
             ),
         )
         rows = [dict(r) for r in cur.fetchall()]
+        if rows:
+            rows = rows[:min(row["batch_limit"] for row in rows)]
         for r in rows:
             r["ref"] = f"{r['source_id']}:{r['part']}"
             r["actionable"] = (
@@ -668,7 +675,7 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
     return counts
 
 
-def defer_batch(owner, run, batch, code, *, review=False):
+def defer_batch(owner, run, batch, code, *, review=False, details=None, split_size=None):
     """Retain rejected evidence, retry three times, then pause for explicit retry."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -681,14 +688,20 @@ def defer_batch(owner, run, batch, code, *, review=False):
         for row in batch:
             cur.execute(
                 """INSERT INTO intelligence_failures
-                (user_email, source_id, part, review, knowledge_only, error_code, next_attempt_at)
-                VALUES (%s,%s,%s,%s,%s,%s,NOW() + INTERVAL '5 minutes')
+                (user_email, source_id, part, review, knowledge_only, error_code, next_attempt_at,
+                    attempts,batch_limit,error_details,failed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,NOW() + make_interval(secs => %s),%s,%s,%s,NOW())
                 ON CONFLICT (user_email,source_id,part,review) DO UPDATE SET
-                    attempts=LEAST(3,intelligence_failures.attempts+1),
+                    attempts=CASE WHEN %s THEN intelligence_failures.attempts
+                        ELSE LEAST(3,intelligence_failures.attempts+1) END,
+                    batch_limit=LEAST(intelligence_failures.batch_limit,EXCLUDED.batch_limit),
                     error_code=EXCLUDED.error_code,
-                    next_attempt_at=CASE WHEN intelligence_failures.attempts >= 2 THEN NULL
-                        ELSE NOW() + INTERVAL '5 minutes' END""",
-                (owner, row["source_id"], row["part"], review, run["knowledge_only"], code),
+                    error_details=EXCLUDED.error_details,failed_at=NOW(),
+                    next_attempt_at=CASE WHEN NOT %s AND intelligence_failures.attempts >= 2 THEN NULL
+                        ELSE EXCLUDED.next_attempt_at END""",
+                (owner, row["source_id"], row["part"], review, run["knowledge_only"], code,
+                 1 if split_size else 300, 0 if split_size else 1,
+                 split_size or BATCH_SIZE, json_value(details or {}), bool(split_size), bool(split_size)),
             )
         conn.commit()
 
@@ -697,7 +710,7 @@ def retry_failures(owner):
     """Replay retained failures and wake completed/failed runs for this owner only."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE intelligence_failures SET attempts=0,next_attempt_at=NOW() WHERE user_email=%s",
+            "UPDATE intelligence_failures SET attempts=0,next_attempt_at=NOW(),batch_limit=1 WHERE user_email=%s",
             (owner,),
         )
         count = cur.rowcount

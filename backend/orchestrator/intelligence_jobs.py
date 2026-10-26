@@ -13,6 +13,7 @@ import learning_fairness
 import llm_admission
 from db import get_conn
 from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lease_heartbeat
+from learning_failures import rejection_details
 from llm_policy import LLMRequestRejected, failure_code
 from observability.logger import get_runtime_logger
 from observability.mirador import traced_intelligence_run
@@ -231,19 +232,17 @@ def _process_run(run):
             if review_batch or (not run["knowledge_only"] and not run["reviewed"]):
                 try:
                     context, findings = (
-                        intelligence_model.analyze(run["user_email"], review_batch)
+                        intelligence_model.analyze(run["user_email"], review_batch, durable_splits=True)
                         if review_batch
                         else ({}, [])
                     )
                 except (
                     intelligence_model.InvalidModelOutput,
                     intelligence_model.LLMOutputExhaustedError,
+                    intelligence_model.SourceBatchSplit,
                     LLMRequestRejected,
                 ) as exc:
-                    intelligence.defer_batch(
-                        run["user_email"], run, review_batch, exc.code, review=True
-                    )
-                    logger.warning("[intelligence] review deferred reason=%s", exc.code)
+                    _reject_batch(run, review_batch, exc, review=True)
                     break
                 intelligence.apply_batch(
                     run["user_email"], run, review_batch, context, findings, review=True
@@ -255,17 +254,17 @@ def _process_run(run):
             if needs_model:
                 model_batches += 1
                 context, findings = intelligence_model.analyze(
-                    run["user_email"], batch, knowledge_only=run["knowledge_only"]
+                    run["user_email"], batch, knowledge_only=run["knowledge_only"], durable_splits=True
                 )
             else:
                 context, findings = {}, []
         except (
             intelligence_model.InvalidModelOutput,
             intelligence_model.LLMOutputExhaustedError,
+            intelligence_model.SourceBatchSplit,
             LLMRequestRejected,
         ) as exc:
-            intelligence.defer_batch(run["user_email"], run, batch, exc.code)
-            logger.warning("[intelligence] batch deferred reason=%s", exc.code)
+            _reject_batch(run, batch, exc)
             break
         if _STOP.is_set():
             finish_run(run, more=True)
@@ -278,6 +277,25 @@ def _process_run(run):
             logger.info("[intelligence] skipped_sources_drained source_parts=%d", len(batch))
     finish_run(run, more=True)
     return True
+
+
+def _reject_batch(run, batch, error, *, review=False):
+    code = getattr(error, "reason", None) or error.code
+    # Multi-source failures narrow their claims without spending every source's
+    # retry budget. Even invalid JSON cannot identify an individual bad source.
+    size = max(1, len(batch) // 2) if len(batch) > 1 else None
+    if isinstance(error, intelligence_model.SourceBatchSplit):
+        size = error.size
+    intelligence.defer_batch(
+        run["user_email"], run, batch, code, review=review,
+        details=rejection_details(error, batch), split_size=size,
+    )
+    log = logger.info if size else logger.warning
+    log(
+        "[intelligence] batch_%s reason=%s parts=%d retry_batch_limit=%s refs=%s",
+        "split" if size else "rejected", code, len(batch), size or 1,
+        [row.get("ref") for row in batch],
+    )
 
 
 def _owners():

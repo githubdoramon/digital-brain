@@ -83,7 +83,15 @@ def database(monkeypatch, request):
                 "0089_learning_scope.sql",
                 "0090_learning_evidence_recovery.sql",
                 "0092_messenger_identity_profiles.sql",
+                "0093_learning_failure_isolation.sql",
             ):
+                if name == "0093_learning_failure_isolation.sql" and getattr(request, "param", None) in {
+                    "pre_efficiency", "pre_fairness", "pre_context", "pre_reliability",
+                }:
+                    # Historical migration tests call current runtime helpers.
+                    # Supply their diagnostic columns without applying recovery.
+                    conn.execute((root / name).read_text().split("-- One-time recovery", 1)[0])
+                    continue
                 if (
                     name == "0088_command_learning_ownership.sql"
                     and getattr(request, "param", None) == "pre_command_ownership"
@@ -94,7 +102,7 @@ def database(monkeypatch, request):
                     "0087_background_learning_recovery.sql",
                     "0089_learning_scope.sql",
                     "0090_learning_evidence_recovery.sql",
-                "0092_messenger_identity_profiles.sql",
+                    "0092_messenger_identity_profiles.sql",
                 } and getattr(request, "param", None) in {
                     "pre_efficiency",
                     "pre_fairness",

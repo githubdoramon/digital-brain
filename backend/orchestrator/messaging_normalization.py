@@ -228,9 +228,13 @@ def normalize_message(
 
 
 def live_record(event: Any, self_jid: str) -> dict | None:
+    from whatsapp_diagnostics import project_identity
+
     data = event.data
     info = data.message_info
     source = info.source
+    chat = project_identity(source.chat, "chat")
+    sender = project_identity(source.sender, "sender")
     sent_at = info.timestamp
     if isinstance(sent_at, datetime) and sent_at.tzinfo is None:
         # Pinned Tryx MessageInfo.timestamp uses datetime.fromtimestamp(epoch)
@@ -239,8 +243,8 @@ def live_record(event: Any, self_jid: str) -> dict | None:
         sent_at = sent_at.timestamp()
     record = normalize_message(
         proto=data.raw_proto,
-        chat=source.chat,
-        sender=source.sender,
+        chat=chat,
+        sender=sender,
         message_id=info.id,
         sent_at=sent_at,
         outgoing=source.is_from_me,

@@ -947,6 +947,7 @@ def _analyze(owner, batch, *, knowledge_only=False, repair_hint=None):
             details=details,
             findings=candidates["findings"],
         )
+        details = {**details, "rejected_findings": candidates["findings"]}
         raise InvalidModelOutput(code, details) from None
     primary = {(row["source_id"], row["part"]) for row in eligible if not row.get("supporting")}
     findings = [

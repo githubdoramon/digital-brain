@@ -36,10 +36,7 @@ def diagnostic_scope(**values):
         _context.reset(token)
 
 
-def diagnostic(event, **values):
-    if os.getenv("LLM_DIAGNOSTICS_ENABLED", "true").lower() in {"0", "false", "off", "no"}:
-        return
-
+def redacted_json(values):
     def clean(value):
         if isinstance(value, dict):
             return {
@@ -52,13 +49,20 @@ def diagnostic(event, **values):
             return [clean(v) for v in value]
         return value
 
-    data = json.dumps(clean({**(_context.get() or {}), **values}), default=str, ensure_ascii=False)
+    data = json.dumps(clean(values), default=str, ensure_ascii=False)
     # Credentials can appear inside provider error strings or nested JSON strings.
     for name, secret in os.environ.items():
         if name.endswith(("_KEY", "_TOKEN", "_PASSWORD", "_SECRET")) and len(secret) >= 6:
             data = data.replace(secret, "[redacted]")
             data = data.replace(json.dumps(secret, ensure_ascii=False)[1:-1], "[redacted]")
     data = re.sub(r"(?i)Bearer\s+[a-z0-9._~+/-]+=*", "Bearer [redacted]", data)
+    return data
+
+
+def diagnostic(event, **values):
+    if os.getenv("LLM_DIAGNOSTICS_ENABLED", "true").lower() in {"0", "false", "off", "no"}:
+        return
+    data = redacted_json({**(_context.get() or {}), **values})
     limit = max(2000, int(os.getenv("LLM_DIAGNOSTIC_MAX_CHARS", "60000")))
     if len(data) > limit:
         data = data[:limit] + f" [truncated; original_chars={len(data)}]"

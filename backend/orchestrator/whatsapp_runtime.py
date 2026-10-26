@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import threading
@@ -78,6 +79,13 @@ def _stop_session(session: Session):
     session.pipe.close()
 
 
+def log_capture_event(event):
+    kind = event["kind"]
+    log = logger.warning if kind == "capture_failure" else logger.info
+    label = "capture_failed" if kind == "capture_failure" else kind
+    log("[messaging] %s provider=whatsapp %s", label, json.dumps(event, sort_keys=True))
+
+
 def _supervise():
     from auth import ALLOWED_USERS
     from telegram_native import configured
@@ -152,11 +160,8 @@ def _supervise():
                         elif event.get("kind") == "clear_password":
                             with _QR_LOCK:
                                 _PASSWORDS.pop(key, None)
-                        elif event.get("kind") == "capture_failure":
-                            logger.warning(
-                                "[messaging] capture_failed provider=whatsapp stage=%s category=%s reason=%s",
-                                event["stage"], event["category"], event["reason"],
-                            )
+                        elif event.get("kind") in {"capture_failure", "capture_ignored", "capture_health"}:
+                            log_capture_event(event)
                         elif event.get("kind") == "error":
                             runtime_state(
                                 key,

@@ -541,3 +541,30 @@ three-attempt pause. Migration 0090 requeues previously paused `invalid_evidence
 rows with multi-part batch limits at a maximum of twelve parts, preserving other
 failure classes, single-part pauses and active leases. This includes the 48-part
 batch affected before evidence isolation was implemented.
+# Retained learning failures
+
+Migration `0093_learning_failure_isolation.sql` adds bounded, credential-redacted
+`error_details` and `failed_at` to both learning queues, plus per-source scheduled
+retry batch limits. Multi-source validation/output failures split durably before
+spending individual retry budgets. Single-source failures still pause after three
+attempts; validation is never bypassed. Current-source checks apply on every retry,
+so stale/deleted snapshots drain without re-extracting them. Cancellation titles
+do not cause rich meeting notes to be discarded.
+
+The migration retries existing paused schema, evidence, contact-change and output
+exhaustion failures as single-source work. Completed receipts and active knowledge
+leases are preserved; retired scheduled-history work is not revived. Previous
+error codes remain, but original rejection details cannot be reconstructed.
+Scheduled recovery resumes through the existing covering-run wake-up path.
+
+After deployment, inspect remaining failures without changing data:
+
+```sh
+docker compose exec -T orchestrator python scripts/inspect_learning_failures.py \
+  --owner YOUR_EMAIL > learning-failures.json
+```
+
+The export includes source chunks, retained errors, retry state and batch limits.
+It is private diagnostic evidence, never external telemetry. Large rejection
+details are capped; successful work is excluded from the export, and scheduled
+failure rows are removed when their source receipts commit.
