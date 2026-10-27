@@ -56,6 +56,7 @@ type Message = {
   attachments: { type: string; filename?: string }[];
 };
 const base = "/messaging";
+const peoplePageSize = 100;
 const labels: Record<string, string> = {
   connected: "Connected",
   connecting: "Connecting…",
@@ -156,6 +157,10 @@ export default function MessagingManager({
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
+  const [peopleOffset, setPeopleOffset] = useState(0);
+  const [peopleHasMore, setPeopleHasMore] = useState(false);
+  const [peopleLoadingMore, setPeopleLoadingMore] = useState(false);
+  const [peopleLoadMoreError, setPeopleLoadMoreError] = useState(false);
   const [filter, setFilter] = useState("unlinked");
   const [peopleQuery, setPeopleQuery] = useState("");
   const [targetContact, setTargetContact] = useState("");
@@ -174,6 +179,8 @@ export default function MessagingManager({
   } | null>(null);
   const version = useRef(0);
   const statusVersion = useRef(0);
+  const peopleVersion = useRef(0);
+  const peopleRequestPending = useRef(false);
   const newContactId = useRef("");
   const picker = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -223,14 +230,26 @@ export default function MessagingManager({
   useEffect(() => {
     if (tab !== "people") return;
     let active = true;
+    const currentVersion = ++peopleVersion.current;
+    peopleRequestPending.current = false;
+    setPeopleLoaded(false);
+    setPeopleLoadingMore(false);
+    setPeopleLoadMoreError(false);
+    setPeopleHasMore(false);
+    setPeopleOffset(0);
+    setSelected(null);
     void Promise.all([
-      providerApi.get<{ identities: Identity[] }>(`${base}/identities`),
+      providerApi.get<{ identities: Identity[] }>(
+        `${base}/identities?limit=${peoplePageSize}&offset=0`,
+      ),
       providerApi.get<{ contacts: Contact[] }>("/contacts"),
     ])
       .then(([i, c]) => {
         if (active) {
           setIdentities(i.identities);
           setContacts(c.contacts);
+          setPeopleOffset(i.identities.length);
+          setPeopleHasMore(i.identities.length === peoplePageSize);
           setPeopleLoaded(true);
         }
       })
@@ -240,8 +259,41 @@ export default function MessagingManager({
       });
     return () => {
       active = false;
+      if (peopleVersion.current === currentVersion) peopleVersion.current += 1;
     };
   }, [tab, providerApi]);
+  const loadMorePeople = async () => {
+    if (peopleRequestPending.current || !peopleHasMore) return;
+    peopleRequestPending.current = true;
+    const currentVersion = peopleVersion.current;
+    setPeopleLoadingMore(true);
+    setPeopleLoadMoreError(false);
+    try {
+      const page = await providerApi.get<{ identities: Identity[] }>(
+        `${base}/identities?limit=${peoplePageSize}&offset=${peopleOffset}`,
+      );
+      if (peopleVersion.current !== currentVersion) return;
+      setIdentities((previous) => {
+        const seen = new Set(previous.map((identity) => identity.identity_id));
+        return [
+          ...previous,
+          ...page.identities.filter(
+            (identity) => !seen.has(identity.identity_id),
+          ),
+        ];
+      });
+      setPeopleOffset((previous) => previous + page.identities.length);
+      setPeopleHasMore(page.identities.length === peoplePageSize);
+    } catch {
+      if (peopleVersion.current === currentVersion)
+        setPeopleLoadMoreError(true);
+    } finally {
+      if (peopleVersion.current === currentVersion) {
+        peopleRequestPending.current = false;
+        setPeopleLoadingMore(false);
+      }
+    }
+  };
   useEffect(() => {
     if (tab !== "archive") return;
     let active = true;
@@ -576,7 +628,7 @@ export default function MessagingManager({
           <div className={styles.row}>
             <input
               aria-label={`Search ${providerName} people`}
-              placeholder="Search names or numbers"
+              placeholder="Search loaded people"
               value={peopleQuery}
               onChange={(e) => setPeopleQuery(e.target.value)}
             />
@@ -592,7 +644,13 @@ export default function MessagingManager({
             </select>
           </div>
           {!peopleLoaded && <p role="status">Loading people…</p>}
-          {peopleLoaded && !visible.length && <p>No people match this view.</p>}
+          {peopleLoaded && !visible.length && (
+            <p>
+              {peopleHasMore
+                ? "No loaded people match this view. Load more to continue."
+                : "No people match this view."}
+            </p>
+          )}
           {visible.map((i) => (
             <article className={styles.person} key={i.identity_id}>
               <div>
@@ -729,6 +787,21 @@ export default function MessagingManager({
               )}
             </article>
           ))}
+          {peopleLoadMoreError && (
+            <p role="alert">Could not load more people. Please try again.</p>
+          )}
+          {peopleHasMore && (
+            <button
+              disabled={peopleLoadingMore || busy}
+              onClick={() => void loadMorePeople()}
+            >
+              {peopleLoadingMore
+                ? "Loading…"
+                : peopleLoadMoreError
+                  ? "Retry loading more"
+                  : "Load more"}
+            </button>
+          )}
         </section>
       )}
       {tab === "archive" && (
