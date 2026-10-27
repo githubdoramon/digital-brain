@@ -27,6 +27,8 @@ type Identity = {
   contact_id: string | null;
   contact_name: string | null;
   suggested_contacts: Contact[];
+  source_identities?: { identity_id: string; external_id: string }[];
+  recent_message?: { title: string; body: string; sent_at: string } | null;
 };
 type Conversation = {
   conversation_id: string;
@@ -294,7 +296,10 @@ export default function MessagingManager({
   const link = async (identity: Identity, contact: Contact | null) => {
     await providerApi.put(
       `${base}/identities/${encodeURIComponent(identity.identity_id)}/contact`,
-      { contact_id: contact?.contact_id ?? null },
+      {
+        contact_id: contact?.contact_id ?? null,
+        expected_contact_id: identity.contact_id,
+      },
     );
     setIdentities((old) =>
       old.map((i) =>
@@ -343,7 +348,15 @@ export default function MessagingManager({
           : filter === "suggested"
             ? !i.contact_id && i.suggested_contacts.length > 0
             : !i.contact_id)) &&
-      `${i.display_name} ${i.external_id} ${i.contact_name || ""}`
+      [
+        i.display_name,
+        i.external_id,
+        i.contact_name || "",
+        ...(i.source_identities || []).map((alias) => alias.external_id),
+        i.recent_message?.title || "",
+        i.recent_message?.body || "",
+      ]
+        .join(" ")
         .toLowerCase()
         .includes(peopleQuery.toLowerCase()),
   );
@@ -584,7 +597,24 @@ export default function MessagingManager({
             <article className={styles.person} key={i.identity_id}>
               <div>
                 <strong>{i.display_name || i.external_id}</strong>
-                <p className={styles.muted}>{i.external_id}</p>
+                {i.display_name && i.display_name !== i.external_id && (
+                  <p className={styles.muted}>{i.external_id}</p>
+                )}
+                {i.recent_message && (
+                  <div className={styles.personEvidence}>
+                    <p className={styles.evidenceHeading}>
+                      {i.recent_message.title || "Conversation"} ·{" "}
+                      <time dateTime={i.recent_message.sent_at}>
+                        {new Date(
+                          i.recent_message.sent_at,
+                        ).toLocaleDateString()}
+                      </time>
+                    </p>
+                    <p className={styles.evidenceMessage}>
+                      “{i.recent_message.body}”
+                    </p>
+                  </div>
+                )}
                 <p>
                   {i.contact_name
                     ? `Linked to ${i.contact_name}`
@@ -627,7 +657,9 @@ export default function MessagingManager({
                     newContactId.current = "";
                     setSelected(i);
                     setContactQuery("");
-                    setNewName(i.display_name || "");
+                    setNewName(
+                      i.display_name !== i.external_id ? i.display_name : "",
+                    );
                   }}
                 >
                   {i.contact_id ? "Change contact" : "Choose contact"}
@@ -641,60 +673,62 @@ export default function MessagingManager({
                   </button>
                 )}
               </div>
+              {selected?.identity_id === i.identity_id && (
+                <section
+                  className={styles.picker}
+                  ref={picker}
+                  aria-label={`Choose contact for ${selected.display_name || selected.external_id}`}
+                >
+                  <div className={styles.row}>
+                    <h3>
+                      Link {selected.display_name || selected.external_id}
+                    </h3>
+                    <button disabled={busy} onClick={() => setSelected(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                  <input
+                    autoFocus
+                    aria-label="Search contacts"
+                    placeholder="Find a contact"
+                    value={contactQuery}
+                    onChange={(e) => setContactQuery(e.target.value)}
+                  />
+                  <div className={styles.contactList}>
+                    {contacts
+                      .filter((c) =>
+                        c.display_name
+                          .toLowerCase()
+                          .includes(contactQuery.toLowerCase()),
+                      )
+                      .map((c) => (
+                        <button
+                          key={c.contact_id}
+                          disabled={busy}
+                          onClick={() => void act(() => link(selected, c))}
+                        >
+                          {c.display_name}
+                        </button>
+                      ))}
+                  </div>
+                  <form onSubmit={createContact}>
+                    <label>
+                      Create a new contact
+                      <input
+                        required
+                        aria-label="New contact name"
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                      />
+                    </label>
+                    <button disabled={busy || !newName.trim()}>
+                      Create and link
+                    </button>
+                  </form>
+                </section>
+              )}
             </article>
           ))}
-          {selected && (
-            <section
-              className={styles.picker}
-              ref={picker}
-              aria-label={`Choose contact for ${selected.display_name || selected.external_id}`}
-            >
-              <div className={styles.row}>
-                <h3>Link {selected.display_name || selected.external_id}</h3>
-                <button disabled={busy} onClick={() => setSelected(null)}>
-                  Cancel
-                </button>
-              </div>
-              <input
-                autoFocus
-                aria-label="Search contacts"
-                placeholder="Find a contact"
-                value={contactQuery}
-                onChange={(e) => setContactQuery(e.target.value)}
-              />
-              <div className={styles.contactList}>
-                {contacts
-                  .filter((c) =>
-                    c.display_name
-                      .toLowerCase()
-                      .includes(contactQuery.toLowerCase()),
-                  )
-                  .map((c) => (
-                    <button
-                      key={c.contact_id}
-                      disabled={busy}
-                      onClick={() => void act(() => link(selected, c))}
-                    >
-                      {c.display_name}
-                    </button>
-                  ))}
-              </div>
-              <form onSubmit={createContact}>
-                <label>
-                  Create a new contact
-                  <input
-                    required
-                    aria-label="New contact name"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                  />
-                </label>
-                <button disabled={busy || !newName.trim()}>
-                  Create and link
-                </button>
-              </form>
-            </section>
-          )}
         </section>
       )}
       {tab === "archive" && (
