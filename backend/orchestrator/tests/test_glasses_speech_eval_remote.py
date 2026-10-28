@@ -70,7 +70,7 @@ def test_transcribe_uploads_only_audio_and_fixed_parameters(monkeypatch, caplog)
     assert kwargs["headers"] == {"Authorization": "Bearer test-key"}
     assert kwargs["files"] == {"file": ("sample.wav", data, "audio/wav")}
     assert kwargs["data"] == {
-        "model": "large-v3-turbo",
+        "model": "whisper-large-v3-turbo",
         "language": "en",
         "response_format": "json",
         "temperature": "0",
@@ -79,6 +79,8 @@ def test_transcribe_uploads_only_audio_and_fixed_parameters(monkeypatch, caplog)
     assert result["text"] == "Hey Brain take a picture"
     assert result["coldStartControlled"] is False
     assert result["provider"] == "remote"
+    assert result["model"] == "large-v3-turbo"
+    assert result["upstreamModel"] == "whisper-large-v3-turbo"
     assert result["upstreamRequestMs"] >= 0
     assert "modelAlreadyLoaded" not in result
     assert "inferenceMs" not in result

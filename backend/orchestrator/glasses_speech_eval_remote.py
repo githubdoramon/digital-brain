@@ -12,6 +12,7 @@ import requests
 from glasses_speech_eval import EvalFailure, enabled, validate_audio
 
 MODEL = "large-v3-turbo"
+UPSTREAM_MODEL = "whisper-large-v3-turbo"
 logger = logging.getLogger(__name__)
 _slot = threading.Lock()
 
@@ -58,6 +59,7 @@ def request(model: str, operation: str, audio: bytes = b"", threads: int | None 
             "engine": "openai-compatible",
             "provider": "remote",
             "model": MODEL,
+            "upstreamModel": UPSTREAM_MODEL,
             "coldStartControlled": False,
         }
         if operation == "prepare":
@@ -79,7 +81,7 @@ def request(model: str, operation: str, audio: bytes = b"", threads: int | None 
                 headers=headers,
                 files={"file": ("sample.wav", audio, "audio/wav")},
                 data={
-                    "model": MODEL,
+                    "model": UPSTREAM_MODEL,
                     "language": "en",
                     "response_format": "json",
                     "temperature": "0",
