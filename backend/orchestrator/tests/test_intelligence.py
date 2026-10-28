@@ -97,12 +97,13 @@ def database(monkeypatch, request):
                     and getattr(request, "param", None) == "pre_command_ownership"
                 ):
                     continue
+                # Keep the independent messaging schema current, including 0092:
+                # context_for checks identity conflicts even in learning-recovery tests.
                 if name in {
                     "0086_learning_efficiency.sql",
                     "0087_background_learning_recovery.sql",
                     "0089_learning_scope.sql",
                     "0090_learning_evidence_recovery.sql",
-                    "0092_messenger_identity_profiles.sql",
                 } and getattr(request, "param", None) in {
                     "pre_efficiency",
                     "pre_fairness",
