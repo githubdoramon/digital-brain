@@ -1,10 +1,13 @@
 """Explicit replay-only uploads. Never pass reference labels into inference."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 import glasses_speech_eval as speech
+import glasses_speech_eval_remote as remote
 from auth import get_current_user
 
 
@@ -19,6 +22,9 @@ def create_glasses_speech_eval_router() -> APIRouter:
             "enabled": speech.enabled(),
             "cpuThreadOptions": [2, 4, 8],
             "cpuEnvironment": speech.cpu_environment(),
+            "remoteModels": [
+                {"id": remote.MODEL, "provider": "remote", "coldStartControlled": False}
+            ],
             "models": [
                 {"id": key, "repository": repo, "revision": revision, "computeType": "int8"}
                 for key, (repo, revision) in speech.MODELS.items()
@@ -26,9 +32,16 @@ def create_glasses_speech_eval_router() -> APIRouter:
         }
 
     async def invoke(
-        key: str, operation: str, cold: bool = False, audio: bytes = b"", threads: int | None = None
+        key: str,
+        operation: str,
+        cold: bool = False,
+        audio: bytes = b"",
+        threads: int | None = None,
+        provider: str = "cpu",
     ):
         try:
+            if provider == "remote":
+                return await run_in_threadpool(remote.request, key, operation, audio, threads)
             return await run_in_threadpool(
                 speech.engine.request, key, operation, cold, audio, threads
             )
@@ -47,9 +60,11 @@ def create_glasses_speech_eval_router() -> APIRouter:
 
     @router.post("/prepare")
     async def prepare(
-        model: str = Query(max_length=32), threads: int | None = Query(default=None, ge=1, le=8)
+        model: str = Query(max_length=32),
+        threads: int | None = Query(default=None, ge=1, le=8),
+        provider: Literal["cpu", "remote"] = "cpu",
     ):
-        return await invoke(model, "prepare", threads=threads)
+        return await invoke(model, "prepare", threads=threads, provider=provider)
 
     @router.post("/transcribe")
     async def transcribe(
@@ -57,6 +72,7 @@ def create_glasses_speech_eval_router() -> APIRouter:
         model: str = Query(max_length=32),
         cold: bool = False,
         threads: int | None = Query(default=None, ge=1, le=8),
+        provider: Literal["cpu", "remote"] = "cpu",
     ):
         if not speech.enabled():
             speech.log_rejected(model, "transcribe", "evaluation_disabled")
@@ -66,6 +82,6 @@ def create_glasses_speech_eval_router() -> APIRouter:
             if len(audio) + len(chunk) > speech.MAX_AUDIO_BYTES:
                 raise HTTPException(413, "audio_too_large")
             audio.extend(chunk)
-        return await invoke(model, "transcribe", cold, bytes(audio), threads)
+        return await invoke(model, "transcribe", cold, bytes(audio), threads, provider)
 
     return router

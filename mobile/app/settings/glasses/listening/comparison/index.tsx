@@ -49,6 +49,11 @@ function failureMessage(reason: string) {
       return 'Sign in again, then retry the comparison.';
     case 'evaluation_disabled':
       return 'Enable speech comparisons on your server, then try again.';
+    case 'remote_not_configured':
+      return 'Configure the GPU server, then try again.';
+    case 'remote_http_error':
+    case 'remote_invalid_response':
+      return 'The GPU server could not process the recording. Export the results for details.';
     case 'network_unavailable':
     case 'network_timeout':
     case 'server_timeout':
@@ -178,14 +183,24 @@ export default function SpeechComparisonScreen() {
           />
           {folder && <Text style={styles.body}>Dataset folder selected</Text>}
         </Card>
-        {(['local', 'server'] as const).map((location) => (
+        {(['local', 'server', 'remote'] as const).map((location) => (
           <Card key={location} style={styles.card}>
             <Text style={styles.title}>
-              {location === 'local' ? 'On this phone' : 'On your server'}
+              {location === 'local'
+                ? 'On this phone'
+                : location === 'remote'
+                  ? 'On your GPU server'
+                  : 'On your CPU server'}
             </Text>
             {location === 'server' && (
               <Text style={styles.body}>
                 Selected recordings are sent to your Digital Brain server for comparison.
+              </Text>
+            )}
+            {location === 'remote' && (
+              <Text style={styles.body}>
+                Selected recordings are sent through Digital Brain to your GPU server for
+                comparison.
               </Text>
             )}
             {models
@@ -336,10 +351,18 @@ export default function SpeechComparisonScreen() {
                 {row.candidate
                   .replace('local:', 'Phone · ')
                   .replace('server:', 'Server · ')
+                  .replace('remote:', 'GPU server · ')
                   .replace(/@threads=(\d+)/, ' · $1 threads')}
               </Text>
               <Text style={styles.label}>
-                {row.mode === 'cold' ? 'Fresh model' : 'Model ready'}
+                {
+                  {
+                    cold: 'Fresh model',
+                    warm: 'Model ready',
+                    first: 'First request',
+                    repeat: 'Repeated requests',
+                  }[row.mode]
+                }
               </Text>
               <Text style={styles.body}>
                 Correct: {row.correct}/{row.completed} ({percent(row.accuracy)}) · Failed:{' '}

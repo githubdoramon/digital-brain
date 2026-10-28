@@ -6,6 +6,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SpeechEvalSummaryTest {
+  @Test fun remoteSummariesUseFirstAndRepeatAndStaySeparateFromCpu() {
+    val rows = JSONArray()
+    for ((mode, ms) in listOf("first" to 350, "repeat" to 300)) {
+      rows.put(JSONObject().put("candidate", "remote:large-v3-turbo").put("mode", mode)
+        .put("status", "complete").put("expectedCommand", "take_picture").put("command", "take_picture")
+        .put("correct", true).put("totalMs", ms).put("referenceWords", 5).put("wordErrors", 0))
+    }
+    val value = JSONObject().put("candidates", JSONArray(listOf("remote:large-v3-turbo", "server:large-v3-turbo@threads=4"))).put("results", rows)
+    val summary = SpeechEvalStore.summary(value)
+    assertEquals(listOf("first", "repeat", "cold", "warm"), summary.map { it["mode"] })
+    assertEquals(350L, summary[0]["medianMs"])
+    assertEquals(300L, summary[1]["medianMs"])
+    assertEquals(1.0, summary[1]["accuracy"])
+    assertEquals(0, summary[2]["count"])
+  }
   @Test fun distinguishesRejectionsMissesWrongCommandsAndFailures() {
     val rows = JSONArray()
     fun row(expected: String?, actual: String?, status: String = "complete", ms: Long = 100) {

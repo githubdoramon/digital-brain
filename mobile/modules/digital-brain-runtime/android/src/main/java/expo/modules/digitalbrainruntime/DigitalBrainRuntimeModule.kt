@@ -41,7 +41,7 @@ class DigitalBrainRuntimeModule : Module() {
         "location" to "local", "bytes" to model.getLong("bytes")) } +
         listOf("base.en", "small.en", "medium.en", "large-v3", "large-v3-turbo").map {
           mapOf("id" to "server:$it", "label" to it, "location" to "server", "bytes" to 0)
-        }
+        } + listOf(mapOf("id" to "remote:large-v3-turbo", "label" to "large-v3-turbo", "location" to "remote", "bytes" to 0))
     }
     AsyncFunction("getGlassesSpeechTestStatus") Coroutine { -> withContext(Dispatchers.IO) { SpeechEvalStore.snapshot(context()) } }
     AsyncFunction("startGlassesSpeechTest") Coroutine { folder: String, models: List<String>, repeats: Int ->

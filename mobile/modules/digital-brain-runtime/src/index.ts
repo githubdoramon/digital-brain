@@ -238,12 +238,12 @@ export type GlassesListeningStatus = {
 export type SpeechTestModel = {
   id: string;
   label: string;
-  location: 'local' | 'server';
+  location: 'local' | 'server' | 'remote';
   bytes: number;
 };
 export type SpeechTestSummary = {
   candidate: string;
-  mode: 'cold' | 'warm';
+  mode: 'cold' | 'warm' | 'first' | 'repeat';
   count: number;
   completed: number;
   failures: number;

@@ -71,6 +71,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
         val candidates = value.getJSONArray("candidates")
         for (candidateIndex in 0 until candidates.length()) {
           val candidate = candidates.getString(candidateIndex)
+          val server = SpeechEvalServerCandidate.parse(candidate)
           val unfinished = samples.any { sample -> (0..value.getInt("repeats")).any { repetition -> "$candidate:${sample.getInt("index")}:$repetition" !in existing } }
           if (!unfinished) continue
           guard()
@@ -95,7 +96,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
               return@withContext Result.retry()
             }
             val row = JSONObject().put("key", key).put("candidate", candidate).put("sample", sample.getString("audioFile"))
-              .put("sampleSha256", sample.getString("sha256")).put("mode", if (repetition == 0) SpeechEvalMode.COLD.key else SpeechEvalMode.WARM.key)
+              .put("sampleSha256", sample.getString("sha256")).put("mode", (server?.modes ?: listOf("cold", "warm"))[if (repetition == 0) 0 else 1])
               .put("repeat", repetition).put("expectedCommand", sample.get("expectedCommand"))
               .put("tags", sample.optJSONArray("tags") ?: JSONArray())
             val started = SystemClock.elapsedRealtime()
@@ -138,7 +139,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
                 for (field in response.keys()) row.put(field, response.get(field))
                 row.put("roundTripMs", roundTrip).put("totalMs", roundTrip)
                 text = response.getString("text")
-                if (repetition > 0 && !response.optBoolean("modelAlreadyLoaded")) throw IllegalStateException("warm_context_lost")
+                if (repetition > 0 && server?.remote != true && !response.optBoolean("modelAlreadyLoaded")) throw IllegalStateException("warm_context_lost")
               }
               guard()
               val matchingAt = SystemClock.elapsedRealtime()
@@ -286,7 +287,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
       }
       val bytes = readResponse(http.inputStream)
       val response = JSONObject(String(bytes, Charsets.UTF_8))
-      SpeechEvalFailures.validateCpuResponse(response, selection.threads)
+      selection.validateResponse(response)
       guard(); return response.put("authMs", authMs)
         .put("requestWriteMs", uploadMs).put("responseWaitMs", SystemClock.elapsedRealtime() - responseStart)
     } finally { http.disconnect(); connection = null }

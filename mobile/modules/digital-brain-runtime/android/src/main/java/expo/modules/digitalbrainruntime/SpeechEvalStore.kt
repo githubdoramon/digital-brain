@@ -11,7 +11,6 @@ import java.security.MessageDigest
 
 internal enum class SpeechEvalRunState(val key: String) { EMPTY("empty"), READY("ready"), RUNNING("running"), PAUSED("paused"), COMPLETE("complete") }
 internal enum class SpeechEvalResult(val key: String) { COMPLETE("complete"), FAILED("failed") }
-internal enum class SpeechEvalMode(val key: String) { COLD("cold"), WARM("warm") }
 internal fun JSONObject.runState() = SpeechEvalRunState.entries.firstOrNull { it.key == optString("state") } ?: SpeechEvalRunState.EMPTY
 
 /** Private account-scoped experiment journal; originals are never edited. */
@@ -110,8 +109,8 @@ internal object SpeechEvalStore {
     val results = array(value.getJSONArray("results"))
     return (0 until value.getJSONArray("candidates").length()).flatMap { index ->
       val candidate = value.getJSONArray("candidates").getString(index)
-      SpeechEvalMode.entries.map { mode ->
-        val rows = results.filter { it.getString("candidate") == candidate && it.getString("mode") == mode.key }
+      (SpeechEvalServerCandidate.parse(candidate)?.modes ?: listOf("cold", "warm")).map { mode ->
+        val rows = results.filter { it.getString("candidate") == candidate && it.getString("mode") == mode }
         val ok = rows.filter { it.optString("status") == SpeechEvalResult.COMPLETE.key }
         val positives = ok.count { !it.isNull("expectedCommand") }
         val negatives = ok.size - positives
@@ -121,7 +120,7 @@ internal object SpeechEvalStore {
         val wrong = ok.count { !it.isNull("expectedCommand") && !it.isNull("command") && !it.optBoolean("correct") }
         val times = ok.map { it.getLong("totalMs") }
         val words = ok.sumOf { it.optInt("referenceWords") }
-        mapOf("candidate" to candidate, "mode" to mode.key, "count" to rows.size, "completed" to ok.size,
+        mapOf("candidate" to candidate, "mode" to mode, "count" to rows.size, "completed" to ok.size,
           "failures" to rows.count { it.optString("status") != SpeechEvalResult.COMPLETE.key },
           "failureReasons" to SpeechEvalFailures.counts(rows), "correct" to correct,
           "positives" to positives, "negatives" to negatives, "missed" to missed, "wrong" to wrong,
@@ -151,7 +150,7 @@ internal object SpeechEvalStore {
     val export = JSONObject(value.toString()).put("summary", JSONArray(summary(value)))
     writeExport("speech-$id.json", "application/json", export.toString(2).toByteArray())
     val rows = array(value.getJSONArray("results"))
-    val columns = listOf("candidate", "sample", "mode", "repeat", "status", "error", "failureStage", "httpStatus", "upstreamHttpStatus", "preparationDurationMs", "correct", "expectedCommand", "command", "totalMs", "modelLoadMs", "inferenceMs", "inferenceCpuMs", "cpuThreads", "roundTripMs", "wordErrors", "referenceWords", "text")
+    val columns = listOf("candidate", "sample", "mode", "repeat", "status", "error", "failureStage", "httpStatus", "upstreamHttpStatus", "preparationDurationMs", "correct", "expectedCommand", "command", "totalMs", "modelLoadMs", "inferenceMs", "inferenceCpuMs", "cpuThreads", "roundTripMs", "provider", "model", "coldStartControlled", "upstreamRequestMs", "serverTotalMs", "warmupMs", "wordErrors", "referenceWords", "text")
     fun cell(value: String): String {
       val safe = if (value.trimStart().firstOrNull() in listOf('=', '+', '-', '@', '\t', '\r')) "'" + value else value
       return "\"" + safe.replace("\"", "\"\"") + "\""

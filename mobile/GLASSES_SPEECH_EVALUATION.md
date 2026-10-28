@@ -2,6 +2,36 @@
 
 Settings → Glasses → Listening → Compare recognition runs the same saved glasses audio through selectable local models and the existing Digital Brain server. It reports accuracy and latency without choosing a winner. Replay has no access to command dispatch: gates and camera are never operated.
 
+## GPU speech endpoint
+
+**On your GPU server → large-v3-turbo** adds the candidate `remote:large-v3-turbo`, independently of the CPU model/thread options. It sends the same WAVs through the authenticated Digital Brain frontend proxy to the backend, which makes a multipart OpenAI-compatible `/audio/transcriptions` request. Labels/tags and original filenames are never sent to the provider. All candidates use the same local command matcher and correctness scoring. Production listening continues using on-device Whisper.
+
+The backend uses `LLM_BASE_URL` and `LLM_API_KEY` by default. Optional environment overrides in the orchestrator env file are:
+
+```dotenv
+GLASSES_SPEECH_EVAL_REMOTE_BASE_URL=https://your-speech-service/v1
+GLASSES_SPEECH_EVAL_REMOTE_API_KEY=your-speech-key
+```
+
+Unset overrides inherit the corresponding LLM setting. An explicitly empty speech key sends no Authorization header. The base URL includes the API prefix (normally `/v1`); a bare host gets `/v1` appended. Custom base paths are retained. Model selection is fixed to `large-v3-turbo`; requests specify English, JSON responses and temperature zero. Backend credentials never enter the phone, model catalog, reports or speech logs. `GLASSES_SPEECH_EVAL_ENABLED=true` remains required. Deploy the updated backend and install a new native phone build before starting a new comparison.
+
+GPU results use **First request** (`first`) and **Repeated requests** (`repeat`), with `coldStartControlled=false`. These are per-sample replay positions: the first request does not unload the remote model, and an unscored transcription precedes each repeated measurement. Preparation validates local configuration only; it does not verify the remote credentials, load a remote model or claim readiness. The runner does not assume that the provider keeps the model loaded. GPU cold-start time and pure inference time are unavailable through this API.
+
+`totalMs`/`roundTripMs` measure phone-to-result time through Digital Brain; `upstreamRequestMs` measures the backend's complete provider request, including transfer, queueing and inference; `serverTotalMs` includes backend slot waiting as well. Remote results intentionally omit `inferenceMs`, CPU threads, model-load timings and `modelAlreadyLoaded`. JSON and CSV retain provider, model, timing fields and safe error metadata. Reports keep first/repeat results separate from CPU/local cold/warm results.
+
+GPU requests use `provider=remote` on the existing routes. For a command-line smoke test, use the frontend URL, a Google ID token and a compatible wake WAV:
+
+```bash
+curl --fail-with-body --max-time 200 \
+  'https://YOUR_BRAIN_SERVER/api/mobile/glasses/speech-eval/transcribe?provider=remote&model=large-v3-turbo' \
+  -H "Authorization: Bearer $BRAIN_ID_TOKEN" \
+  -H 'Content-Type: audio/wav' \
+  --data-binary '@/absolute/path/to/sample.wav' \
+  -w '\nHTTP %{http_code} | Total: %{time_total}s\n'
+```
+
+The GPU adapter has a separate serial slot from CPU evaluation so an in-flight CPU download does not block the remote candidate. It retains the same audio size/format limits, bounds response JSON to 32 KiB, uses 10-second connect/60-second read timeouts with a 120-second elapsed check while reading chunks, and never follows redirects with provider credentials. Failures retain bounded HTTP status/stage rather than provider error bodies. Neither URL nor key may be supplied by a client request. Preparation and transcription responses must identify the remote provider/model/engine; older backends that ignore `provider` cannot be scored as GPU results.
+
 ## Dataset
 
 Copy [examples/glasses-speech-dataset.json](examples/glasses-speech-dataset.json) as `dataset.json` into a folder containing the WAV files you want to evaluate. Edit each reference transcript by listening to the recording, independently of existing Whisper output. Include the wake phrase and any preceding/extra speech actually present. Set `expectedCommand` to `open_front_gate`, `toggle_car_gate`, `take_picture`, or JSON `null` when the utterance must be rejected. `tags` is optional and retained in exports. Use empty reference text for genuinely silent samples.
