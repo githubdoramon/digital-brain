@@ -39,7 +39,12 @@ supported command, but cannot execute a rejected device request through chat.
 
 ## Speech and native playback
 
-Configure the backend with a separate OpenAI-compatible Kokoro endpoint:
+The backend image bundles the original checksum-verified quantized Kokoro model,
+voices and pinned CPU runtime. No TTS URL is required. Inference is serialized on
+one worker with two CPU threads; timeouts retain the worker slot until inference
+actually finishes, so interrupted calls cannot accumulate queued synthesis.
+
+For an explicit external-provider override only, configure:
 
 ```dotenv
 TTS_BASE_URL=http://tts.example:8880/v1
@@ -49,8 +54,8 @@ TTS_VOICE=af_heart
 TTS_TIMEOUT_SECONDS=20
 ```
 
-The URL also accepts a host or full `/v1/audio/speech` path. No LLM credential or
-URL fallback is used. Complete synthesis is requested as WAV; responses must be
+The URL also accepts a host or full `/v1/audio/speech` path. Without that override, synthesis runs inside the backend. LLM credentials are
+never reused. Complete synthesis is requested as WAV; responses must be
 nonempty mono PCM16 at a supported rate, at most four MiB and forty-five seconds.
 Provider redirects, retries, oversized streams and malformed/truncated WAVs are
 rejected. Speech has a separate deadline capped at twenty-five seconds within a
@@ -90,7 +95,7 @@ Native SAF-save retries and capture recovery never dispatch chat or speech.
 If speech fails after chat completes, the text reply remains in the normal chat
 and the native Listening screen reports that it could not play the reply.
 Private wake JSON records chat status, thread reference and safe audio failure
-reason. General logs suppress content-bearing chat work in this modality,
+reason. General logs include only fixed `[glasses-chat]` stage/reason events and suppress content-bearing chat work in this modality,
 including its deferred callbacks. Mirador retains static request/agent/model/tool
 timing and outcomes without text, IDs or audio. Original capture WAV/JSON saving
 remains unchanged.

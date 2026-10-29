@@ -58,6 +58,8 @@ object GlassesListening {
   @Volatile private var engine: GlassesTranscriptionClient? = null
   @Volatile private var busy = false
   @Volatile private var chatBusy = false
+  private var lastChatStatus: String? = null
+  private var lastChatAudioError: String? = null
   @Volatile private var chatClient: GlassesChatClient? = null
   // Retain the foreground microphone type while waiting for reconnect/call end within this session.
   internal val commandFeedbackGeneration get() = if (active && armed && enabled) sessionGeneration else null
@@ -116,7 +118,8 @@ object GlassesListening {
     "minimumVolume" to minimumVolume, "quietSegments" to quietSegments, "wakes" to wakes, "ledFailures" to ledFailures, "ledRequests" to ledRequests, "capturing" to capturing,
     "speechEvents" to speechEvents, "vadEnabled" to vadEnabled, "dropped" to dropped,
     "failures" to failures, "completed" to completed, "speechDurationMs" to processedMs,
-    "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0)
+    "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0,
+    "lastChatStatus" to lastChatStatus, "lastChatAudioError" to lastChatAudioError)
 
   fun configure(c: Context, value: Boolean, storageUri: String? = null) {
     load(c); val who = checkNotNull(account) { "Sign in first" }
@@ -337,7 +340,9 @@ object GlassesListening {
                 ::eligible, { client -> chatClient = client },
                 begin = { beginChat(job.generation) }, end = { endChat(c, job.generation) })
               GlassesWakeStore.chat(staged, result)
-              main.post { if (eligible()) status = when (result.status) {
+              main.post {
+                lastChatStatus = result.status; lastChatAudioError = result.audioError
+                if (eligible()) status = when (result.status) {
                 "spoken" -> "Listening for Hey Brain"
                 "audio_unavailable" -> "Your reply is in chat. Could not play it through your glasses."
                 else -> "Could not finish your request. Please try again."

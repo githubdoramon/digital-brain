@@ -129,6 +129,22 @@ def test_speech_failure_preserves_the_chat_answer(route, monkeypatch):
     assert result["audio"] is None and result["audio_error"] == "tts_not_configured"
 
 
+def test_speech_stage_reports_failure_without_private_content(route, monkeypatch, caplog):
+    async def unavailable(text):
+        raise glasses_tts.SpeechUnavailable("tts_not_configured")
+
+    monkeypatch.setattr(glasses_chat, "synthesize", unavailable)
+    with caplog.at_level(logging.INFO, logger="voice_context"):
+        route[0].post("/mobile/glasses/chat", json=body())
+    messages = [r.getMessage() for r in caplog.records if r.name == "voice_context"]
+    assert messages == [
+        "[glasses-chat] stage=started reason=none",
+        "[glasses-chat] stage=answer_ready reason=none",
+        "[glasses-chat] stage=speech_failed reason=tts_not_configured",
+    ]
+    assert not any("calendar" in message or "meeting" in message for message in messages)
+
+
 def test_claims_are_owner_scoped_and_recovery_never_replays(route):
     client, calls, app = route
     request = body()
@@ -343,3 +359,56 @@ def test_both_conversational_profiles_receive_only_request_scoped_voice_instruct
     with spoken_reply():
         assert any("spoken verbatim" in m["content"] for m in messages())
     assert not any("spoken verbatim" in m["content"] for m in messages())
+
+
+@pytest.mark.asyncio
+async def test_no_tts_url_uses_local_cpu_engine(monkeypatch):
+    import sys
+
+    import glasses_kokoro as local
+
+    calls = []
+
+    class Engine:
+        def create(self, text, **kwargs):
+            calls.append((text, kwargs))
+            return [0.1] * 100, 24000
+
+    def session(model, **kwargs):
+        assert kwargs["providers"] == ["CPUExecutionProvider"]
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(SessionOptions=SimpleNamespace, InferenceSession=session),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kokoro_onnx",
+        SimpleNamespace(Kokoro=SimpleNamespace(from_session=lambda *a: Engine())),
+    )
+    monkeypatch.setattr(local.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(local, "_engine", None)
+    monkeypatch.setattr(local, "_engine_key", None)
+    monkeypatch.delenv("TTS_BASE_URL", raising=False)
+    result = await glasses_tts.synthesize("A short spoken reply.")
+    assert result["sample_rate"] == 24000
+    assert len(base64.b64decode(result["data"])) == 200
+    assert calls[0][1]["voice"] == "af_heart"
+
+
+@pytest.mark.asyncio
+async def test_busy_local_inference_never_queues_another_turn(monkeypatch):
+    import threading
+
+    import glasses_kokoro as local
+
+    slot = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(local, "_slot", slot)
+    slot.acquire()
+    try:
+        with pytest.raises(glasses_tts.SpeechUnavailable):
+            await local.synthesize_local("Another reply.")
+    finally:
+        slot.release()

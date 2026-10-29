@@ -41,6 +41,13 @@ RUN pip install --find-links=/wheels -r /app/requirements.txt
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
 RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
+# Restore the original CPU Kokoro assets. No model download on a voice request.
+RUN mkdir -p /app/models/kokoro \
+    && curl -fL --retry 3 -o /app/models/kokoro/model.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx \
+    && echo "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb  /app/models/kokoro/model.onnx" | sha256sum -c - \
+    && curl -fL --retry 3 -o /app/models/kokoro/voices.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin \
+    && echo "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  /app/models/kokoro/voices.bin" | sha256sum -c -
+
 COPY . /app
 
 EXPOSE 8000

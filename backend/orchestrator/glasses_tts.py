@@ -66,6 +66,9 @@ def pcm_payload(data: bytes) -> dict:
 async def synthesize(text: str) -> dict:
     if not text.strip() or len(text) > 2400:
         raise SpeechUnavailable("tts_text_too_long")
+    if not os.getenv("TTS_BASE_URL", "").strip():
+        from glasses_kokoro import synthesize_local
+        return await synthesize_local(text)
     endpoint = speech_endpoint()
     headers = {"Accept": "audio/wav"}
     if key := os.getenv("TTS_API_KEY", "").strip():

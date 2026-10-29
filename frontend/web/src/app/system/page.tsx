@@ -552,6 +552,7 @@ export default function SystemStatusPage() {
     LOG_SERVICES.map((service) => service.id)
   );
   const [logSearchQuery, setLogSearchQuery] = useState("");
+  const [logScope, setLogScope] = useState("activity");
   const [activeLogMatchIndex, setActiveLogMatchIndex] = useState(0);
   const [isLogPaused, setIsLogPaused] = useState(false);
   const [serviceConnected, setServiceConnected] = useState<
@@ -755,7 +756,10 @@ export default function SystemStatusPage() {
       ? logEntries.filter(
           (entry) =>
             selectedLevels.includes(entry.level) &&
-            selectedServices.includes(entry.service ?? "orchestrator")
+            selectedServices.includes(entry.service ?? "orchestrator") &&
+            (logScope === "all" || (logScope === "glasses"
+              ? entry.message.startsWith("[glasses-chat]")
+              : !entry.message.startsWith("[diagnostics]") && !entry.message.startsWith("[llm_helpers]")))
         )
       : [];
   const matchedLogRowKeys = logSearchQuery
@@ -873,6 +877,11 @@ export default function SystemStatusPage() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            <select aria-label="Log activity" value={logScope} onChange={(event) => setLogScope(event.target.value)}>
+              <option value="activity">Activity</option>
+              <option value="glasses">Glasses chat</option>
+              <option value="all">All details</option>
+            </select>
             <input
               value={logSearchQuery}
               onChange={(event) => setLogSearchQuery(event.target.value)}

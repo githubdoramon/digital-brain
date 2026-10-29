@@ -1,5 +1,6 @@
 """Request-scoped spoken replies. Never inferred from user text or chat history."""
 
+import logging
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -7,6 +8,32 @@ from contextvars import ContextVar
 _VOICE = ContextVar("glasses_voice_request", default=False)
 # Device actions remain owned by native matching and the fixed command endpoint.
 DEVICE_TOOLS = {"home_assistant", "bash", "run_skill_script"}
+
+
+def voice_stage(stage: str, reason: str = "none") -> None:
+    """Only fixed status enums may leave the speech privacy boundary."""
+    if stage not in {
+        "started",
+        "answer_ready",
+        "speech_ready",
+        "speech_failed",
+        "cancelled",
+        "timeout",
+    }:
+        return
+    if reason not in {
+        "none",
+        "tts_not_configured",
+        "tts_failed",
+        "tts_invalid_audio",
+        "tts_text_too_long",
+    }:
+        reason = "tts_failed"
+    token = _VOICE.set(False)
+    try:
+        logging.getLogger(__name__).info("[glasses-chat] stage=%s reason=%s", stage, reason)
+    finally:
+        _VOICE.reset(token)
 
 
 def is_voice_request() -> bool:

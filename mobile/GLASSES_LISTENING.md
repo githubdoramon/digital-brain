@@ -95,7 +95,7 @@ clarification, while Home Assistant, shell and skill-script tools are blocked
 for this modality. Matched command failures never enter chat.
 
 The backend requests a concise spoken answer and synthesizes the same persisted
-reply through separately configured Kokoro TTS. Native Android receives bounded
+reply through bundled backend CPU Kokoro TTS. Native Android receives bounded
 ephemeral PCM, pauses wake detection during the turn, and plays it through the
 existing verified glasses-only output with call priority and media mute/DND.
 A fresh detector resumes afterward; idle audio is never sent to chat. Calls,

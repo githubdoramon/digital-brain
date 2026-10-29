@@ -18,7 +18,7 @@ from routes.chat import ask
 from schemas import AskIn, ClientContextIn
 from search_normalization import normalize_search_text
 from time_context import use_time_context
-from voice_context import spoken_reply
+from voice_context import spoken_reply, voice_stage
 
 _active_owners: set[str] = set()
 CHAT_DEADLINE_SECONDS = 60
@@ -75,6 +75,7 @@ def create_glasses_chat_router() -> APIRouter:
         try:
             if not await run_in_threadpool(claim, owner, payload.request_id):
                 raise HTTPException(409, "request_already_claimed")
+            voice_stage("started")
 
             async def run():
                 clock = {
@@ -94,11 +95,14 @@ def create_glasses_chat_router() -> APIRouter:
                         user,
                     )
                     background_tasks.add_task(_voice_background_tasks, voice_tasks)
+                    voice_stage("answer_ready")
                     audio, audio_error = None, None
                     try:
                         audio = await synthesize(result.answer)
+                        voice_stage("speech_ready")
                     except SpeechUnavailable as exc:
                         audio_error = str(exc)
+                        voice_stage("speech_failed", audio_error)
                     return {
                         "answer": result.answer,
                         "thread_id": result.thread_id,
@@ -111,10 +115,12 @@ def create_glasses_chat_router() -> APIRouter:
             async with asyncio.timeout(CHAT_DEADLINE_SECONDS):
                 while not task.done():
                     if await request.is_disconnected():
+                        voice_stage("cancelled")
                         raise HTTPException(499, "request_cancelled")
                     await asyncio.wait({task}, timeout=0.2)
                 return await task
         except TimeoutError as exc:
+            voice_stage("timeout")
             raise HTTPException(504, "voice_chat_timeout") from exc
         finally:
             if task is not None and not task.done():
