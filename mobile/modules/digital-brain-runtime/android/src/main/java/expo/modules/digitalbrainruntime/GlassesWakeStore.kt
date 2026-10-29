@@ -109,6 +109,14 @@ internal object GlassesWakeStore {
     event.endpoint?.let { meta.put("commandEndpoint", it) }
     atomic(file, meta.toString().toByteArray())
   }
+  @Synchronized fun chat(dir: File, result: GlassesChatResult) {
+    val file = File(dir, "capture.json")
+    val meta = JSONObject(file.readText()).put("chatStatus", result.status)
+      .put("chatWakeVerified", true)
+      .put("chatThreadId", result.threadId ?: JSONObject.NULL)
+      .put("chatAudioError", result.audioError ?: JSONObject.NULL)
+    atomic(file, meta.toString().toByteArray())
+  }
   @Synchronized fun publish(c: Context, account: String, dir: File, overrideBase: String? = null) {
     val journal = File(dir, "capture.json")
     val meta = JSONObject(journal.readText())

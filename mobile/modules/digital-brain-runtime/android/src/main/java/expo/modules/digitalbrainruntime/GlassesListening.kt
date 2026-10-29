@@ -57,6 +57,8 @@ object GlassesListening {
   @Volatile private var keepWorker = false
   @Volatile private var engine: GlassesTranscriptionClient? = null
   @Volatile private var busy = false
+  @Volatile private var chatBusy = false
+  @Volatile private var chatClient: GlassesChatClient? = null
   // Retain the foreground microphone type while waiting for reconnect/call end within this session.
   internal val commandFeedbackGeneration get() = if (active && armed && enabled) sessionGeneration else null
   @Volatile internal var comparisonPaused = false
@@ -182,10 +184,20 @@ object GlassesListening {
     if (active) return
     check(!GlassesRecording.capturing)
     val generation = ++sessionGeneration
-    wakeSession = GlassesWakeSession(c, lastWake,
+    wakeSession = newWakeSession(c, generation)
+    active = true; lastPcm = SystemClock.elapsedRealtime(); vadEnabled = null
+    transitioning = true
+    try {
+      RuntimeGlasses.setListeningMic(true)
+      status = "Listening for Hey Brain"
+    } catch (_: Exception) { pause(); failures++; status = "Could not start listening" }
+    finally { transitioning = false }
+  }
+  private fun newWakeSession(c: Context, generation: Long): GlassesWakeSession {
+    return GlassesWakeSession(c, lastWake,
       { at -> main.post {
-        if (active && generation == sessionGeneration) {
-          lastWake = at; wakes++; capturing = true; status = "Capturing command"
+        if (active && !chatBusy && generation == sessionGeneration) {
+          lastWake = at; wakes++; capturing = true; status = "Listening to you"
           if (captureWake?.isHeld == true) captureWake?.release()
           captureWake = c.getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:WakeCapture").apply { acquire(35_000L) }
@@ -195,7 +207,7 @@ object GlassesListening {
         }
       } },
       { capture -> main.post {
-        if (active && generation == sessionGeneration) {
+        if (active && !chatBusy && generation == sessionGeneration) {
           capturing = false; submit(capture); status = "Listening for Hey Brain"
           if (captureWake?.isHeld == true) captureWake?.release(); captureWake = null
         }
@@ -205,13 +217,6 @@ object GlassesListening {
         shutdown(discard = true); failures++; status = "Turn listening off and on to try again"
         DigitalBrainRuntime.service?.refresh(forceNotification = true)
       } } })
-    active = true; lastPcm = SystemClock.elapsedRealtime(); vadEnabled = null
-    transitioning = true
-    try {
-      RuntimeGlasses.setListeningMic(true)
-      status = "Listening for Hey Brain"
-    } catch (_: Exception) { pause(); failures++; status = "Could not start listening" }
-    finally { transitioning = false }
   }
   private val watchdog = object : Runnable {
     override fun run() {
@@ -224,7 +229,7 @@ object GlassesListening {
     }
   }
   fun speaking(value: Boolean) {
-    if (!active) return
+    if (!active || chatBusy) return
     speechEvents++
     val generation = ++speechGeneration
     wakeSession?.vad(value)
@@ -239,7 +244,7 @@ object GlassesListening {
   }
   fun vadStatus(value: Boolean) { if (active) vadEnabled = value }
   fun pcm(event: MicPcmEvent) {
-    if (!active) return
+    if (!active || chatBusy) return
     if (!GlassesRecordingPolicy.validPcm(event.sampleRate, event.bitsPerSample, event.channels, event.encoding, event.pcm.size)) {
       pause(); failures++; status = "Could not read glasses audio"; return
     }
@@ -264,7 +269,7 @@ object GlassesListening {
   }
   fun pause() {
     if (!active) return
-    active = false; sessionGeneration++; engine?.cancel(); capturing = false; wakeSession?.close(); wakeSession = null
+    active = false; sessionGeneration++; chatClient?.cancel(); GlassesAlertPlayback.stopSpeech(); chatBusy = false; engine?.cancel(); capturing = false; wakeSession?.close(); wakeSession = null
     val wasTransitioning = transitioning; transitioning = true
     runCatching { RuntimeGlasses.setListeningMic(false) }
     transitioning = wasTransitioning
@@ -300,7 +305,7 @@ object GlassesListening {
         currentJob.set(job)
         busy = true
         val wake = c.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:Transcription")
-        wake.acquire(90_000L)
+        wake.acquire(170_000L)
         val timeout = Runnable { if (currentJob.get() === job) client.cancel() }
         var staged: File? = null
         val timing = SpeechTiming({ SystemClock.elapsedRealtime() },
@@ -324,7 +329,21 @@ object GlassesListening {
             GlassesWakeStore.timing(staged, timing.snapshot())
             val requestId = java.util.UUID.randomUUID().toString()
             GlassesWakeStore.command(staged, decision, requestId, null)
-            val outcome = GlassesCommandExecutor.execute(c, decision, requestId, job.capture.endAtMs, eligible = {
+            fun eligible() = active && armed && enabled && sessionGeneration == job.generation &&
+              RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
+            val outcome = if (GlassesChatPolicy.shouldChat(text, decision)) {
+              val result = GlassesChatTurn.run(c, text, requestId, job.capture.endAtMs,
+                org.json.JSONObject(File(staged, "capture.json").readText()).getString("timezone"),
+                ::eligible, { client -> chatClient = client },
+                begin = { beginChat(job.generation) }, end = { endChat(c, job.generation) })
+              GlassesWakeStore.chat(staged, result)
+              main.post { if (eligible()) status = when (result.status) {
+                "spoken" -> "Listening for Hey Brain"
+                "audio_unavailable" -> "Your reply is in chat. Could not play it through your glasses."
+                else -> "Could not finish your request. Please try again."
+              } }
+              GlassesCommandOutcome.UNRECOGNIZED
+            } else GlassesCommandExecutor.execute(c, decision, requestId, job.capture.endAtMs, eligible = {
               active && armed && enabled && sessionGeneration == job.generation &&
                 RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
             }, onEvent = { event -> GlassesWakeStore.commandDispatch(staged, event) })
@@ -334,6 +353,12 @@ object GlassesListening {
                   RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account
               }
             }
+            else if (decision.command != null) main.post { if (eligible()) status = when (outcome) {
+              GlassesCommandOutcome.NOT_CONFIGURED -> "This command is not set up yet"
+              GlassesCommandOutcome.UNKNOWN -> "Could not confirm the command finished"
+              GlassesCommandOutcome.EXPIRED -> "The command expired. Please say it again."
+              else -> "Could not complete the command. Please try again."
+            } }
             GlassesWakeStore.command(staged, decision, requestId, outcome)
             if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account)
               GlassesWakeStore.publish(c, job.account, staged)
@@ -360,13 +385,29 @@ object GlassesListening {
             if (it.exists()) runCatching { GlassesWakeStore.timing(it, timing.snapshot()) }
             GlassesWakeStore.endProcessing(it)
           }
-          currentJob.set(null); busy = false; main.removeCallbacks(timeout)
+          currentJob.set(null); busy = false; chatClient?.cancel(); chatClient = null; main.removeCallbacks(timeout)
           if (wake.isHeld) wake.release()
         }
       }
     } finally {
       client.cancel(); engine = null
       main.post { worker = null; if (queue.isNotEmpty()) { keepWorker = true; worker = Thread({ consume() }, "glasses-transcription").apply { start() } } }
+    }
+  }
+  private fun beginChat(generation: Long): Boolean {
+    if (!active || !armed || !enabled || generation != sessionGeneration) return false
+    chatBusy = true; wakeSession?.close(); wakeSession = null; capturing = false
+    if (captureWake?.isHeld == true) captureWake?.release(); captureWake = null
+    status = "Thinking"
+    return true
+  }
+  private fun endChat(c: Context, generation: Long) {
+    if (!chatBusy || generation != sessionGeneration) return
+    chatBusy = false
+    if (active && armed && enabled) {
+      lastWake = SystemClock.elapsedRealtime()
+      wakeSession = newWakeSession(c, generation)
+      status = "Listening for Hey Brain"
     }
   }
   fun retrySaves(c: Context, baseUri: String) {

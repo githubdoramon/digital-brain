@@ -16,6 +16,7 @@ from prompts.context import (
 )
 from prompts.state_injection import build_state_message
 from prompts.system import KNOWLEDGE_LEARNING_SYSTEM_PROMPT
+from voice_context import voice_messages
 
 from .prompts import get_memory_expert_protocol_prompt, get_memory_expert_system_prompt
 
@@ -125,5 +126,6 @@ def build_memory_expert_messages(
         for msg in conversation_history:
             messages.append({"role": msg["role"], "content": msg["content"]})
 
+    messages.extend(voice_messages())
     messages.append({"role": "user", "content": question.strip()})
     return messages

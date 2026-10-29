@@ -146,8 +146,10 @@ class ToolRegistry:
             List of tool definitions in OpenAI format
         """
         definitions = []
+        from voice_context import tool_allowed
+
         for name, contract in self._contracts.items():
-            if allowed_tools is None or name in allowed_tools:
+            if tool_allowed(name) and (allowed_tools is None or name in allowed_tools):
                 definitions.append(contract.to_openai_tool())
         return definitions
 

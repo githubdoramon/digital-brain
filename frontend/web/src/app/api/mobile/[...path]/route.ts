@@ -46,6 +46,7 @@ export async function handler(
   const isSpeechRequest = request.method === "POST" && new Set([
     "glasses/transcribe", "glasses/speech-eval/prepare", "glasses/speech-eval/transcribe", "speech/transcribe",
   ]).has(targetPath);
+  const isGlassesChat = request.method === "POST" && targetPath === "glasses/chat";
   const authStartedAt = performance.now();
   const authHeader = await buildAuthorizationHeader(request);
   const proxyAuthMs = performance.now() - authStartedAt;
@@ -73,6 +74,7 @@ export async function handler(
     headers,
     body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
     duplex: "half",
+    ...(isGlassesChat ? { signal: request.signal } : {}),
   };
 
   try {
@@ -111,6 +113,7 @@ export async function handler(
       responseHeaders.set("server-timing", timing);
       responseHeaders.set("cache-control", "no-store");
     }
+    if (isGlassesChat) responseHeaders.set("cache-control", "no-store");
     return new Response(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,
@@ -124,7 +127,9 @@ export async function handler(
         duration_ms: Date.now() - startedAt,
       });
     }
-    if (!isLocationUpdate) {
+    if (isGlassesChat) {
+      console.error("[mobile glasses chat proxy] request failed");
+    } else if (!isLocationUpdate) {
       console.error("Orchestrator mobile proxy error", error);
     }
     return new Response(

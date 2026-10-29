@@ -122,8 +122,8 @@ export default function GlassesListeningScreen() {
             <View style={styles.flex}>
               <Text style={styles.title}>Listen through glasses</Text>
               <Text style={styles.body}>
-                Say “Hey Brain,” then your command. Command audio is sent to your server for
-                recognition.
+                Say “Hey Brain,” then ask a question or give a command. You’ll hear chat replies
+                through your glasses.
               </Text>
             </View>
             <Switch

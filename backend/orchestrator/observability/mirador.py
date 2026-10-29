@@ -521,6 +521,7 @@ def install_request_middleware(app: Any) -> None:
         "/mobile/ask",
         "/ask/stream",
         "/mobile/ask/stream",
+        "/mobile/glasses/chat",
         "/debug/daily-briefing/event-summary",
     }
     configured_trace_paths = os.getenv("MIRADOR_HTTP_TRACE_PATHS")

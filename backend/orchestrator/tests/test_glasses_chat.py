@@ -1,0 +1,345 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import logging
+import os
+import time
+import wave
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
+from fastapi.testclient import TestClient
+
+os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
+os.environ.setdefault("LLM_CHAT_MODEL_FAST", "test-fast")
+os.environ.setdefault("LLM_CHAT_MODEL_SMART", "test-smart")
+
+import glasses_tts
+import llm
+from agent.tool_executor import ToolExecutionCoordinator
+from auth import get_current_user
+from observability.log_stream import ConsoleLogHandler, LogBufferHandler
+from observability.logger import AgentLogger
+from routes import glasses_chat
+from schemas import AskOut
+from time_context import current_context
+from tools.registry import ToolRegistry
+from voice_context import is_voice_request, spoken_reply, voice_messages
+
+
+def body(text="Hey Brain, what is on my calendar?"):
+    return {
+        "transcript": text,
+        "request_id": str(uuid4()),
+        "captured_at_ms": int(time.time() * 1000),
+        "timezone": "Europe/Lisbon",
+    }
+
+
+@pytest.fixture
+def route(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLASSES_COMMAND_RECEIPT_DIR", str(tmp_path))
+    calls = []
+
+    async def ask(payload, tasks, user):
+        assert is_voice_request()
+        assert payload.thread_id is None and payload.session_id is None
+        assert current_context()["timezone"] == "Europe/Lisbon"
+        calls.append(payload.question)
+        return AskOut(
+            question=payload.question,
+            answer="You have one meeting.",
+            resolution={},
+            search_results=[],
+            events_results=[],
+            thread_id="shared-thread",
+        )
+
+    async def synthesize(text):
+        assert text == "You have one meeting."
+        return {"encoding": "pcm16", "sample_rate": 24000, "data": "AAA="}
+
+    monkeypatch.setattr(glasses_chat, "ask", ask)
+    monkeypatch.setattr(glasses_chat, "synthesize", synthesize)
+    app = FastAPI()
+    app.include_router(glasses_chat.create_glasses_chat_router())
+    app.dependency_overrides[get_current_user] = lambda: {"email": "viewer@example.com"}
+    return TestClient(app), calls, app
+
+
+def test_voice_chat_uses_shared_flow_and_does_not_repeat_claimed_requests(route):
+    client, calls, _ = route
+    request = body()
+    result = client.post("/mobile/glasses/chat", json=request)
+    assert result.status_code == 200
+    assert result.headers["cache-control"] == "no-store"
+    assert result.json()["thread_id"] == "shared-thread"
+    assert result.json()["audio"]["encoding"] == "pcm16"
+    assert client.post("/mobile/glasses/chat", json=request).status_code == 409
+    assert calls == ["what is on my calendar?"]
+    assert not is_voice_request()
+
+
+def test_auth_expiry_missing_wake_empty_and_foreign_thread_are_rejected(route):
+    client, calls, app = route
+    for text in [
+        "what is on my calendar",
+        "I said Hey Brain what is on my calendar",
+        "Hey Brain",
+        "Hey Brain.",
+        "Hey Brain! ...",
+    ]:
+        assert client.post("/mobile/glasses/chat", json=body(text)).status_code == 422
+    expired = body()
+    expired["captured_at_ms"] -= 91_000
+    assert client.post("/mobile/glasses/chat", json=expired).status_code == 409
+    assert (
+        client.post(
+            "/mobile/glasses/chat", json={**body(), "thread_id": "other-owner-thread"}
+        ).status_code
+        == 422
+    )
+    app.dependency_overrides.clear()
+    assert client.post("/mobile/glasses/chat", json=body()).status_code == 401
+    assert calls == []
+
+
+def test_ambiguous_and_negated_requests_can_be_discussed_and_session_reset_is_preserved(route):
+    client, calls, _ = route
+    for text in [
+        "Hey Brain don't open the gate",
+        "Okay Brian can you take a picture and open the door",
+        "Hey Brain slash new",
+    ]:
+        assert client.post("/mobile/glasses/chat", json=body(text)).status_code == 200
+    assert calls == ["don't open the gate", "can you take a picture and open the door", "/new"]
+
+
+def test_speech_failure_preserves_the_chat_answer(route, monkeypatch):
+    async def unavailable(text):
+        raise glasses_tts.SpeechUnavailable("tts_not_configured")
+
+    monkeypatch.setattr(glasses_chat, "synthesize", unavailable)
+    result = route[0].post("/mobile/glasses/chat", json=body()).json()
+    assert result["answer"] == "You have one meeting."
+    assert result["audio"] is None and result["audio_error"] == "tts_not_configured"
+
+
+def test_claims_are_owner_scoped_and_recovery_never_replays(route):
+    client, calls, app = route
+    request = body()
+    assert client.post("/mobile/glasses/chat", json=request).status_code == 200
+    app.dependency_overrides[get_current_user] = lambda: {"email": "another@example.com"}
+    assert client.post("/mobile/glasses/chat", json=request).status_code == 200
+    assert len(calls) == 2
+
+
+def wav(rate=24000, channels=1, width=2, frames=100):
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as audio:
+        audio.setnchannels(channels)
+        audio.setsampwidth(width)
+        audio.setframerate(rate)
+        audio.writeframes(b"\0" * frames * channels * width)
+    return stream.getvalue()
+
+
+def test_audio_validation_rejects_corruption_unsupported_format_and_duration():
+    result = glasses_tts.pcm_payload(wav())
+    assert len(base64.b64decode(result["data"])) == 200
+    for audio in [
+        b"bad",
+        wav(channels=2),
+        wav(width=1),
+        wav(frames=0),
+        wav(rate=8000),
+        wav(frames=24000 * 46),
+        wav()[:-2],
+    ]:
+        with pytest.raises(glasses_tts.SpeechUnavailable):
+            glasses_tts.pcm_payload(audio)
+
+
+def test_voice_tool_restrictions_apply_to_visibility_and_execution_without_leaking():
+    registry = ToolRegistry()
+    registry._contracts = {
+        name: SimpleNamespace(to_openai_tool=dict)
+        for name in ["home_assistant", "bash", "run_skill_script", "search_memories"]
+    }
+    coordinator = ToolExecutionCoordinator(object())
+    assert len(registry.get_tool_definitions()) == 4
+    with spoken_reply():
+        assert len(registry.get_tool_definitions()) == 1
+        for name in ["home_assistant", "bash", "run_skill_script"]:
+            result = asyncio.run(
+                coordinator.execute_tool_call(
+                    {"id": "x", "function": {"name": name, "arguments": "{}"}},
+                    None,
+                    "open the gate",
+                    30,
+                    "run",
+                )
+            )
+            assert "error" in result
+            assert "error" in coordinator.execute_handler(name, {}, None, "open the gate", 30)
+        assert "spoken verbatim" in voice_messages()[0]["content"]
+    assert len(registry.get_tool_definitions()) == 4
+    assert voice_messages() == []
+
+
+def test_same_canonical_answer_is_persisted_and_spoken(monkeypatch):
+    persisted = []
+
+    async def run(**kwargs):
+        return {"answer": "**One meeting.** See [the calendar](https://calendar.example/)."}
+
+    monkeypatch.setattr(llm, "_get_main_controller", lambda: SimpleNamespace(run=run))
+    monkeypatch.setattr(llm.conversations, "get_conversation_history", lambda *a: [])
+    monkeypatch.setattr(llm.conversations, "get_latest_assistant_metadata", lambda *a: None)
+    monkeypatch.setattr(
+        llm.conversations,
+        "record_exchange",
+        lambda **kw: persisted.append(kw) or {"message_count_before": 1},
+    )
+    with spoken_reply():
+        result = asyncio.run(
+            llm.answer_question(
+                "My calendar?", session_id="thread", user_email="viewer@example.com"
+            )
+        )
+    assert result["answer"] == persisted[0]["assistant_message"] == "One meeting. See the calendar."
+    assert persisted[0]["user_metadata"]["input_source"] == "glasses"
+
+
+def test_voice_logs_do_not_enter_console_or_general_log_buffer():
+    output = io.StringIO()
+    console = ConsoleLogHandler(output)
+    buffer = LogBufferHandler()
+    from observability.log_stream import get_log_buffer
+
+    before = len(get_log_buffer().get_recent())
+    record = logging.LogRecord("voice", logging.WARNING, __file__, 1, "private speech", (), None)
+    with spoken_reply():
+        console.emit(record)
+        buffer.emit(record)
+        agent_logger = AgentLogger()
+        run = agent_logger.start_run("private speech", "viewer@example.com")
+        assert agent_logger.export_json(run) is None
+    assert output.getvalue() == ""
+    assert len(get_log_buffer().get_recent()) == before
+
+
+@pytest.mark.parametrize(
+    "base", ["http://tts.example", "http://tts.example/v1", "http://tts.example/v1/audio/speech"]
+)
+def test_tts_endpoint_formats(base, monkeypatch):
+    monkeypatch.setenv("TTS_BASE_URL", base)
+    assert glasses_tts.speech_endpoint() == "http://tts.example/v1/audio/speech"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect", [True, False])
+async def test_disconnect_and_deadline_cancel_chat_and_release_owner(
+    route, monkeypatch, disconnect
+):
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def waiting(*args):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def disconnected():
+        await started.wait()
+        return disconnect
+
+    monkeypatch.setattr(glasses_chat, "ask", waiting)
+    monkeypatch.setattr(glasses_chat, "CHAT_DEADLINE_SECONDS", 0.05)
+    endpoint = glasses_chat.create_glasses_chat_router().routes[0].endpoint
+    with pytest.raises(HTTPException) as exc:
+        await endpoint(
+            glasses_chat.GlassesChatIn(**body()),
+            SimpleNamespace(is_disconnected=disconnected),
+            Response(),
+            BackgroundTasks(),
+            {"email": "viewer@example.com"},
+        )
+    assert exc.value.status_code == (499 if disconnect else 504)
+    assert cancelled.is_set()
+    assert "viewer@example.com" not in glasses_chat._active_owners
+    assert not is_voice_request()
+
+
+@pytest.mark.asyncio
+async def test_remote_tts_sends_the_canonical_reply_and_returns_ephemeral_pcm(monkeypatch):
+    import httpx
+
+    requests = []
+
+    async def handler(request):
+        import json
+
+        requests.append(json.loads(request.content))
+        assert request.headers["Authorization"] == "Bearer synthetic-test-key"
+        return httpx.Response(200, content=wav(), headers={"content-type": "audio/wav"})
+
+    client = httpx.AsyncClient
+    monkeypatch.setenv("TTS_BASE_URL", "http://tts.example/v1")
+    monkeypatch.setenv("TTS_API_KEY", "synthetic-test-key")
+    monkeypatch.setattr(
+        glasses_tts.httpx,
+        "AsyncClient",
+        lambda **kw: client(transport=httpx.MockTransport(handler), **kw),
+    )
+    result = await glasses_tts.synthesize("You have one meeting.")
+    assert result["sample_rate"] == 24000
+    assert requests == [
+        {
+            "model": "kokoro",
+            "voice": "af_heart",
+            "input": "You have one meeting.",
+            "response_format": "wav",
+        }
+    ]
+
+
+def test_wake_comparison_is_accent_insensitive_but_preserves_the_phrase():
+    assert glasses_chat.chat_phrase("Héy Bráin, remember café plans") == "remember café plans"
+
+
+@pytest.mark.parametrize("profile", ["main", "memory_expert"])
+def test_both_conversational_profiles_receive_only_request_scoped_voice_instructions(
+    monkeypatch, profile
+):
+    from importlib import import_module
+
+    from agent.state import AgentState
+
+    module = import_module(f"agents.{profile}.message_builder")
+    monkeypatch.setattr(module, "_cached_tag_context", lambda: "")
+    if profile == "main":
+        build, extra = module.build_main_messages, {"skill_injector": lambda *_: None}
+    else:
+        build, extra = module.build_memory_expert_messages, {}
+        monkeypatch.setattr(module, "inject_memory_expert_skills", lambda **kw: None)
+
+    def messages():
+        return build(
+            question="What is next?",
+            state=AgentState(goal="What is next?"),
+            conversation_history=None,
+            user_email=None,
+            search_limit=30,
+            client_context=None,
+            **extra,
+        )
+
+    with spoken_reply():
+        assert any("spoken verbatim" in m["content"] for m in messages())
+    assert not any("spoken verbatim" in m["content"] for m in messages())

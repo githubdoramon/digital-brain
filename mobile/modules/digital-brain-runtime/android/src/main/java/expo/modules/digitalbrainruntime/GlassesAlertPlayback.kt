@@ -25,11 +25,12 @@ internal object GlassesAlertPlayback {
   private var cleanup: Runnable? = null
   private var routeDeadline: Runnable? = null
   private var kind: String? = null
+  private var speechCompletion: ((Boolean) -> Unit)? = null
   var lastError: String? = null
     private set
   private var lastChime: Long? = null
   fun playing() = kind
-  fun chimeAllowed(c: Context) = kind !in GlassesFeedbackSound.entries.map { it.key } && GlassesAlertPolicy.shouldChime(true, true, false, false,
+  fun chimeAllowed(c: Context) = kind != "speech" && kind !in GlassesFeedbackSound.entries.map { it.key } && GlassesAlertPolicy.shouldChime(true, true, false, false,
     GlassesAlertSettings.phoneInUse(c), kind == "call", SystemClock.elapsedRealtime(), lastChime)
 
   fun chime(c: Context): Boolean {
@@ -47,11 +48,20 @@ internal object GlassesAlertPlayback {
   }
 
   fun feedback(c: Context, sound: GlassesFeedbackSound): Boolean {
-    if (kind == "call" || !RuntimeGlasses.alertsReady() || !GlassesAlertSettings.eligible(c)) return false
+    if (kind in setOf("call", "speech") || !RuntimeGlasses.alertsReady() || !GlassesAlertSettings.eligible(c)) return false
     return play(c, false, false, sound)
   }
 
-  private fun play(c: Context, call: Boolean, preview: Boolean, feedback: GlassesFeedbackSound? = null): Boolean {
+  fun speech(c: Context, audio: GlassesReplyAudio, complete: (Boolean) -> Unit): Boolean {
+    if (kind == "call" || !RuntimeGlasses.alertsReady() || !GlassesAlertSettings.eligible(c)) return false
+    if (!play(c, false, false, speech = audio)) return false
+    speechCompletion = complete
+    return true
+  }
+  fun stopSpeech() { if (kind == "speech") stop() }
+
+  private fun play(c: Context, call: Boolean, preview: Boolean, feedback: GlassesFeedbackSound? = null,
+                   speech: GlassesReplyAudio? = null): Boolean {
     stop()
     if (GlassesAlertSettings.dndBlocksMedia(c)) return failed("Do Not Disturb is blocking media alerts")
     val device = GlassesAlertSettings.audioDevice(c) ?: return failed("Connect the glasses Bluetooth audio output first")
@@ -61,7 +71,7 @@ internal object GlassesAlertPlayback {
     }
     manager = audio
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+      .setContentType(if (speech != null) AudioAttributes.CONTENT_TYPE_SPEECH else AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
     lateinit var request: AudioFocusRequest
     request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
       .setAudioAttributes(attributes).setOnAudioFocusChangeListener({ change ->
@@ -73,16 +83,17 @@ internal object GlassesAlertPlayback {
       stop(); return failed("Android did not grant alert audio focus")
     }
     try {
-      val pcm = if (feedback != null) GlassesAlertTone.feedback(feedback) else
+      val pcm = speech?.pcm ?: if (feedback != null) GlassesAlertTone.feedback(feedback) else
         if (call) GlassesAlertTone.call() else GlassesAlertTone.notification()
+      val sampleRate = speech?.sampleRate ?: GlassesAlertTone.SAMPLE_RATE
       val config = GlassesAlertSettings.config(c)
       val gain = (if (call) config.callVolume else config.chimeVolume) / 100f
       val created = AudioTrack.Builder().setAudioAttributes(attributes)
         .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-          .setSampleRate(GlassesAlertTone.SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+          .setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
         .setBufferSizeInBytes(pcm.size).setTransferMode(AudioTrack.MODE_STATIC).build()
       track = created
-      kind = feedback?.key ?: if (preview) "preview" else if (call) "call" else "chime"
+      kind = if (speech != null) "speech" else feedback?.key ?: if (preview) "preview" else if (call) "call" else "chime"
       if (!created.setPreferredDevice(device)) { stop(); return failed("Glasses audio routing was rejected") }
       check(created.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING) == pcm.size)
       check(created.setLoopPoints(0, pcm.size / 2, -1) == AudioTrack.SUCCESS)
@@ -103,9 +114,12 @@ internal object GlassesAlertPlayback {
             if (!call) created.setLoopPoints(0, 0, 0)
             created.setVolume(gain)
             created.play()
-            val duration = if (!call) pcm.size * 1000L / (GlassesAlertTone.SAMPLE_RATE * 2) + 250 else
+            val duration = if (!call) pcm.size * 1000L / (sampleRate * 2) + 250 else
               if (preview) GlassesAlertTone.CALL_CYCLE_MS * 3L else GlassesAlertPolicy.CALL_TIMEOUT_MS
-            cleanup = Runnable { if (track === created) stop() }.also { handler.postDelayed(it, duration) }
+            cleanup = Runnable { if (track === created) {
+              val complete = speechCompletion; speechCompletion = null
+              stop(); complete?.invoke(true)
+            } }.also { handler.postDelayed(it, duration) }
           }
         } else if (action == GlassesAudioRouteAction.STOP) {
           created.setVolume(0f)
@@ -139,6 +153,7 @@ internal object GlassesAlertPlayback {
 
   private fun failed(message: String): Boolean { lastError = message; return false }
   fun stop() {
+    val complete = speechCompletion; speechCompletion = null
     cleanup?.let(handler::removeCallbacks); cleanup = null
     routeDeadline?.let(handler::removeCallbacks); routeDeadline = null
     val old = track; track = null; kind = null
@@ -151,5 +166,6 @@ internal object GlassesAlertPlayback {
     val audio = manager
     devices?.let { audio?.unregisterAudioDeviceCallback(it) }; devices = null
     focus?.let { audio?.abandonAudioFocusRequest(it) }; focus = null; manager = null
+    complete?.invoke(false)
   }
 }

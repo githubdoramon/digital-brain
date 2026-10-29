@@ -37,7 +37,7 @@ from schemas import (
     PlaceIn,
 )
 from search_normalization import normalize_search_text
-from time_context import snapshot
+from time_context import current_context, snapshot
 
 from . import get_command_registry, parse_command
 from .state import ensure_restored_thread_exists, get_recoverable_command_data
@@ -196,7 +196,7 @@ def handle_pending_event(
         "thread_id": command_thread_id,
         "event_pending_key": key,
         "client_context": client_context,
-        "request_time": snapshot(client_context),
+        "request_time": current_context() or snapshot(client_context),
         "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }

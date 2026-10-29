@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from voice_context import is_voice_request
+
 LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
 DECISION_LEVEL = 25
 INTENTIONAL_DEBUG_LEVEL = 15
@@ -243,7 +245,7 @@ def get_log_buffer() -> LogBuffer:
 
 
 def record_log(level: str, message: str, context: dict[str, Any] | None = None) -> None:
-    if not message:
+    if not message or is_voice_request():
         return
     get_log_buffer().append(level, message, context=context)
 
@@ -284,6 +286,8 @@ class LogBufferHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            if is_voice_request():
+                return
             # Ignore generic DEBUG noise from libraries/frameworks.
             # Keep only orchestrator runtime debug (plus explicit intentional debug level).
             if (
@@ -330,7 +334,7 @@ class ConsoleLogHandler(logging.StreamHandler):
         return LogBufferHandler._is_orchestrator_record(record)
 
     def emit(self, record: logging.LogRecord) -> None:
-        if not self._should_emit(record):
+        if is_voice_request() or not self._should_emit(record):
             return
         super().emit(_record_with_correlation(record))
 

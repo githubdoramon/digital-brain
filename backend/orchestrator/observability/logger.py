@@ -25,6 +25,7 @@ from time import perf_counter
 from typing import Any, Optional
 
 from observability.log_stream import DECISION_LEVEL, INTENTIONAL_DEBUG_LEVEL
+from voice_context import is_voice_request
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +298,9 @@ class AgentLogger:
             The run ID
         """
         run_id = run_id or str(uuid.uuid4())
+        if is_voice_request():
+            # Voice text belongs in chat evidence/private captures, never diagnostic exports.
+            return run_id
 
         log = AgentRunLog(
             run_id=run_id,

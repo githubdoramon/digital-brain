@@ -38,9 +38,10 @@ from schemas import (
     ThreadOut,
     ThreadUpdate,
 )
-from time_context import snapshot
+from time_context import current_context, snapshot
 from ui_dsl import command_result_to_ui_directives
 from ui_dsl.enums import CommandResultType
+from voice_context import is_voice_request, speech_text
 
 logger = get_runtime_logger(__name__)
 
@@ -175,6 +176,175 @@ def _prepare_command_media(
     return staged, user_metadata
 
 
+async def ask(
+    payload: AskIn,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    start_time = perf_counter()
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    staged_media_attachments, command_user_metadata = _prepare_command_media(
+        payload, user_email
+    )
+    if is_voice_request():
+        command_user_metadata = {**(command_user_metadata or {}), "input_source": "glasses"}
+
+    try:
+        command_payload = handle_pending_event(
+            payload.question,
+            user_email,
+            user,
+            payload.thread_id or payload.session_id,
+            payload.pending_event_id,
+            client_context=payload.client_context.model_dump(exclude_none=True)
+            if payload.client_context
+            else None,
+            media_attachments=staged_media_attachments,
+            user_metadata=command_user_metadata,
+            command_response_text=_command_response_text,
+            command_assistant_metadata=_command_assistant_metadata,
+            progress_callback=None,
+            response_text_transform=speech_text if is_voice_request() else None,
+        )
+        if not command_payload:
+            command_payload = _handle_command(
+                payload.question,
+                user_email,
+                user,
+                payload.thread_id or payload.session_id,
+                payload.client_context.model_dump(exclude_none=True)
+                if payload.client_context
+                else None,
+                media_attachments=staged_media_attachments,
+                user_metadata=command_user_metadata,
+                progress_callback=None,
+                response_text_transform=speech_text if is_voice_request() else None,
+            )
+        if command_payload:
+            command_result, command_thread_id, command_ui_directives = command_payload
+            from commands.storage import get_pending_event
+
+            pending_event_id = get_pending_event(
+                event_pending_key(user_email, command_thread_id)
+            )
+            return AskOut(
+                question=payload.question,
+                answer=speech_text(_command_response_text(command_result)) if is_voice_request() else _command_response_text(command_result),
+                resolution={},
+                search_results=[],
+                events_results=[],
+                thread_id=command_thread_id,
+                session_id=command_thread_id,
+                is_new_session=True,
+                command_result=command_result,
+                ui_directives=command_ui_directives,
+                pending_event_id=pending_event_id,
+            )
+    except LLMUnavailableError as exc:
+        _raise_http_for_llm_unavailable(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from commands.storage import clear_command_thread_by_id
+
+    force_new_session = False
+    requested_thread_id = payload.thread_id or payload.session_id
+    if requested_thread_id and _should_reset_command_thread(
+        user_email,
+        requested_thread_id,
+        payload.pending_event_id,
+    ):
+        clear_command_thread_by_id(requested_thread_id)
+        new_thread = conversations.ensure_thread(None, user_email)
+        payload = payload.copy(update={"thread_id": new_thread["id"], "session_id": None})
+    elif not requested_thread_id and payload.pending_event_id is None:
+        main_session = conversations.get_main_session(user_email)
+        main_thread_id = main_session.get("current_thread_id") if main_session else None
+        if main_thread_id and _should_reset_command_thread(user_email, main_thread_id, None):
+            clear_command_thread_by_id(main_thread_id)
+            force_new_session = True
+
+    ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
+    if ctx.is_new_session:
+        logger.info(
+            "[session] new session started session=%s user=%s", ctx.session_id, user_email
+        )
+
+    if ctx.is_reset_only:
+        logger.info("[ask] session reset session=%s user=%s", ctx.session_id, user_email)
+        delete_staged_chat_media_attachments(staged_media_attachments)
+        return AskOut(**_make_reset_bundle(ctx))
+
+    limit = payload.limit or 30
+    preview = ctx.question.strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "..."
+
+    mode = "main_session" if not (payload.thread_id or payload.session_id) else "thread"
+    logger.info(
+        "[ask] start session=%s user=%s limit=%s mode=%s is_new=%s question=%r",
+        ctx.session_id,
+        user_email,
+        limit,
+        mode,
+        ctx.is_new_session,
+        preview,
+    )
+
+    def _schedule_explicit_rules(**kwargs):
+        from knowledge_jobs import capture_explicit_rules
+
+        background_tasks.add_task(capture_explicit_rules, **kwargs)
+
+    def _schedule_thread_title(**kwargs):
+        background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
+
+    try:
+        bundle = await llm.answer_question(
+            ctx.question,
+            search_limit=limit,
+            user_id=user_email,
+            session_id=ctx.session_id,
+            user_email=user_email,
+            client_context=payload.client_context.model_dump(exclude_none=True)
+            if payload.client_context
+            else None,
+            ui_submission=payload.ui_submission.model_dump(exclude_none=True)
+            if payload.ui_submission
+            else None,
+            visual_attachments=staged_media_attachments,
+            on_exchange_persisted=_schedule_explicit_rules,
+            on_thread_title_needed=_schedule_thread_title,
+        )
+    except LLMUnavailableError as exc:
+        _raise_http_for_llm_unavailable(exc)
+    finally:
+        delete_staged_chat_media_attachments(staged_media_attachments)
+    bundle["thread_id"] = ctx.session_id
+    bundle["session_id"] = ctx.session_id
+    bundle["is_new_session"] = ctx.is_new_session
+
+    elapsed = perf_counter() - start_time
+    search_results = bundle.get("search_results")
+    search_count = len(search_results) if isinstance(search_results, list) else "n/a"
+    logger.info(
+        "[ask] complete session=%s user=%s elapsed=%.3fs search_results=%s",
+        ctx.session_id,
+        user_email,
+        elapsed,
+        search_count,
+    )
+
+    from commands.storage import get_pending_event
+
+    bundle["pending_event_id"] = get_pending_event(
+        event_pending_key(user_email, ctx.session_id)
+    )
+    return AskOut(**bundle)
+
+
 def create_chat_router() -> APIRouter:
     router = APIRouter()
 
@@ -223,171 +393,8 @@ def create_chat_router() -> APIRouter:
         )
         return {"run_id": run_id, "notify_on_completion": True}
 
-    @router.post("/ask", response_model=AskOut)
-    @router.post("/mobile/ask", response_model=AskOut)
-    async def ask(
-        payload: AskIn,
-        background_tasks: BackgroundTasks,
-        user: dict = Depends(get_current_user),
-    ):
-        start_time = perf_counter()
-        user_email = user.get("email")
-        if not user_email:
-            raise HTTPException(status_code=400, detail="Authenticated user email missing")
-        staged_media_attachments, command_user_metadata = _prepare_command_media(
-            payload, user_email
-        )
-
-        try:
-            command_payload = handle_pending_event(
-                payload.question,
-                user_email,
-                user,
-                payload.thread_id or payload.session_id,
-                payload.pending_event_id,
-                client_context=payload.client_context.model_dump(exclude_none=True)
-                if payload.client_context
-                else None,
-                media_attachments=staged_media_attachments,
-                user_metadata=command_user_metadata,
-                command_response_text=_command_response_text,
-                command_assistant_metadata=_command_assistant_metadata,
-                progress_callback=None,
-            )
-            if not command_payload:
-                command_payload = _handle_command(
-                    payload.question,
-                    user_email,
-                    user,
-                    payload.thread_id or payload.session_id,
-                    payload.client_context.model_dump(exclude_none=True)
-                    if payload.client_context
-                    else None,
-                    media_attachments=staged_media_attachments,
-                    user_metadata=command_user_metadata,
-                    progress_callback=None,
-                )
-            if command_payload:
-                command_result, command_thread_id, command_ui_directives = command_payload
-                from commands.storage import get_pending_event
-
-                pending_event_id = get_pending_event(
-                    event_pending_key(user_email, command_thread_id)
-                )
-                return AskOut(
-                    question=payload.question,
-                    answer=_command_response_text(command_result),
-                    resolution={},
-                    search_results=[],
-                    events_results=[],
-                    thread_id=command_thread_id,
-                    session_id=command_thread_id,
-                    is_new_session=True,
-                    command_result=command_result,
-                    ui_directives=command_ui_directives,
-                    pending_event_id=pending_event_id,
-                )
-        except LLMUnavailableError as exc:
-            _raise_http_for_llm_unavailable(exc)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        from commands.storage import clear_command_thread_by_id
-
-        force_new_session = False
-        requested_thread_id = payload.thread_id or payload.session_id
-        if requested_thread_id and _should_reset_command_thread(
-            user_email,
-            requested_thread_id,
-            payload.pending_event_id,
-        ):
-            clear_command_thread_by_id(requested_thread_id)
-            new_thread = conversations.ensure_thread(None, user_email)
-            payload = payload.copy(update={"thread_id": new_thread["id"], "session_id": None})
-        elif not requested_thread_id and payload.pending_event_id is None:
-            main_session = conversations.get_main_session(user_email)
-            main_thread_id = main_session.get("current_thread_id") if main_session else None
-            if main_thread_id and _should_reset_command_thread(user_email, main_thread_id, None):
-                clear_command_thread_by_id(main_thread_id)
-                force_new_session = True
-
-        ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
-        if ctx.is_new_session:
-            logger.info(
-                "[session] new session started session=%s user=%s", ctx.session_id, user_email
-            )
-
-        if ctx.is_reset_only:
-            logger.info("[ask] session reset session=%s user=%s", ctx.session_id, user_email)
-            delete_staged_chat_media_attachments(staged_media_attachments)
-            return AskOut(**_make_reset_bundle(ctx))
-
-        limit = payload.limit or 30
-        preview = ctx.question.strip().replace("\n", " ")
-        if len(preview) > 120:
-            preview = preview[:117] + "..."
-
-        mode = "main_session" if not (payload.thread_id or payload.session_id) else "thread"
-        logger.info(
-            "[ask] start session=%s user=%s limit=%s mode=%s is_new=%s question=%r",
-            ctx.session_id,
-            user_email,
-            limit,
-            mode,
-            ctx.is_new_session,
-            preview,
-        )
-
-        def _schedule_explicit_rules(**kwargs):
-            from knowledge_jobs import capture_explicit_rules
-
-            background_tasks.add_task(capture_explicit_rules, **kwargs)
-
-        def _schedule_thread_title(**kwargs):
-            background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
-
-        try:
-            bundle = await llm.answer_question(
-                ctx.question,
-                search_limit=limit,
-                user_id=user_email,
-                session_id=ctx.session_id,
-                user_email=user_email,
-                client_context=payload.client_context.model_dump(exclude_none=True)
-                if payload.client_context
-                else None,
-                ui_submission=payload.ui_submission.model_dump(exclude_none=True)
-                if payload.ui_submission
-                else None,
-                visual_attachments=staged_media_attachments,
-                on_exchange_persisted=_schedule_explicit_rules,
-                on_thread_title_needed=_schedule_thread_title,
-            )
-        except LLMUnavailableError as exc:
-            _raise_http_for_llm_unavailable(exc)
-        finally:
-            delete_staged_chat_media_attachments(staged_media_attachments)
-        bundle["thread_id"] = ctx.session_id
-        bundle["session_id"] = ctx.session_id
-        bundle["is_new_session"] = ctx.is_new_session
-
-        elapsed = perf_counter() - start_time
-        search_results = bundle.get("search_results")
-        search_count = len(search_results) if isinstance(search_results, list) else "n/a"
-        logger.info(
-            "[ask] complete session=%s user=%s elapsed=%.3fs search_results=%s",
-            ctx.session_id,
-            user_email,
-            elapsed,
-            search_count,
-        )
-
-        from commands.storage import get_pending_event
-
-        bundle["pending_event_id"] = get_pending_event(
-            event_pending_key(user_email, ctx.session_id)
-        )
-        return AskOut(**bundle)
+    router.add_api_route("/ask", ask, methods=["POST"], response_model=AskOut)
+    router.add_api_route("/mobile/ask", ask, methods=["POST"], response_model=AskOut)
 
     @router.post("/ask/stream")
     @router.post("/mobile/ask/stream")
@@ -1178,6 +1185,8 @@ def _command_assistant_metadata(
     metadata: dict[str, Any] = {
         "command_result": _sanitize_command_metadata(command_result),
     }
+    if is_voice_request():
+        metadata["response_modality"] = "speech"
     ui_directives = command_result_to_ui_directives(command_result)
     if ui_directives:
         metadata["ui_directives"] = ui_directives
@@ -1220,7 +1229,7 @@ def _handle_command(
         "thread_id": command_thread_id,
         "event_pending_key": pending_key,
         "client_context": client_context,
-        "request_time": snapshot(client_context),
+        "request_time": current_context() or snapshot(client_context),
         "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }

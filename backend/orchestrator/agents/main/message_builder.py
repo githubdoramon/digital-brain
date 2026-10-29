@@ -17,6 +17,7 @@ from prompts.context import (
 )
 from prompts.state_injection import build_state_message
 from prompts.system import KNOWLEDGE_LEARNING_SYSTEM_PROMPT
+from voice_context import voice_messages
 
 logger = get_runtime_logger(__name__)
 
@@ -132,5 +133,6 @@ def build_main_messages(
         for msg in conversation_history:
             messages.append({"role": msg["role"], "content": msg["content"]})
 
+    messages.extend(voice_messages())
     messages.append({"role": "user", "content": question.strip()})
     return messages

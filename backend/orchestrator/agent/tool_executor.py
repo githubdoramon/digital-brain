@@ -199,6 +199,10 @@ class ToolExecutionCoordinator:
         tool_name = func.get("name", "")
         raw_args = func.get("arguments", "{}")
         call_id = call.get("id", "unknown")
+        from voice_context import tool_allowed
+
+        if not tool_allowed(tool_name):
+            return {"error": "Device actions require a single supported glasses command. Ask the user to clarify and say it again."}
 
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -762,6 +766,10 @@ class ToolExecutionCoordinator:
     ) -> dict[str, Any]:
         """Execute tool handler."""
         from tools.handlers import get_handler
+        from voice_context import tool_allowed
+
+        if not tool_allowed(tool_name):
+            return {"error": "Device actions require a single supported glasses command."}
 
         handler = get_handler(tool_name)
         if not handler:

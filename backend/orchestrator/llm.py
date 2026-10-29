@@ -15,6 +15,7 @@ import conversations
 from llm_config import get_fast_model, get_smart_model
 from observability.logger import get_runtime_logger
 from time_context import with_request_time
+from voice_context import is_voice_request, speech_text
 
 logger = get_runtime_logger(__name__)
 
@@ -177,10 +178,15 @@ async def answer_question(
         visual_attachments=visual_attachments,
     )
 
+    if is_voice_request() and result.get("answer"):
+        result["answer"] = speech_text(result["answer"])
+
     # Persist conversation (bounded agent doesn't do this internally)
     if session_id and user_email and result.get("answer"):
         try:
             assistant_metadata = {}
+            if is_voice_request():
+                assistant_metadata["response_modality"] = "speech"
             if result.get("command_result"):
                 assistant_metadata["command_result"] = result["command_result"]
             if result.get("ui_directives"):
@@ -200,7 +206,8 @@ async def answer_question(
                 user_email=user_email,
                 user_message=question,
                 assistant_message=result["answer"],
-                user_metadata={"learning_owner": result.get("learning_owner", "")},
+                user_metadata={"learning_owner": result.get("learning_owner", ""),
+                               **({"input_source": "glasses"} if is_voice_request() else {})},
                 assistant_metadata=assistant_metadata,
             )
 

@@ -28,7 +28,7 @@ A completed capture is first staged atomically with fsync in private account-sco
 
 Failed copies retain private originals and expose Retry saving; process-recovered pending transcription is marked interrupted when exported by retry. Active inference files are excluded from concurrent retries. At four pending recovery captures, listening pauses until saves are retried. The directory is account-scoped; retry accesses only the signed-in account. Completion receipts keep the last 32 identifiers to avoid duplicate counter increments after interrupted cleanup. Sign-out cancels queued inference and suppresses stale callbacks. Existing completed captures remain user files.
 
-No audio, transcript text, storage/network identifiers, raw exceptions or account identifiers enter general diagnostics, system logs, analytics, Mirador or backend requests. Safe diagnostics retain VAD/wake/quiet/drop/error/LED counts, capture state and inference/audio durations. There is no automatic command execution or upload.
+No audio, transcript text, storage/network identifiers, raw exceptions or account identifiers enter general diagnostics, system logs, analytics or Mirador. Completed capture audio goes only to authenticated transcription; verified non-command phrases go to authenticated regular chat as described below. Safe diagnostics retain VAD/wake/quiet/drop/error/LED counts, capture state and inference/audio durations. Save recovery never executes commands, submits chat or uploads audio again.
 
 ## Validation
 
@@ -54,7 +54,7 @@ These generic app cues are separate from the photo shutter, which remains firmwa
 
 ## Known commands
 
-Completed English transcripts are validated and matched locally before action dispatch. The transcript must start with Hey/Okay/OK followed by Brain or a narrow phonetic alias (Brane, bring, Brian). Wake matching is exact or fuzzy after case/punctuation normalization, stays anchored at the start, and is not speaker authentication. Unrelated near words such as rain/train are rejected; a wake with no command never executes. Unknown commands and rejected wakes retain the same WAV/JSON capture but execute nothing. No LLM is called.
+Completed English transcripts are validated and matched locally before action dispatch. The transcript must start with Hey/Okay/OK followed by Brain or a narrow phonetic alias (Brane, bring, Brian). Wake matching is exact or fuzzy after case/punctuation normalization, stays anchored at the start, and is not speaker authentication. Unrelated near words such as rain/train are rejected; a wake with no command never executes. Rejected wakes and empty phrases retain the same WAV/JSON capture without dispatch. Verified nonempty phrases outside the fixed command grammar enter regular spoken chat; see the chat section below.
 
 | Command | Aliases | Execution |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ The pure `GlassesCommandMatcher` v4 matches an ordered full-utterance grammar. C
 
 `GlassesCommandExecutor` runs on the bounded native speech worker. It checks the original listening generation, active/armed enablement and account before dispatch; call/OTA/recording/disconnect/disable/sign-out invalidate pending action eligibility. Commands older than ninety seconds expire rather than executing later. Private capture JSON schema v2 stores `wakeVerified`, `wakeMatch` (exact/fuzzy/missing), `commandMatch`, `command`, `commandRequestId` and `commandStatus` alongside the transcript. Command and match outcomes include rejected/unknown/cancelled/expired results. Retry saving and process recovery only save files; they never dispatch commands again. An interrupted dispatch can retain `dispatching` when its outcome is unknown.
 
-Gate requests use the existing fresh native Google ID token and configured frontend proxy at `/mobile/glasses/commands`. Only a fixed intent, random request UUID and capture timestamp leave the phone. The backend owns script selection via `GLASSES_FRONT_GATE_SCRIPT` / `GLASSES_CAR_GATE_SCRIPT`; Home Assistant owns the two-second relay pulse. Backend configuration and durable at-most-once receipts are described in [GLASSES_COMMANDS.md](../backend/orchestrator/docs/architecture/GLASSES_COMMANDS.md). No offline queue, automatic network retry or LLM fallback is used. Accepted means Home Assistant accepted the script request, not that a gate sensor confirmed movement.
+Gate requests use the existing fresh native Google ID token and configured frontend proxy at `/mobile/glasses/commands`. Only a fixed intent, random request UUID and capture timestamp leave the phone. The backend owns script selection via `GLASSES_FRONT_GATE_SCRIPT` / `GLASSES_CAR_GATE_SCRIPT`; Home Assistant owns the two-second relay pulse. Backend configuration and durable at-most-once receipts are described in [GLASSES_COMMANDS.md](../backend/orchestrator/docs/architecture/GLASSES_COMMANDS.md). Matched commands never fall through to chat on failure. No offline queue or automatic network retry is used. Accepted means Home Assistant accepted the script request, not that a gate sensor confirmed movement.
 
 Photos use public native SDK camera APIs only, with no bundled PCM or phone media playback. After a verified photo command, request a short PHOTO/MAX camera warm-up lease with matched ZSL/MFNR settings, wait up to eight seconds for camera_status ready, recheck the original listening generation/account/connection, then request an original save-only gallery photo with sound=true. The firmware's warm-camera feedback path plays its own exposure-time snap without cold-start preparation clicks. Release the request-owned lease in finally; no idle camera warming or polling is added. A fifteen-second firmware lease bounds cleanup even if the phone disconnects.
 
@@ -84,3 +84,24 @@ Matcher v4 adds the bounded take-pick alias, cartgate → car gate repair (cost 
 Speech uploads may reuse an unexpired ID token belonging to the currently signed-in Google account and configured web client. Refresh at least two minutes before expiry; sign-out/account changes, malformed claims and rejected tokens prevent reuse. These decoded claims schedule refresh only: the backend still validates signature, issuer, audience, expiry and account allow-list on every request. There is no automatic transcription retry on authentication failure. Other native background upload authentication policies are unchanged.
 
 Live glasses transcription uses the fixed shared `commands-v1` Whisper prompt, identical to the hinted benchmark candidate. Chat dictation remains unhinted. The profile/method are retained in private capture JSON, without logging prompt or transcript content.
+
+## Regular spoken chat
+
+After local command matching, verified nonempty wake phrases without a matched
+command use the normal chat handler and main session, including its thirty-minute
+inactivity timeout. Each turn starts with Hey Brain; spoken “slash new” resets
+the session. Ambiguous, negated and multiple command phrases may enter chat for
+clarification, while Home Assistant, shell and skill-script tools are blocked
+for this modality. Matched command failures never enter chat.
+
+The backend requests a concise spoken answer and synthesizes the same persisted
+reply through separately configured Kokoro TTS. Native Android receives bounded
+ephemeral PCM, pauses wake detection during the turn, and plays it through the
+existing verified glasses-only output with call priority and media mute/DND.
+A fresh detector resumes afterward; idle audio is never sent to chat. Calls,
+recordings, OTA, disconnect, sign-out and disable cancel requests/playback. Reply
+text remains available in ordinary chat when synthesis/playback fails. No chat or
+playback retry occurs during recovery. Original WAV/JSON saving remains intact.
+
+See [GLASSES_CHAT.md](../backend/orchestrator/docs/architecture/GLASSES_CHAT.md)
+for authentication, privacy, timing, idempotency, configuration and validation.
