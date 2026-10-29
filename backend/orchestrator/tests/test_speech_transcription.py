@@ -285,3 +285,41 @@ def test_parakeet_does_not_change_production_transcription(monkeypatch):
     with pytest.raises(EvalFailure, match="invalid_model"):
         remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav(), replay=False)
     assert post.call_count == 2
+
+
+def test_whisper_vocabulary_is_explicit_versioned_and_replay_only(monkeypatch):
+    post = stub_post(monkeypatch)
+    url = "/mobile/glasses/speech-eval/transcribe?model=large-v3-turbo&vocabulary=commands-v1"
+    result = client().post(url, content=wav())
+    assert result.status_code == 200
+    assert post.call_args.kwargs["data"]["prompt"] == remote.COMMAND_VOCABULARY
+    assert result.json()["vocabularyProfile"] == "commands-v1"
+    assert result.json()["vocabularyMethod"] == "prompt"
+    for dictation in (False, True):
+        remote.transcribe(wav(), dictation=dictation)
+        assert "prompt" not in post.call_args.kwargs["data"]
+    with pytest.raises(EvalFailure, match="invalid_vocabulary"):
+        remote.request(remote.MODEL, "transcribe", wav(), replay=False, vocabulary="commands-v1")
+    with pytest.raises(EvalFailure, match="invalid_vocabulary"):
+        remote.request(remote.MODEL, "prepare", vocabulary="unknown")
+    assert client().post(url.replace("commands-v1", "unknown"), content=wav()).status_code == 422
+
+
+def test_parakeet_boosting_requires_distinct_configured_server_alias(monkeypatch):
+    monkeypatch.delenv("SPEECH_EVAL_PARAKEET_BOOSTED_MODEL", raising=False)
+    post = stub_post(monkeypatch)
+    url = "/mobile/glasses/speech-eval/prepare?model=parakeet-tdt-0.6b-v3&vocabulary=commands-v1"
+    result = client().post(url)
+    assert result.status_code == 503
+    assert result.json()["detail"] == "vocabulary_not_configured"
+    post.assert_not_called()
+    monkeypatch.setenv("SPEECH_EVAL_PARAKEET_BOOSTED_MODEL", "parakeet-tdt-0.6b-v3")
+    assert client().post(url).json()["detail"] == "vocabulary_not_configured"
+    monkeypatch.setenv("SPEECH_EVAL_PARAKEET_BOOSTED_MODEL", "parakeet-commands-v1")
+    assert client().post(url).json()["upstreamModel"] == "parakeet-commands-v1"
+    result = remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav(), vocabulary="commands-v1")
+    assert post.call_args.kwargs["data"] == {"model": "parakeet-commands-v1", "response_format": "json"}
+    assert result["vocabularyProfile"] == "commands-v1"
+    assert result["vocabularyMethod"] == "server_alias"
+    remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav())
+    assert post.call_args.kwargs["data"]["model"] == "parakeet-tdt-0.6b-v3"

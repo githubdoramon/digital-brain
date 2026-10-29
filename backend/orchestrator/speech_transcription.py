@@ -53,6 +53,11 @@ def validate_audio(audio: bytes, max_seconds: int = 30) -> None:
 MODEL = "large-v3-turbo"
 UPSTREAM_MODEL = "whisper-large-v3-turbo"
 REPLAY_MODELS = {MODEL: UPSTREAM_MODEL, "parakeet-tdt-0.6b-v3": "parakeet-tdt-0.6b-v3"}
+# Versioned, shared vocabulary: never derived from a sample's expected answer.
+COMMAND_VOCABULARY = (
+    "Hey Brain. Okay Brain. Open the front gate. Open the front door. "
+    "Toggle the car gate. Open the car gate. Car gate. Take a picture. Take a photo."
+)
 logger = logging.getLogger(__name__)
 _slot = threading.BoundedSemaphore(2)
 
@@ -102,6 +107,7 @@ def request(
     *,
     replay: bool = True,
     max_seconds: int = 30,
+    vocabulary: str = "none",
 ) -> dict:
     started = time.monotonic()
     try:
@@ -114,12 +120,23 @@ def request(
             raise EvalFailure("invalid_model")
         if threads is not None:
             raise EvalFailure("invalid_cpu_threads")
+        if vocabulary not in {"none", "commands-v1"} or (not replay and vocabulary != "none"):
+            raise EvalFailure("invalid_vocabulary")
+        upstream_model = REPLAY_MODELS[selected]
+        if vocabulary == "commands-v1" and selected != MODEL:
+            upstream_model = os.getenv("SPEECH_EVAL_PARAKEET_BOOSTED_MODEL", "").strip()
+            if not upstream_model or upstream_model == REPLAY_MODELS[selected]:
+                raise EvalFailure("vocabulary_not_configured")
+            if len(upstream_model) > 128 or any(ord(c) < 32 for c in upstream_model):
+                raise EvalFailure("vocabulary_not_configured")
         url, key = configuration()
         metadata = {
             "engine": "openai-compatible",
             "provider": "remote",
             "model": selected,
-            "upstreamModel": REPLAY_MODELS[selected],
+            "upstreamModel": upstream_model,
+            "vocabularyProfile": vocabulary,
+            "vocabularyMethod": "none" if vocabulary == "none" else "prompt" if selected == MODEL else "server_alias",
             "coldStartControlled": False,
         }
         if operation == "prepare":
@@ -136,9 +153,11 @@ def request(
             )
             upstream_at = time.monotonic()
             headers = {"Authorization": f"Bearer {key}"} if key else {}
-            fields = {"model": REPLAY_MODELS[selected], "response_format": "json"}
+            fields = {"model": upstream_model, "response_format": "json"}
             if selected == MODEL:
                 fields.update(language="en", temperature="0")
+                if vocabulary == "commands-v1":
+                    fields["prompt"] = COMMAND_VOCABULARY
             with requests.post(
                 url,
                 headers=headers,

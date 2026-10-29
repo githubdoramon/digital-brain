@@ -19,7 +19,7 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
     guard()
     val authMs = SystemClock.elapsedRealtime() - started
     val selection = SpeechEvalServerCandidate.parse(if (replay) candidate else SpeechEvalServerCandidate.ID) ?: throw SpeechEvalFailure("invalid_model")
-    val path = if (replay) "/mobile/glasses/speech-eval/${if (prepare) "prepare" else "transcribe"}?provider=remote&model=${selection.model}" else "/mobile/glasses/transcribe"
+    val path = if (replay) "/mobile/glasses/speech-eval/${if (prepare) "prepare" else "transcribe"}?provider=remote&model=${selection.model}&vocabulary=${selection.vocabulary}" else "/mobile/glasses/transcribe"
     val http = URL(config.apiBaseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
     connection = http
     try {

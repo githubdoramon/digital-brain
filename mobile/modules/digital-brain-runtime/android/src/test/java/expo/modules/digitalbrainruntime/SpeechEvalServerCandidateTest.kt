@@ -42,4 +42,24 @@ class SpeechEvalServerCandidateTest {
       }
     }
   }
+  @Test fun vocabularyCandidatesRequireMatchingProfileAndMethod() {
+    val whisper = SpeechEvalServerCandidate.parse(SpeechEvalServerCandidate.WHISPER_VOCABULARY_ID)!!
+    assertEquals("large-v3-turbo", whisper.model)
+    assertEquals("commands-v1", whisper.vocabulary)
+    val result = JSONObject().put("provider", "remote").put("engine", "openai-compatible")
+      .put("model", "large-v3-turbo").put("upstreamModel", "whisper-large-v3-turbo")
+    try { whisper.validateResponse(result); fail("Baseline cannot count as hinted") }
+    catch (error: SpeechEvalFailure) { assertEquals("server_update_required", error.reason) }
+    result.put("vocabularyProfile", "commands-v1").put("vocabularyMethod", "prompt")
+    whisper.validateResponse(result)
+    val parakeet = SpeechEvalServerCandidate.parse(SpeechEvalServerCandidate.PARAKEET_VOCABULARY_ID)!!
+    result.put("model", parakeet.model).put("upstreamModel", "parakeet-commands-v1")
+      .put("vocabularyMethod", "server_alias")
+    parakeet.validateResponse(result)
+    assertTrue(SpeechEvalServerCandidate.supportsCandidates(listOf(SpeechEvalServerCandidate.ID,
+      SpeechEvalServerCandidate.PARAKEET_ID, SpeechEvalServerCandidate.WHISPER_VOCABULARY_ID,
+      SpeechEvalServerCandidate.PARAKEET_VOCABULARY_ID)))
+    assertNull(SpeechEvalServerCandidate.parse("remote:large-v3-turbo@commands-v2"))
+  }
+
 }

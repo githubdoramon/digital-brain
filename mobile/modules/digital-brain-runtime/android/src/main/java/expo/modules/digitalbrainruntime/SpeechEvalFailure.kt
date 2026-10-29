@@ -16,7 +16,7 @@ internal object SpeechEvalFailures {
     "engine_unavailable", "invalid_audio", "invalid_model", "engine_import_failed", "model_download_http_error",
     "engine_http_error", "cache_storage_full", "cache_access_denied", "network_timeout",
     "model_download_unavailable", "model_download_failed", "model_load_failed", "network_unavailable",
-    "tls_failed", "server_update_required", "cpu_configuration_mismatch", "invalid_cpu_threads", "auth_rejected", "endpoint_unavailable", "upstream_unavailable", "remote_not_configured", "remote_http_error", "remote_invalid_response", "evaluation_failed")
+    "invalid_vocabulary", "vocabulary_not_configured", "tls_failed", "server_update_required", "cpu_configuration_mismatch", "invalid_cpu_threads", "auth_rejected", "endpoint_unavailable", "upstream_unavailable", "remote_not_configured", "remote_http_error", "remote_invalid_response", "evaluation_failed")
   private val stages = setOf("request", "initialization", "model_download", "model_load", "inference")
   fun counts(rows: List<JSONObject>): Map<String, Int> = rows
     .filter { it.optString("status") == "failed" }

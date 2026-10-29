@@ -28,10 +28,13 @@ def create_glasses_speech_eval_router() -> APIRouter:
             ],
         }
 
-    async def invoke(model, operation, audio=b"", threads=None, replay=True):
+    async def invoke(model, operation, audio=b"", threads=None, replay=True, vocabulary="none"):
         try:
+            options = {"replay": replay}
+            if vocabulary != "none":
+                options["vocabulary"] = vocabulary
             return await run_in_threadpool(
-                speech.request, model, operation, audio, threads, replay=replay
+                speech.request, model, operation, audio, threads, **options
             )
         except speech.EvalFailure as exc:
             reason = str(exc)
@@ -42,7 +45,7 @@ def create_glasses_speech_eval_router() -> APIRouter:
                 if reason in {"server_timeout", "network_timeout"}
                 else 503
             )
-            if reason in {"invalid_audio", "invalid_model", "invalid_cpu_threads"}:
+            if reason in {"invalid_audio", "invalid_model", "invalid_cpu_threads", "invalid_vocabulary"}:
                 status = 400
             if reason == "audio_too_large":
                 status = 413
@@ -68,8 +71,9 @@ def create_glasses_speech_eval_router() -> APIRouter:
         model: str = Query(default=speech.MODEL, max_length=32),
         provider: Literal["remote"] = "remote",
         threads: int | None = None,
+        vocabulary: Literal["none", "commands-v1"] = "none",
     ):
-        return await invoke(model, "prepare", threads=threads)
+        return await invoke(model, "prepare", threads=threads, vocabulary=vocabulary)
 
     @router.post("/speech-eval/transcribe")
     async def replay(
@@ -77,7 +81,8 @@ def create_glasses_speech_eval_router() -> APIRouter:
         model: str = Query(default=speech.MODEL, max_length=32),
         provider: Literal["remote"] = "remote",
         threads: int | None = None,
+        vocabulary: Literal["none", "commands-v1"] = "none",
     ):
-        return await invoke(model, "transcribe", await audio_bytes(request), threads=threads)
+        return await invoke(model, "transcribe", await audio_bytes(request), threads=threads, vocabulary=vocabulary)
 
     return router

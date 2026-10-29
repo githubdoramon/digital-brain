@@ -81,6 +81,7 @@ export default function SpeechComparisonScreen() {
   const [repeats, setRepeats] = React.useState(2);
   const [models, setModels] = React.useState([
     'remote:large-v3-turbo',
+    'remote:large-v3-turbo@commands-v1',
     'remote:parakeet-tdt-0.6b-v3',
   ]);
   const [status, setStatus] = React.useState<SpeechTestStatus | null>(null);
@@ -177,6 +178,8 @@ export default function SpeechComparisonScreen() {
           {[
             ['remote:large-v3-turbo', 'Whisper Turbo'],
             ['remote:parakeet-tdt-0.6b-v3', 'Parakeet v3'],
+            ['remote:large-v3-turbo@commands-v1', 'Whisper Turbo · Command vocabulary'],
+            ['remote:parakeet-tdt-0.6b-v3@commands-v1', 'Parakeet v3 · Command vocabulary'],
           ].map(([id, label]) => (
             <View key={id} style={styles.row}>
               <Text style={styles.label}>{label}</Text>
@@ -281,7 +284,8 @@ export default function SpeechComparisonScreen() {
                   .replace('local:', 'Phone · ')
                   .replace('server:', 'Server · ')
                   .replace('remote:', 'GPU server · ')
-                  .replace(/@threads=(\d+)/, ' · $1 threads')}
+                  .replace(/@threads=(\d+)/, ' · $1 threads')
+                  .replace('@commands-v1', ' · Command vocabulary')}
               </Text>
               <Text style={styles.label}>
                 {
