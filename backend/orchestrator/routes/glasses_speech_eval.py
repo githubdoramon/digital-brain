@@ -77,7 +77,13 @@ def create_glasses_speech_eval_router() -> APIRouter:
 
     @router.post("/transcribe")
     async def transcribe(request: Request):
-        return await invoke(speech.MODEL, "transcribe", await audio_bytes(request), replay=False)
+        return await invoke(
+            speech.MODEL,
+            "transcribe",
+            await audio_bytes(request),
+            replay=False,
+            vocabulary="commands-v1",
+        )
 
     @router.post("/speech-eval/prepare")
     async def prepare(

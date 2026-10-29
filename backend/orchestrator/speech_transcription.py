@@ -57,7 +57,7 @@ REPLAY_MODELS = {MODEL: UPSTREAM_MODEL, "parakeet-tdt-0.6b-v3": "parakeet-tdt-0.
 # Versioned, shared vocabulary: never derived from a sample's expected answer.
 COMMAND_VOCABULARY = (
     "Hey Brain. Okay Brain. Open the front gate. Open the front door. "
-    "Toggle the car gate. Open the car gate. Car gate. Take a picture. Take a photo."
+    "Toggle the car gate. Open the car gate. Car gate. Take a picture. Take a pic. Take a photo."
 )
 logger = logging.getLogger(__name__)
 _slot = threading.BoundedSemaphore(2)
@@ -129,7 +129,7 @@ def request(
             raise EvalFailure("invalid_model")
         if threads is not None:
             raise EvalFailure("invalid_cpu_threads")
-        if vocabulary not in {"none", "commands-v1"} or (not replay and vocabulary != "none"):
+        if vocabulary not in {"none", "commands-v1"}:
             raise EvalFailure("invalid_vocabulary")
         upstream_model = REPLAY_MODELS[selected]
         if vocabulary == "commands-v1" and selected != MODEL:
@@ -243,4 +243,5 @@ def transcribe(audio: bytes, *, dictation: bool = False) -> dict:
         audio,
         replay=False,
         max_seconds=MAX_DICTATION_SECONDS if dictation else 30,
+        vocabulary="none" if dictation else "commands-v1",
     )

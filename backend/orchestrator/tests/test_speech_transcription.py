@@ -287,7 +287,7 @@ def test_parakeet_does_not_change_production_transcription(monkeypatch):
     assert post.call_count == 2
 
 
-def test_whisper_vocabulary_is_explicit_versioned_and_replay_only(monkeypatch):
+def test_whisper_vocabulary_is_versioned_live_for_glasses_and_not_dictation(monkeypatch):
     post = stub_post(monkeypatch)
     url = "/mobile/glasses/speech-eval/transcribe?model=large-v3-turbo&vocabulary=commands-v1"
     result = client().post(url, content=wav())
@@ -295,11 +295,16 @@ def test_whisper_vocabulary_is_explicit_versioned_and_replay_only(monkeypatch):
     assert post.call_args.kwargs["data"]["prompt"] == remote.COMMAND_VOCABULARY
     assert result.json()["vocabularyProfile"] == "commands-v1"
     assert result.json()["vocabularyMethod"] == "prompt"
-    for dictation in (False, True):
-        remote.transcribe(wav(), dictation=dictation)
-        assert "prompt" not in post.call_args.kwargs["data"]
-    with pytest.raises(EvalFailure, match="invalid_vocabulary"):
-        remote.request(remote.MODEL, "transcribe", wav(), replay=False, vocabulary="commands-v1")
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "false")
+    live = client().post("/mobile/glasses/transcribe?vocabulary=none", content=wav())
+    assert live.status_code == 200
+    assert live.json()["vocabularyProfile"] == "commands-v1"
+    assert post.call_args.kwargs["data"]["prompt"] == remote.COMMAND_VOCABULARY
+    remote.transcribe(wav())
+    assert post.call_args.kwargs["data"]["prompt"] == remote.COMMAND_VOCABULARY
+    remote.transcribe(wav(), dictation=True)
+    assert "prompt" not in post.call_args.kwargs["data"]
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "true")
     with pytest.raises(EvalFailure, match="invalid_vocabulary"):
         remote.request(remote.MODEL, "prepare", vocabulary="unknown")
     assert client().post(url.replace("commands-v1", "unknown"), content=wav()).status_code == 422

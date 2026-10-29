@@ -58,7 +58,9 @@ def test_live_capture_requires_auth_and_is_independent_of_replay_opt_in(monkeypa
     provider.assert_not_called()
     data = wav()
     assert client().post(url, content=data).status_code == 200
-    provider.assert_called_once_with(speech.MODEL, "transcribe", data, None, replay=False)
+    provider.assert_called_once_with(
+        speech.MODEL, "transcribe", data, None, replay=False, vocabulary="commands-v1"
+    )
 
 
 def test_replay_disabled_without_live_speech_being_disabled(monkeypatch):

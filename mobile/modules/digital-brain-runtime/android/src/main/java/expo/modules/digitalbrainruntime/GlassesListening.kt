@@ -313,7 +313,7 @@ object GlassesListening {
           val started = SystemClock.elapsedRealtime()
           val response = timing.measure("transcriptionMs") { client.request(GlassesWakeStore.wav(job.capture.chunk.pcm)) }
           val text = response.getString("text")
-          for (field in listOf("authMs", "authSource", "backendAuthMs", "backendUploadMs", "backendRouteMs", "proxyAuthMs", "proxyBackendMs", "proxyTotalMs", "requestWriteMs", "responseWaitMs", "roundTripMs", "upstreamRequestMs", "serverTotalMs", "upstreamModel"))
+          for (field in listOf("authMs", "authSource", "backendAuthMs", "backendUploadMs", "backendRouteMs", "proxyAuthMs", "proxyBackendMs", "proxyTotalMs", "requestWriteMs", "responseWaitMs", "roundTripMs", "upstreamRequestMs", "serverTotalMs", "upstreamModel", "vocabularyProfile", "vocabularyMethod"))
             timing.values[field] = response.opt(field)
           val duration = SystemClock.elapsedRealtime() - started
           main.removeCallbacks(timeout)

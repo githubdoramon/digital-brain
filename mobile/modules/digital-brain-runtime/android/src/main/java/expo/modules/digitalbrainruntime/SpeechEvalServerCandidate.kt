@@ -20,6 +20,15 @@ internal data class SpeechEvalServerCandidate(val model: String = "large-v3-turb
     }
   }
   companion object {
+    // Live accepts the known baseline during rollout; replay candidates remain exact.
+    fun validateLiveResponse(response: JSONObject) {
+      val candidate = when (response.optString("vocabularyProfile", "none")) {
+        "none" -> SpeechEvalServerCandidate()
+        "commands-v1" -> SpeechEvalServerCandidate(vocabulary = "commands-v1")
+        else -> throw SpeechEvalFailure("server_update_required", "request", 200)
+      }
+      candidate.validateResponse(response)
+    }
     const val ID = "remote:large-v3-turbo"
     const val PARAKEET_ID = "remote:parakeet-tdt-0.6b-v3"
     const val WHISPER_VOCABULARY_ID = "$ID@commands-v1"

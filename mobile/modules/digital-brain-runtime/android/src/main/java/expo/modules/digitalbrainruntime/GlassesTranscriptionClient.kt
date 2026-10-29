@@ -41,7 +41,7 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
         throw SpeechEvalFailures.http(status, body)
       }
       val result = JSONObject(String(read(http.inputStream), Charsets.UTF_8))
-      selection.validateResponse(result)
+      if (replay) selection.validateResponse(result) else SpeechEvalServerCandidate.validateLiveResponse(result)
       if (!prepare && (result.opt("text") !is String || result.getString("text").length > 8192))
         throw SpeechEvalFailure("remote_invalid_response")
       guard()

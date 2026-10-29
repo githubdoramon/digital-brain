@@ -63,4 +63,20 @@ class SpeechEvalServerCandidateTest {
     assertNull(SpeechEvalServerCandidate.parse("remote:large-v3-turbo@commands-v2"))
   }
 
+  @Test fun liveAllowsKnownWhisperVocabularyWithoutWeakeningReplayValidation() {
+    val result = JSONObject().put("provider", "remote").put("model", "large-v3-turbo")
+      .put("upstreamModel", "whisper-large-v3-turbo").put("engine", "openai-compatible")
+    SpeechEvalServerCandidate.validateLiveResponse(result)
+    result.put("vocabularyProfile", "commands-v1").put("vocabularyMethod", "prompt")
+    SpeechEvalServerCandidate.validateLiveResponse(result)
+    try { SpeechEvalServerCandidate().validateResponse(result); fail("Baseline replay must reject hints") }
+    catch (error: SpeechEvalFailure) { assertEquals("server_update_required", error.reason) }
+    for ((field, value) in listOf("vocabularyProfile" to "unknown", "vocabularyMethod" to "none",
+      "upstreamModel" to "different-model", "model" to "parakeet-tdt-0.6b-v3")) {
+      val invalid = JSONObject(result.toString()).put(field, value)
+      try { SpeechEvalServerCandidate.validateLiveResponse(invalid); fail("Invalid live response") }
+      catch (error: SpeechEvalFailure) { assertEquals("server_update_required", error.reason) }
+    }
+  }
+
 }
