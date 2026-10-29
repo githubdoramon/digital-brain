@@ -44,8 +44,8 @@ from routes.documents import create_documents_router
 from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
-from routes.glasses_commands import create_glasses_commands_router
 from routes.glasses_chat import create_glasses_chat_router
+from routes.glasses_commands import create_glasses_commands_router
 from routes.glasses_media import create_glasses_media_router
 from routes.glasses_speech_eval import create_glasses_speech_eval_router
 from routes.google_calendar import create_google_calendar_router
