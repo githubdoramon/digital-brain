@@ -1,6 +1,5 @@
 package expo.modules.digitalbrainruntime
 
-import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -9,7 +8,6 @@ import android.os.Build
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.work.*
-import com.rnwhisper.GlassesWhisperBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -18,18 +16,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Native replay only. It deliberately has no dependency on GlassesCommandExecutor. */
 class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c, params) {
   private val c = applicationContext
-  @Volatile private var bridge: GlassesWhisperBridge? = null
-  @Volatile private var connection: HttpURLConnection? = null
-  private var loaded: String? = null
+  private val client = GlassesTranscriptionClient(c) { guard() }
   private var owner = ""
   private var runId = ""
   private val timeout = Executors.newSingleThreadScheduledExecutor()
@@ -50,20 +43,24 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
       val value = SpeechEvalStore.read(c, owner) ?: return@withContext Result.success()
       runId = value.getString("id")
       if (!RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != owner || value.runState() == SpeechEvalRunState.PAUSED) return@withContext Result.success()
+      if (!SpeechEvalServerCandidate.supportsRun(value)) {
+        value.put("state", SpeechEvalRunState.PAUSED.key).put("message", "Start a new recognition test")
+        SpeechEvalStore.save(c, owner, value)
+        return@withContext Result.success()
+      }
       try {
         running = true
         timeout.scheduleAtFixedRate({
           if (isStopped || !RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != owner) {
-            bridge?.abort(); connection?.disconnect()
+            client.cancel()
           }
         }, 0, 250, TimeUnit.MILLISECONDS)
         setForeground(notification())
         withContext(Dispatchers.Main) { GlassesListening.pauseForComparison() }
         GlassesListening.awaitSpeechWorker()
         guard()
-        value.put("state", SpeechEvalRunState.RUNNING.key).put("message", "Preparing models")
+        value.put("state", SpeechEvalRunState.RUNNING.key).put("message", "Preparing recognition test")
         persist(value)
-        bridge = GlassesWhisperBridge(1700000011)
         val deadline = SystemClock.elapsedRealtime() + 6 * 60_000
         val rows = value.getJSONArray("results")
         val existing = SpeechEvalStore.array(rows).map { it.getString("key") }.toMutableSet()
@@ -80,10 +77,9 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
           persist(value)
           var preparationError: Exception? = null
           val preparationStarted = SystemClock.elapsedRealtime()
-          var model: File? = null
           try {
-            if (candidate.startsWith("local:")) model = download(candidate)
-            else request(candidate, "prepare")
+            check(SpeechEvalServerCandidate.parse(candidate) != null) { "retired_candidate" }
+            client.request(replay = true, prepare = true, candidate = candidate)
           } catch (e: CancellationException) { throw e }
           catch (error: Exception) { guard(); preparationError = error }
           val preparationMs = SystemClock.elapsedRealtime() - preparationStarted
@@ -96,6 +92,7 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
               return@withContext Result.retry()
             }
             val row = JSONObject().put("key", key).put("candidate", candidate).put("sample", sample.getString("audioFile"))
+              .put("matcherVersion", GlassesCommandMatcher.VERSION)
               .put("sampleSha256", sample.getString("sha256")).put("mode", (server?.modes ?: listOf("cold", "warm"))[if (repetition == 0) 0 else 1])
               .put("repeat", repetition).put("expectedCommand", sample.get("expectedCommand"))
               .put("tags", sample.optJSONArray("tags") ?: JSONArray())
@@ -104,48 +101,31 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
               preparationError?.let { throw it }
               val audio = File(SpeechEvalStore.root(c, owner), "$runId/${sample.getInt("index")}.wav").readBytes()
               require(SpeechEvalStore.hash(audio) == sample.getString("sha256")) { "audio_changed" }
-              val pcm = SpeechEvalPolicy.pcm(audio)
-              // After interruption, explicitly prepare a warm context before measuring a warm replay.
-              val text: String
-              if (candidate.startsWith("local:")) {
-                val path = checkNotNull(model)
-                val metadata = SpeechEvalStore.local(c, candidate)
-                row.put("decoding", JSONObject().put("language", "en").put("strategy", "greedy").put("bestOf", 5)
-                  .put("temperature", 0).put("temperatureIncrement", 0.2).put("noContext", true))
-                row.put("modelSha256", metadata.getString("sha256")).put("modelRevision", metadata.getString("revision"))
-                if (repetition > 0 && loaded != candidate) {
-                  load(path, candidate); transcribe(pcm)
-                  row.put("resumeWarmupMs", SystemClock.elapsedRealtime() - started)
-                }
-                guard()
-                val timed = SpeechTiming({ SystemClock.elapsedRealtime() })
-                val alreadyLoaded = repetition > 0 && loaded == candidate
-                timed.measure("modelLoadMs") { if (!alreadyLoaded) { bridge?.release(); loaded = null; load(path, candidate) } }
-                text = timed.measure("inferenceMs") { transcribe(pcm) }
-                row.put("modelAlreadyLoaded", alreadyLoaded).put("modelLoadMs", timed.duration("modelLoadMs"))
-                  .put("inferenceMs", timed.duration("inferenceMs")).put("totalMs", timed.elapsed())
-                  .put("engine", "whisper.rn-0.5.5").put("cpuThreads", 2)
-              } else {
-                // Each warm replay follows an unscored request, even across server process eviction.
-                if (repetition > 0) {
-                  val warmupStart = SystemClock.elapsedRealtime()
-                  request(candidate, "transcribe", false, audio)
-                  row.put("warmupMs", SystemClock.elapsedRealtime() - warmupStart)
-                }
-                guard()
-                val requestStart = SystemClock.elapsedRealtime()
-                val response = request(candidate, "transcribe", repetition == 0, audio)
-                val roundTrip = SystemClock.elapsedRealtime() - requestStart
-                for (field in response.keys()) row.put(field, response.get(field))
-                row.put("roundTripMs", roundTrip).put("totalMs", roundTrip)
-                text = response.getString("text")
-                if (repetition > 0 && server?.remote != true && !response.optBoolean("modelAlreadyLoaded")) throw IllegalStateException("warm_context_lost")
+              SpeechEvalPolicy.validateAudio(audio)
+              if (repetition > 0) {
+                val warmupStart = SystemClock.elapsedRealtime()
+                client.request(audio, replay = true, candidate = candidate)
+                row.put("warmupMs", SystemClock.elapsedRealtime() - warmupStart)
               }
+              guard()
+              val response = client.request(audio, replay = true, candidate = candidate)
+              for (field in response.keys()) row.put(field, response.get(field))
+              row.put("totalMs", response.getLong("roundTripMs"))
+              val text = response.getString("text")
               guard()
               val matchingAt = SystemClock.elapsedRealtime()
               val decision = GlassesCommandMatcher.match(text)
               val matchingMs = SystemClock.elapsedRealtime() - matchingAt
               row.put("matchingMs", matchingMs).put("totalMs", row.getLong("totalMs") + matchingMs)
+              val literal = GlassesCommandMatcher.literal(text)
+              val grammar = GlassesCommandMatcher.grammar(text)
+              val expected = if (sample.isNull("expectedCommand")) null else sample.getString("expectedCommand")
+              row.put("literalCorrect", literal.command?.key == expected)
+                .put("grammarCorrect", grammar.command?.key == expected)
+              row.put("literalCommand", literal.command?.key ?: JSONObject.NULL)
+                .put("grammarCommand", grammar.command?.key ?: JSONObject.NULL)
+                .put("matchingStage", decision.stage).put("matchingCost", decision.cost ?: JSONObject.NULL)
+                .put("matchingMargin", decision.margin ?: JSONObject.NULL).put("rejectionReason", decision.reason ?: JSONObject.NULL)
               row.put("text", text).put("command", decision.command?.key ?: JSONObject.NULL)
                 .put("commandMatch", decision.match.name.lowercase()).put("wakeMatch", decision.wakeMatch.name.lowercase())
                 .put("correct", (if (sample.isNull("expectedCommand")) null else sample.getString("expectedCommand")) == decision.command?.key)
@@ -159,13 +139,8 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
                 .put("attemptDurationMs", SystemClock.elapsedRealtime() - started)
               SpeechEvalFailures.annotate(row, e)
               if (preparationError != null) row.put("preparationDurationMs", preparationMs)
-              bridge?.release(); loaded = null
             } catch (_: OutOfMemoryError) {
               row.put("status", SpeechEvalResult.FAILED.key).put("error", "insufficient_memory")
-              bridge?.release(); loaded = null
-            } catch (_: LinkageError) {
-              row.put("status", SpeechEvalResult.FAILED.key).put("error", "unsupported_model")
-              bridge?.release(); loaded = null
             }
             row.put("processPssKb", android.os.Debug.getPss())
             val network = c.getSystemService(android.net.ConnectivityManager::class.java)
@@ -196,9 +171,8 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
         pauseJournal()
         Result.success()
       } finally {
-        bridge?.release(); bridge = null; loaded = null
         running = false
-        connection?.disconnect(); connection = null
+        client.cancel()
         timeout.shutdownNow()
         withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
           val current = SpeechEvalStore.readMeta(c, owner)
@@ -218,85 +192,6 @@ class SpeechEvalWorker(c: Context, params: WorkerParameters) : CoroutineWorker(c
         SpeechEvalStore.save(c, owner, latest)
       }
     }
-  }
-  private fun load(file: File, candidate: String) {
-    val info = ActivityManager.MemoryInfo()
-    c.getSystemService(ActivityManager::class.java).getMemoryInfo(info)
-    require(!info.lowMemory && info.availMem > file.length() * 2 + 256L * 1024 * 1024) { "insufficient_memory" }
-    if (loaded != candidate) { bridge!!.release(); loaded = null }
-    bridge!!.load(file.path); loaded = candidate
-  }
-  private fun transcribe(pcm: FloatArray): String {
-    guard()
-    val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
-    val engine = bridge!!
-    val task = timeout.schedule({ timedOut.set(true); engine.abort() }, 60, TimeUnit.SECONDS)
-    try {
-      val text = engine.transcribe(pcm)
-      check(!timedOut.get()) { "inference_timeout" }
-      guard(); return text
-    } finally { task.cancel(false) }
-  }
-  private fun download(candidate: String): File {
-    val model = SpeechEvalStore.local(c, candidate)
-    val folder = File(c.filesDir, "speech-eval-models").apply { mkdirs() }
-    val target = File(folder, model.getString("file"))
-    if (target.length() == model.getLong("bytes") && SpeechEvalStore.hash(target) == model.getString("sha256")) return target
-    require(folder.usableSpace > model.getLong("bytes") + 128 * 1024 * 1024) { "Free some phone storage first" }
-    val temporary = File(folder, target.name + ".download")
-    val url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/${model.getString("revision")}/${target.name}"
-    val http = URL(url).openConnection() as HttpURLConnection
-    connection = http
-    try {
-      http.connectTimeout = 20_000; http.readTimeout = 30_000
-      check(http.responseCode == 200)
-      var size = 0L
-      http.inputStream.use { input -> FileOutputStream(temporary).use { output ->
-        val buffer = ByteArray(65536)
-        while (true) { guard(); val count = input.read(buffer); if (count < 0) break
-          size += count; require(size <= model.getLong("bytes")); output.write(buffer, 0, count) }
-        output.fd.sync()
-      } }
-      require(size == model.getLong("bytes") && SpeechEvalStore.hash(temporary) == model.getString("sha256"))
-      check(temporary.renameTo(target)); return target
-    } finally { http.disconnect(); connection = null; temporary.delete() }
-  }
-  private fun request(candidate: String, operation: String, cold: Boolean = false, audio: ByteArray = byteArrayOf()): JSONObject {
-    guard()
-    val config = checkNotNull(RuntimeLocationUploadConfigStore.load(c)) { "Configure your server first" }
-    val authStart = SystemClock.elapsedRealtime()
-    val token = checkNotNull(RuntimeGoogleIdTokenProvider.getFreshIdToken(c, config.googleWebClientId))
-    guard()
-    val authMs = SystemClock.elapsedRealtime() - authStart
-    val selection = checkNotNull(SpeechEvalServerCandidate.parse(candidate))
-    val http = URL("${config.apiBaseUrl.trimEnd('/')}/mobile/glasses/speech-eval/$operation?${selection.query}&cold=$cold").openConnection() as HttpURLConnection
-    connection = http
-    try {
-      http.requestMethod = "POST"; http.instanceFollowRedirects = false
-      http.connectTimeout = 20_000; http.readTimeout = if (operation == "prepare") 620_000 else 200_000
-      http.setRequestProperty("Authorization", "Bearer $token")
-      http.setRequestProperty("Content-Type", "audio/wav")
-      http.doOutput = true; http.setFixedLengthStreamingMode(audio.size)
-      val uploadStart = SystemClock.elapsedRealtime()
-      http.outputStream.use { it.write(audio) }
-      val uploadMs = SystemClock.elapsedRealtime() - uploadStart
-      val responseStart = SystemClock.elapsedRealtime()
-      if (http.responseCode !in 200..299) {
-        val body = runCatching { JSONObject(String(readResponse(http.errorStream), Charsets.UTF_8)) }.getOrNull()
-        throw SpeechEvalFailures.http(http.responseCode, body)
-      }
-      val bytes = readResponse(http.inputStream)
-      val response = JSONObject(String(bytes, Charsets.UTF_8))
-      selection.validateResponse(response)
-      guard(); return response.put("authMs", authMs)
-        .put("requestWriteMs", uploadMs).put("responseWaitMs", SystemClock.elapsedRealtime() - responseStart)
-    } finally { http.disconnect(); connection = null }
-  }
-  private fun readResponse(stream: java.io.InputStream?): ByteArray = checkNotNull(stream).use { input ->
-    val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(4096)
-    while (out.size() <= 32768) { val count = input.read(buffer); if (count < 0) break; out.write(buffer, 0, count) }
-    require(out.size() <= 32768)
-    out.toByteArray()
   }
   private fun notification(): ForegroundInfo {
     val manager = c.getSystemService(NotificationManager::class.java)

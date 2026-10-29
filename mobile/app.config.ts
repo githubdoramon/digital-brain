@@ -164,7 +164,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     iosConfig: {
       microphoneUsageDescription:
-        'Digital Brain uses your microphone so you can dictate chat messages with on-device Whisper transcription.',
+        'Digital Brain uses your microphone so you can dictate messages. Recordings are sent to your server for transcription.',
       notificationUsageDescription:
         'Digital Brain can show recording controls while capturing audio.',
     },

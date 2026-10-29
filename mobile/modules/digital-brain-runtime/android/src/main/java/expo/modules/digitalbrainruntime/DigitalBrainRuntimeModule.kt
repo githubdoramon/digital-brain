@@ -35,14 +35,6 @@ class DigitalBrainRuntimeModule : Module() {
       }
     }
     OnActivityEntersBackground { DigitalBrainRuntime.activityVisible = false }
-    AsyncFunction("getGlassesSpeechTestModels") { ->
-      SpeechEvalStore.models(context()).map { model -> mapOf(
-        "id" to "local:${model.getString("id")}", "label" to model.getString("id"),
-        "location" to "local", "bytes" to model.getLong("bytes")) } +
-        listOf("base.en", "small.en", "medium.en", "large-v3", "large-v3-turbo").map {
-          mapOf("id" to "server:$it", "label" to it, "location" to "server", "bytes" to 0)
-        } + listOf(mapOf("id" to "remote:large-v3-turbo", "label" to "large-v3-turbo", "location" to "remote", "bytes" to 0))
-    }
     AsyncFunction("getGlassesSpeechTestStatus") Coroutine { -> withContext(Dispatchers.IO) { SpeechEvalStore.snapshot(context()) } }
     AsyncFunction("startGlassesSpeechTest") Coroutine { folder: String, models: List<String>, repeats: Int ->
       check(appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to start a comparison" }
@@ -60,6 +52,7 @@ class DigitalBrainRuntimeModule : Module() {
       check(!SpeechEvalWorker.busy(c)) { "The test is still stopping. Try again shortly." }
       val owner = SpeechEvalStore.owner(c)
       val value = checkNotNull(SpeechEvalStore.read(c, owner)) { "Choose a dataset first" }
+      check(SpeechEvalServerCandidate.supportsRun(value)) { "Start a new recognition test" }
       check(value.runState() != SpeechEvalRunState.COMPLETE) { "This comparison is complete" }
       value.put("state", SpeechEvalRunState.READY.key).put("message", "Waiting to continue")
       SpeechEvalStore.save(c, owner, value); SpeechEvalWorker.enqueue(c, owner)
@@ -77,11 +70,11 @@ class DigitalBrainRuntimeModule : Module() {
       val c = context(); SpeechEvalStore.export(c, SpeechEvalStore.owner(c), baseUri)
     } }
     AsyncFunction("getGlassesListeningStatus") Coroutine { -> withContext(Dispatchers.Main) { GlassesListening.snapshot(context()) } }
-    AsyncFunction("setGlassesListening") Coroutine { enabled: Boolean, modelUri: String?, baseUri: String? ->
+    AsyncFunction("setGlassesListening") Coroutine { enabled: Boolean, baseUri: String? ->
       if (enabled) withContext(Dispatchers.IO) { GlassesWakeStore.validateBase(context(), checkNotNull(baseUri)) }
       withContext(Dispatchers.Main) {
       check(!enabled || appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to start listening" }
-      GlassesListening.configure(context(), enabled, modelUri, baseUri)
+      GlassesListening.configure(context(), enabled, baseUri)
     } }
     AsyncFunction("setGlassesListeningMinimumVolume") Coroutine { value: Int -> withContext(Dispatchers.Main) { GlassesListening.setMinimumVolume(context(), value) } }
     AsyncFunction("retryGlassesWakeSaves") Coroutine { baseUri: String -> withContext(Dispatchers.IO) { GlassesListening.retrySaves(context(), baseUri) } }

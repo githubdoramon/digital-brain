@@ -3175,6 +3175,7 @@ export function ChatConversationScreen({
         )}
 
         <ChatComposer
+          key={threadId || initialThreadId || 'new-chat'}
           attachments={composerMediaAttachments}
           onRemoveAttachment={removeComposerMediaAttachment}
           commandsEnabled={commandsEnabled}

@@ -25,7 +25,7 @@ import {
 } from '@/components/CollapsingTopBar';
 import { glassesNative } from '@/glasses/runtime';
 import { useAppNotice } from '@/hooks/useAppNotice';
-import type { SpeechTestModel, SpeechTestStatus } from '@/modules/digital-brain-runtime/src';
+import type { SpeechTestStatus } from '@/modules/digital-brain-runtime/src';
 import {
   chooseDigitalBrainStorageBaseUri,
   getDigitalBrainStorageBaseUri,
@@ -64,7 +64,7 @@ function failureMessage(reason: string) {
     case 'server_busy':
       return 'Your server is busy. Try again when it is available.';
     case 'insufficient_memory':
-      return 'There was not enough memory. Try a smaller model.';
+      return 'There was not enough memory. Close other apps and try again.';
     case 'cache_storage_full':
       return 'There was not enough storage. Free some space and try again.';
     default:
@@ -77,15 +77,12 @@ export default function SpeechComparisonScreen() {
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
   const { showError, showSuccess } = useAppNotice();
-  const [models, setModels] = React.useState<SpeechTestModel[]>([]);
-  const [selected, setSelected] = React.useState([
-    'local:base.en',
-    'local:small.en',
-    'local:small.en-q5_1',
-  ]);
   const [folder, setFolder] = React.useState<string | null>(null);
   const [repeats, setRepeats] = React.useState(2);
-  const [serverThreads, setServerThreads] = React.useState<number[]>([2]);
+  const [models, setModels] = React.useState([
+    'remote:large-v3-turbo',
+    'remote:parakeet-tdt-0.6b-v3',
+  ]);
   const [status, setStatus] = React.useState<SpeechTestStatus | null>(null);
   const [busy, setBusy] = React.useState(false);
   const busyRef = React.useRef(false);
@@ -104,13 +101,6 @@ export default function SpeechComparisonScreen() {
   }, []);
   useFocusEffect(
     React.useCallback(() => {
-      let mounted = true;
-      void Promise.resolve()
-        .then(() => glassesNative().getGlassesSpeechTestModels())
-        .then((value) => {
-          if (mounted) setModels(value);
-        })
-        .catch(() => undefined);
       const update = () => {
         if (AppState.currentState === 'active') void refresh();
       };
@@ -118,7 +108,6 @@ export default function SpeechComparisonScreen() {
       const timer = setInterval(update, 1500);
       const listener = AppState.addEventListener('change', update);
       return () => {
-        mounted = false;
         clearInterval(timer);
         listener.remove();
       };
@@ -183,80 +172,31 @@ export default function SpeechComparisonScreen() {
           />
           {folder && <Text style={styles.body}>Dataset folder selected</Text>}
         </Card>
-        {(['local', 'server', 'remote'] as const).map((location) => (
-          <Card key={location} style={styles.card}>
-            <Text style={styles.title}>
-              {location === 'local'
-                ? 'On this phone'
-                : location === 'remote'
-                  ? 'On your GPU server'
-                  : 'On your CPU server'}
-            </Text>
-            {location === 'server' && (
-              <Text style={styles.body}>
-                Selected recordings are sent to your Digital Brain server for comparison.
-              </Text>
-            )}
-            {location === 'remote' && (
-              <Text style={styles.body}>
-                Selected recordings are sent through Digital Brain to your GPU server for
-                comparison.
-              </Text>
-            )}
-            {models
-              .filter((model) => model.location === location)
-              .map((model) => (
-                <View key={model.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.label}>{model.label}</Text>
-                    {model.bytes > 0 && (
-                      <Text style={styles.body}>{Math.round(model.bytes / 1024 / 1024)} MB</Text>
-                    )}
-                  </View>
-                  <Switch
-                    accessibilityLabel={`Include ${model.label} ${location === 'local' ? 'on phone' : 'on server'}`}
-                    disabled={busy || active}
-                    value={selected.includes(model.id)}
-                    onValueChange={(on) =>
-                      setSelected((current) =>
-                        on ? [...current, model.id] : current.filter((id) => id !== model.id),
-                      )
-                    }
-                  />
-                </View>
-              ))}
-          </Card>
-        ))}
-        {selected.some((id) => id.startsWith('server:')) && (
-          <Card style={styles.card}>
-            <Text style={styles.title}>Server CPU threads</Text>
-            <Text style={styles.body}>
-              Each selected server model runs separately at every selected thread count.
-            </Text>
-            {[2, 4, 8].map((count) => (
-              <View key={count} style={styles.row}>
-                <Text style={styles.label}>{count} threads</Text>
-                <Switch
-                  accessibilityLabel={`Compare ${count} server CPU threads`}
-                  disabled={busy || active}
-                  value={serverThreads.includes(count)}
-                  onValueChange={(enabled) =>
-                    setServerThreads((current) =>
-                      enabled
-                        ? [...current, count].sort((a, b) => a - b)
-                        : current.filter((value) => value !== count),
-                    )
-                  }
-                />
-              </View>
-            ))}
-          </Card>
-        )}
+        <Card style={styles.card}>
+          <Text style={styles.title}>Models</Text>
+          {[
+            ['remote:large-v3-turbo', 'Whisper Turbo'],
+            ['remote:parakeet-tdt-0.6b-v3', 'Parakeet v3'],
+          ].map(([id, label]) => (
+            <View key={id} style={styles.row}>
+              <Text style={styles.label}>{label}</Text>
+              <Switch
+                accessibilityLabel={`Include ${label}`}
+                disabled={busy || active}
+                value={models.includes(id)}
+                onValueChange={(enabled) =>
+                  setModels((current) =>
+                    enabled ? [...current, id] : current.filter((model) => model !== id),
+                  )
+                }
+              />
+            </View>
+          ))}
+        </Card>
         <Card style={styles.card}>
           <Text style={styles.title}>Repetitions</Text>
           <Text style={styles.body}>
-            Each recording runs once from a fresh model, followed by repeated runs with the model
-            ready.
+            Each recording is sent to your server for recognition, followed by repeated requests.
           </Text>
           <View style={styles.row}>
             <Button
@@ -265,7 +205,7 @@ export default function SpeechComparisonScreen() {
               disabled={busy || active || repeats <= 1}
               onPress={() => setRepeats((n) => n - 1)}
             />
-            <Text style={styles.label}>{repeats} warm runs</Text>
+            <Text style={styles.label}>{repeats} repeat runs</Text>
             <Button
               label="More"
               variant="secondary"
@@ -275,13 +215,7 @@ export default function SpeechComparisonScreen() {
           </View>
           <Button
             label="Start new comparison"
-            disabled={
-              busy ||
-              active ||
-              !folder ||
-              selected.length === 0 ||
-              (selected.some((id) => id.startsWith('server:')) && serverThreads.length === 0)
-            }
+            disabled={busy || active || !folder || models.length === 0}
             loading={busy}
             onPress={() =>
               void run(async () => {
@@ -289,12 +223,7 @@ export default function SpeechComparisonScreen() {
                   await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
                   );
-                const candidates = selected.flatMap((id) =>
-                  id.startsWith('server:')
-                    ? serverThreads.map((threads) => `${id}@threads=${threads}`)
-                    : [id],
-                );
-                await glassesNative().startGlassesSpeechTest(folder!, candidates, repeats);
+                await glassesNative().startGlassesSpeechTest(folder!, models, repeats);
               })
             }
           />

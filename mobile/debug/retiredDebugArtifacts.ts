@@ -8,6 +8,7 @@ export async function clearRetiredDebugArtifacts(): Promise<void> {
     ? [
         `${baseDirectory}event-photo-debug-log.txt`,
         `${baseDirectory}voice-debug/`,
+        `${baseDirectory}whisper/`,
         `${baseDirectory}digital-brain-location-debug-log.jsonl`,
         `${baseDirectory}digital-brain-location-debug-log.jsonl.previous`,
       ]

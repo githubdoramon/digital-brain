@@ -27,6 +27,8 @@ internal object GlassesWakeStore {
   @Synchronized fun deleteLegacy(c: Context) {
     val legacy = File(c.filesDir, "glasses-transcripts")
     check(!legacy.exists() || legacy.deleteRecursively()) { "Could not remove old transcript logs" }
+    val retiredModels = File(c.filesDir, "speech-eval-models")
+    check(!retiredModels.exists() || retiredModels.deleteRecursively()) { "Could not remove old speech test models" }
   }
   fun validateBase(c: Context, uri: String) {
     val base = checkNotNull(DocumentFile.fromTreeUri(c, Uri.parse(uri)))
@@ -67,6 +69,14 @@ internal object GlassesWakeStore {
       .put("transcriptionDurationMs", duration).put("transcriptionStatus", if (success) "complete" else "failed")
     atomic(File(dir, "capture.json"), meta.toString().toByteArray())
   }
+  @Synchronized fun transcriptionFailure(dir: File, error: Exception) {
+    val file = File(dir, "capture.json")
+    val meta = JSONObject(file.readText())
+    val failure = JSONObject()
+    SpeechEvalFailures.annotate(failure, error)
+    meta.put("transcriptionFailure", failure)
+    atomic(file, meta.toString().toByteArray())
+  }
   @Synchronized fun timing(dir: File, timing: Map<String, Any?>) {
     val file = File(dir, "capture.json")
     val meta = JSONObject(file.readText()).put("timing", JSONObject(timing))
@@ -76,7 +86,9 @@ internal object GlassesWakeStore {
                             outcome: GlassesCommandOutcome?) {
     val meta = JSONObject(File(dir, "capture.json").readText())
       .put("wakeVerified", decision.wakeVerified).put("wakeMatch", decision.wakeMatch.name.lowercase())
-      .put("commandMatch", decision.match.name.lowercase())
+      .put("commandMatch", decision.match.name.lowercase()).put("matcherVersion", GlassesCommandMatcher.VERSION)
+      .put("matchingStage", decision.stage).put("matchingCost", decision.cost ?: JSONObject.NULL)
+      .put("matchingMargin", decision.margin ?: JSONObject.NULL).put("rejectionReason", decision.reason ?: JSONObject.NULL)
       .put("command", decision.command?.key ?: JSONObject.NULL)
       .put("commandRequestId", requestId)
       .put("commandStatus", outcome?.key ?: "dispatching")

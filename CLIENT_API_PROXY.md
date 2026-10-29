@@ -18,6 +18,8 @@ Examples:
 - `/mobile/intelligence/*` (projects, source evidence and analysis status)
 - `/mobile/commands/event/confirm`
 - `/mobile/glasses/commands` (fixed gate intents; no transcript or LLM)
+- `/mobile/speech/transcribe` (foreground chat dictation; shared GPU speech provider)
+- `/mobile/glasses/transcribe` (completed opted-in wake audio; GPU-only recognition)
 - `/mobile/glasses/speech-eval/*` (explicit replay experiments; authenticated bounded audio)
 
 If a new backend endpoint is added for mobile usage, make sure the client calls it

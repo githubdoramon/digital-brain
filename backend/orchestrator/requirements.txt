@@ -30,8 +30,6 @@ opentelemetry-exporter-otlp-proto-http==1.45.1
 
 
 
-# CPU-only glasses replay experiments; loaded only in the isolated inference process.
-faster-whisper==1.2.1
 
 
 

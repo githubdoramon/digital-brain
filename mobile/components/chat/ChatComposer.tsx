@@ -1,5 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as FileSystem from 'expo-file-system/legacy';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -16,10 +17,12 @@ import { useAudioRecorder, type RecordingConfig } from '@siteed/audio-studio';
 import { ComposerMediaTray } from '@/components/chat/ComposerMediaTray';
 import type { ComposerMediaAttachment } from '@/chat/mediaAttachments';
 import {
-  getLocalTranscriptionErrorMessage,
-  type LocalTranscriptionStatus,
+  getTranscriptionErrorMessage,
+  MAX_DICTATION_SECONDS,
+  TranscriptionError,
+  type TranscriptionStatus,
   transcribeAudioFile,
-} from '@/chat/localTranscription';
+} from '@/chat/remoteTranscription';
 
 import {
   ensureVoiceRecordingReady,
@@ -109,6 +112,12 @@ export function ChatComposer({
   attachDisabled,
 }: Props) {
   const recorder = useAudioRecorder();
+  const mountedRef = useRef(true);
+  const allowedRef = useRef(allowed);
+  allowedRef.current = allowed;
+  const transcriptionControllerRef = useRef<AbortController | null>(null);
+  const voiceGenerationRef = useRef(0);
+
   const [voicePhase, setVoicePhase] = useState<VoiceComposerPhase>('idle');
   const [voiceStatusText, setVoiceStatusText] = useState('');
   const [lockQueued, setLockQueued] = useState(false);
@@ -146,13 +155,18 @@ export function ChatComposer({
     setIsSendButtonPressed(false);
     setDragLiftDistance(0);
     setVoiceStatusText('');
+    voicePhaseRef.current = 'idle';
     setVoicePhase('idle');
   }, []);
 
   const stopRecorderSilently = useCallback(async () => {
     try {
       if (recorder.isRecording || recorder.isPaused) {
-        await recorder.stopRecording();
+        const stopped = await recorder.stopRecording();
+        if (stopped?.fileUri)
+          await FileSystem.deleteAsync(stopped.fileUri, { idempotent: true }).catch(
+            () => undefined,
+          );
       }
     } catch {
       /* Best effort; keep the existing recovery path. */
@@ -160,35 +174,20 @@ export function ChatComposer({
   }, [recorder]);
 
   const cancelVoiceCapture = useCallback(async () => {
+    voiceGenerationRef.current++;
+    transcriptionControllerRef.current?.abort();
+    transcriptionControllerRef.current = null;
     await stopRecorderSilently();
     await restoreVoiceAudioMode().catch(() => undefined);
-    resetVoiceUi();
+    if (mountedRef.current) resetVoiceUi();
   }, [resetVoiceUi, stopRecorderSilently]);
 
   useEffect(() => {
     cancelVoiceCaptureRef.current = cancelVoiceCapture;
   }, [cancelVoiceCapture]);
 
-  const applyTranscriptionStatus = useCallback((status: LocalTranscriptionStatus) => {
-    if (status.stage === 'downloading_model') {
-      const progressText =
-        typeof status.progress === 'number' ? ` ${Math.round(status.progress)}%` : '';
-      setVoiceStatusText(`Downloading voice model${progressText}`);
-      return;
-    }
-
-    if (status.stage === 'loading_model') {
-      setVoiceStatusText('Loading voice model');
-      return;
-    }
-
-    if (status.stage === 'transcribing') {
-      const progressText =
-        typeof status.progress === 'number' && Number.isFinite(status.progress)
-          ? ` ${Math.round(status.progress)}%`
-          : '';
-      setVoiceStatusText(`Transcribing${progressText}`);
-    }
+  const applyTranscriptionStatus = useCallback((status: TranscriptionStatus) => {
+    setVoiceStatusText(status.stage === 'uploading' ? 'Sending your recording' : 'Transcribing');
   }, []);
 
   const finalizeVoiceCapture = useCallback(async () => {
@@ -196,44 +195,95 @@ export function ChatComposer({
       return;
     }
 
+    voicePhaseRef.current = 'transcribing';
     setVoicePhase('transcribing');
     setVoiceStatusText('Finishing recording');
+    const generation = ++voiceGenerationRef.current;
+    const controller = new AbortController();
+    transcriptionControllerRef.current = controller;
+    let recordingUri: string | null = null;
 
     try {
       await restoreVoiceAudioMode().catch(() => undefined);
       const recording = await recorder.stopRecording();
-      const recordingUri = requireRecordingUri(recording?.fileUri);
+      recordingUri = requireRecordingUri(recording?.fileUri);
+      if (
+        !mountedRef.current ||
+        !allowedRef.current ||
+        generation !== voiceGenerationRef.current ||
+        controller.signal.aborted
+      )
+        return;
 
-      const transcription = await transcribeAudioFile(recordingUri, applyTranscriptionStatus);
+      const transcription = await transcribeAudioFile(
+        recordingUri,
+        (status) => {
+          if (mountedRef.current && generation === voiceGenerationRef.current)
+            applyTranscriptionStatus(status);
+        },
+        controller.signal,
+      );
 
+      if (
+        !mountedRef.current ||
+        !allowedRef.current ||
+        generation !== voiceGenerationRef.current ||
+        controller.signal.aborted
+      )
+        return;
       onChangeInput(mergeTranscriptIntoDraft(latestInputRef.current, transcription.text));
       requestAnimationFrame(() => {
-        inputRef.current?.focus();
+        if (
+          mountedRef.current &&
+          generation === voiceGenerationRef.current &&
+          !controller.signal.aborted
+        )
+          inputRef.current?.focus();
       });
       resetVoiceUi();
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
-
+      if (!mountedRef.current || !allowedRef.current || generation !== voiceGenerationRef.current)
+        return;
       resetVoiceUi();
+      if (error instanceof TranscriptionError && error.code === 'cancelled') return;
       onErrorMessage(
         error instanceof VoiceRecordingError
           ? getVoiceRecordingErrorMessage(error)
-          : getLocalTranscriptionErrorMessage(error),
+          : getTranscriptionErrorMessage(error),
       );
+    } finally {
+      if (transcriptionControllerRef.current === controller)
+        transcriptionControllerRef.current = null;
+      if (recordingUri)
+        await FileSystem.deleteAsync(recordingUri, { idempotent: true }).catch(() => undefined);
     }
   }, [applyTranscriptionStatus, inputRef, onChangeInput, onErrorMessage, recorder, resetVoiceUi]);
 
   const beginVoiceCapture = useCallback(async () => {
+    const generation = ++voiceGenerationRef.current;
     longPressHandledRef.current = true;
     shouldFinalizeAfterStartRef.current = false;
     setLockQueued(false);
     setVoiceStatusText('Starting microphone');
+    voicePhaseRef.current = 'starting';
     setVoicePhase('starting');
 
     try {
       await ensureVoiceRecordingReady();
+      if (!mountedRef.current || !allowedRef.current || generation !== voiceGenerationRef.current)
+        return;
       await recorder.startRecording(VOICE_RECORDING_OPTIONS);
+      if (!mountedRef.current || !allowedRef.current || generation !== voiceGenerationRef.current) {
+        const stopped = await recorder.stopRecording();
+        if (stopped?.fileUri)
+          await FileSystem.deleteAsync(stopped.fileUri, { idempotent: true }).catch(
+            () => undefined,
+          );
+        return;
+      }
       setVoiceStatusText('Recording');
+      voicePhaseRef.current = 'recording';
       setVoicePhase('recording');
 
       if (shouldFinalizeAfterStartRef.current) {
@@ -242,7 +292,7 @@ export function ChatComposer({
       }
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
-
+      if (!mountedRef.current || generation !== voiceGenerationRef.current) return;
       resetVoiceUi();
       onErrorMessage(getVoiceRecordingErrorMessage(error));
     }
@@ -257,10 +307,11 @@ export function ChatComposer({
       if (
         voicePhaseRef.current === 'starting' ||
         voicePhaseRef.current === 'recording' ||
-        voicePhaseRef.current === 'locked'
+        voicePhaseRef.current === 'locked' ||
+        voicePhaseRef.current === 'transcribing'
       ) {
         void cancelVoiceCapture();
-        onErrorMessage('Voice recording stopped when the app left the foreground.');
+        onErrorMessage('Dictation stopped when the app left the foreground.');
       }
     });
 
@@ -269,11 +320,26 @@ export function ChatComposer({
     };
   }, [cancelVoiceCapture, onErrorMessage]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       void cancelVoiceCaptureRef.current();
     };
   }, []);
+
+  useEffect(() => {
+    if (!allowed && voicePhaseRef.current !== 'idle') void cancelVoiceCaptureRef.current();
+  }, [allowed]);
+
+  useEffect(() => {
+    if (
+      recorder.durationMs >= (MAX_DICTATION_SECONDS - 1) * 1000 &&
+      (voicePhaseRef.current === 'recording' || voicePhaseRef.current === 'locked')
+    ) {
+      void finalizeVoiceCapture();
+    }
+  }, [recorder.durationMs, finalizeVoiceCapture]);
 
   const handleSendPress = useCallback(() => {
     if (longPressHandledRef.current) {
@@ -349,7 +415,7 @@ export function ChatComposer({
       return 'Release to keep recording hands-free.';
     }
 
-    return 'Release to transcribe, or swipe up to lock.';
+    return 'Release to transcribe with your server, or swipe up to lock.';
   }, [lockQueued, voicePhase]);
 
   const voicePanelSubtitle = useMemo(() => {
@@ -357,7 +423,7 @@ export function ChatComposer({
       return 'Tap stop to transcribe, or cancel to discard.';
     }
 
-    return voiceStatusText || 'Processing your speech on this device.';
+    return voiceStatusText || 'Transcribing your recording.';
   }, [voicePhase, voiceStatusText]);
 
   const buttonIconName = useMemo(() => {
@@ -425,11 +491,13 @@ export function ChatComposer({
               <Text style={styles.voicePanelSubtitle}>{voicePanelSubtitle}</Text>
             </View>
           </View>
-          {voicePhase === 'locked' ? (
+          {voicePhase === 'locked' || voicePhase === 'transcribing' ? (
             <View style={styles.voicePanelActions}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Discard recording"
+                accessibilityLabel={
+                  voicePhase === 'transcribing' ? 'Cancel transcription' : 'Discard recording'
+                }
                 onPress={() => {
                   void cancelVoiceCapture();
                 }}
@@ -440,19 +508,21 @@ export function ChatComposer({
               >
                 <Ionicons name="close" size={16} color={theme.colors.ink} />
               </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Stop recording and transcribe"
-                onPress={() => {
-                  void finalizeVoiceCapture();
-                }}
-                style={({ pressed }) => [
-                  styles.voiceActionButtonPrimary,
-                  pressed && styles.voiceActionButtonPressed,
-                ]}
-              >
-                <Ionicons name="stop" size={16} color="#fff" />
-              </Pressable>
+              {voicePhase === 'locked' ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop recording and transcribe"
+                  onPress={() => {
+                    void finalizeVoiceCapture();
+                  }}
+                  style={({ pressed }) => [
+                    styles.voiceActionButtonPrimary,
+                    pressed && styles.voiceActionButtonPressed,
+                  ]}
+                >
+                  <Ionicons name="stop" size={16} color="#fff" />
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -501,7 +571,10 @@ export function ChatComposer({
               backgroundColor: '#eee',
             },
           ]}
-          onChangeText={onChangeInput}
+          onChangeText={(value) => {
+            latestInputRef.current = value;
+            onChangeInput(value);
+          }}
           placeholder={placeholder}
           placeholderTextColor="#A7AFB7"
           multiline

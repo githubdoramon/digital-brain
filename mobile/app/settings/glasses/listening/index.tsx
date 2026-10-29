@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { prepareEnglishWhisperModel } from '@/chat/localTranscription';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import {
@@ -40,7 +39,6 @@ export default function GlassesListeningScreen() {
   const [status, setStatus] = React.useState<GlassesListeningStatus | null>(null);
   const [busy, setBusy] = React.useState(false);
   const busyRef = React.useRef(false);
-  const [setup, setSetup] = React.useState<string | null>(null);
   const refresh = React.useCallback(async () => {
     try {
       setStatus(await glassesNative().getGlassesListeningStatus());
@@ -74,11 +72,9 @@ export default function GlassesListeningScreen() {
     } finally {
       busyRef.current = false;
       setBusy(false);
-      setSetup(null);
     }
   }
   async function enable(value: boolean) {
-    let model: string | null = null;
     let base: string | null = null;
     if (value) {
       base = (await getDigitalBrainStorageBaseUri()) ?? (await chooseDigitalBrainStorageBaseUri());
@@ -92,16 +88,8 @@ export default function GlassesListeningScreen() {
         throw new Error('Allow microphone and Phone access to listen and pause for calls.');
       if (Platform.OS === 'android' && Number(Platform.Version) >= 33)
         await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-      setSetup('Preparing speech recognition…');
-      model = await prepareEnglishWhisperModel((progress) =>
-        setSetup(
-          progress.stage === 'downloading_model'
-            ? `Preparing speech recognition… ${Math.round(progress.progress ?? 0)}%`
-            : 'Preparing speech recognition…',
-        ),
-      );
     }
-    await glassesNative().setGlassesListening(value, model, base);
+    await glassesNative().setGlassesListening(value, base);
   }
   return (
     <View style={styles.screen}>
@@ -133,7 +121,10 @@ export default function GlassesListeningScreen() {
           <View style={styles.row}>
             <View style={styles.flex}>
               <Text style={styles.title}>Listen through glasses</Text>
-              <Text style={styles.body}>Say “Hey Brain,” then your command.</Text>
+              <Text style={styles.body}>
+                Say “Hey Brain,” then your command. Command audio is sent to your server for
+                recognition.
+              </Text>
             </View>
             <Switch
               accessibilityLabel="Listen through glasses"
@@ -144,7 +135,7 @@ export default function GlassesListeningScreen() {
             />
           </View>
           <Text accessibilityLiveRegion="polite" style={styles.status}>
-            {setup ?? status?.status ?? 'Loading…'}
+            {status?.status ?? 'Loading…'}
           </Text>
           <Text style={styles.body}>
             Listening continues when your phone is locked. Calls and recordings pause it.
@@ -234,7 +225,7 @@ export default function GlassesListeningScreen() {
                 label="Retry saving"
                 variant="secondary"
                 disabled={busy}
-                loading={busy && !setup}
+                loading={busy}
                 onPress={() =>
                   void run(async () => {
                     const base =

@@ -57,6 +57,7 @@ from routes.places import create_places_router
 from routes.proposals import create_proposals_router
 from routes.proposed_events import create_proposed_events_router
 from routes.rules import create_rules_router
+from routes.speech import create_speech_router
 from routes.system import create_system_router
 from routes.todos import create_todos_router
 from routes.user import create_user_router
@@ -231,6 +232,7 @@ api.include_router(create_documents_router())
 api.include_router(create_glasses_media_router())
 api.include_router(create_glasses_commands_router())
 api.include_router(create_glasses_speech_eval_router())
+api.include_router(create_speech_router())
 api.include_router(create_generated_pdfs_router())
 api.include_router(create_evals_router())
 api.include_router(create_system_router())

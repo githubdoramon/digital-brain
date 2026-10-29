@@ -8,14 +8,14 @@ import kotlin.math.ceil
 internal object SpeechEvalPolicy {
   const val VERSION = 1
   const val MAX_WAV_BYTES = 30 * 32000 + 4096
-  fun pcm(wav: ByteArray): FloatArray {
+  fun validateAudio(wav: ByteArray) {
     require(wav.size in 44..MAX_WAV_BYTES) { "invalid_audio" }
     fun ascii(offset: Int, size: Int) = String(wav, offset, size, Charsets.US_ASCII)
     require(ascii(0, 4) == "RIFF" && ascii(8, 4) == "WAVE") { "invalid_audio" }
     val view = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
     var offset = 12
     var format = false
-    var audio: ByteArray? = null
+    var audioSize: Int? = null
     while (offset + 8 <= wav.size) {
       val size = view.getInt(offset + 4)
       require(size >= 0 && size <= wav.size - offset - 8) { "invalid_audio" }
@@ -26,16 +26,14 @@ internal object SpeechEvalPolicy {
             view.getShort(offset + 22).toInt() == 16) { "invalid_audio" }
           format = true
         }
-        "data" -> { require(audio == null) { "invalid_audio" }; audio = wav.copyOfRange(offset + 8, offset + 8 + size) }
+        "data" -> { require(audioSize == null) { "invalid_audio" }; audioSize = size }
       }
       offset += 8 + size + size % 2
     }
-    val bytes = requireNotNull(audio) { "invalid_audio" }
-    require(format && bytes.isNotEmpty() && bytes.size % 2 == 0 && bytes.size <= 30 * 32000) { "invalid_audio" }
-    return FloatArray(bytes.size / 2) { i ->
-      (((bytes[i * 2].toInt() and 255) or (bytes[i * 2 + 1].toInt() shl 8)).toShort().toFloat()) / 32768f
-    }
+    val size = requireNotNull(audioSize) { "invalid_audio" }
+    require(format && size > 0 && size % 2 == 0 && size <= 30 * 32000) { "invalid_audio" }
   }
+
   fun words(text: String) = text.lowercase(java.util.Locale.ROOT).replace(Regex("[^a-z0-9']+"), " ").trim()
     .split(Regex("\\s+")).filter { it.isNotBlank() }
   fun errors(reference: String, actual: String): Pair<Int, Int> {

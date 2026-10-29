@@ -133,7 +133,6 @@ export type GlassesAlertApp = { packageName: string; label: string };
 type DigitalBrainRuntimeModule = NativeModule & {
   setGlassesSignedIn(signedIn: boolean): Promise<void>;
   setGlassesEnabled(enabled: boolean): Promise<void>;
-  getGlassesSpeechTestModels(): Promise<SpeechTestModel[]>;
   getGlassesSpeechTestStatus(): Promise<SpeechTestStatus>;
   startGlassesSpeechTest(folder: string, models: string[], repeats: number): Promise<void>;
   resumeGlassesSpeechTest(): Promise<void>;
@@ -141,11 +140,7 @@ type DigitalBrainRuntimeModule = NativeModule & {
   exportGlassesSpeechTest(baseUri: string): Promise<void>;
   getGlassesListeningStatus(): Promise<GlassesListeningStatus>;
   setGlassesListeningMinimumVolume(value: number): Promise<void>;
-  setGlassesListening(
-    enabled: boolean,
-    modelUri: string | null,
-    baseUri: string | null,
-  ): Promise<void>;
+  setGlassesListening(enabled: boolean, baseUri: string | null): Promise<void>;
   retryGlassesWakeSaves(baseUri: string): Promise<void>;
   testGlassesLight(
     color: 'red' | 'green' | 'blue' | 'orange' | 'white',
@@ -235,12 +230,6 @@ export type GlassesListeningStatus = {
   lastTranscriptAtMs: number | null;
 };
 
-export type SpeechTestModel = {
-  id: string;
-  label: string;
-  location: 'local' | 'server' | 'remote';
-  bytes: number;
-};
 export type SpeechTestSummary = {
   candidate: string;
   mode: 'cold' | 'warm' | 'first' | 'repeat';

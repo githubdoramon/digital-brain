@@ -1,4 +1,4 @@
-"""Explicit replay-only uploads. Never pass reference labels into inference."""
+"""Authenticated GPU speech for user-enabled glasses captures and labeled replays."""
 
 from typing import Literal
 
@@ -6,82 +6,78 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-import glasses_speech_eval as speech
-import glasses_speech_eval_remote as remote
+import speech_transcription as speech
 from auth import get_current_user
 
 
 def create_glasses_speech_eval_router() -> APIRouter:
-    router = APIRouter(
-        prefix="/mobile/glasses/speech-eval", dependencies=[Depends(get_current_user)]
-    )
+    router = APIRouter(prefix="/mobile/glasses", dependencies=[Depends(get_current_user)])
 
-    @router.get("/models")
+    @router.get("/speech-eval/models")
     def models():
         return {
             "enabled": speech.enabled(),
-            "cpuThreadOptions": [2, 4, 8],
-            "cpuEnvironment": speech.cpu_environment(),
-            "remoteModels": [
-                {"id": remote.MODEL, "provider": "remote", "coldStartControlled": False}
-            ],
             "models": [
-                {"id": key, "repository": repo, "revision": revision, "computeType": "int8"}
-                for key, (repo, revision) in speech.MODELS.items()
+                {
+                    "id": model,
+                    "provider": "remote",
+                    "upstreamModel": upstream,
+                    "coldStartControlled": False,
+                }
+                for model, upstream in speech.REPLAY_MODELS.items()
             ],
         }
 
-    async def invoke(
-        key: str,
-        operation: str,
-        cold: bool = False,
-        audio: bytes = b"",
-        threads: int | None = None,
-        provider: str = "cpu",
-    ):
+    async def invoke(model, operation, audio=b"", threads=None, replay=True):
         try:
-            if provider == "remote":
-                return await run_in_threadpool(remote.request, key, operation, audio, threads)
             return await run_in_threadpool(
-                speech.engine.request, key, operation, cold, audio, threads
+                speech.request, model, operation, audio, threads, replay=replay
             )
         except speech.EvalFailure as exc:
             reason = str(exc)
-            status = 429 if reason == "server_busy" else 504 if reason == "server_timeout" else 503
+            status = (
+                429
+                if reason == "server_busy"
+                else 504
+                if reason in {"server_timeout", "network_timeout"}
+                else 503
+            )
             if reason in {"invalid_audio", "invalid_model", "invalid_cpu_threads"}:
                 status = 400
-            response = {"detail": reason}
-            if exc.stage != speech.EvalStage.REQUEST.value:
-                response["failureStage"] = exc.stage
+            if reason == "audio_too_large":
+                status = 413
+            response = {"detail": reason, "failureStage": exc.stage}
             if exc.http_status is not None:
                 response["upstreamHttpStatus"] = exc.http_status
-
             return JSONResponse(response, status_code=status)
 
-    @router.post("/prepare")
-    async def prepare(
-        model: str = Query(max_length=32),
-        threads: int | None = Query(default=None, ge=1, le=8),
-        provider: Literal["cpu", "remote"] = "cpu",
-    ):
-        return await invoke(model, "prepare", threads=threads, provider=provider)
-
-    @router.post("/transcribe")
-    async def transcribe(
-        request: Request,
-        model: str = Query(max_length=32),
-        cold: bool = False,
-        threads: int | None = Query(default=None, ge=1, le=8),
-        provider: Literal["cpu", "remote"] = "cpu",
-    ):
-        if not speech.enabled():
-            speech.log_rejected(model, "transcribe", "evaluation_disabled")
-            raise HTTPException(503, "evaluation_disabled")
+    async def audio_bytes(request):
         audio = bytearray()
         async for chunk in request.stream():
             if len(audio) + len(chunk) > speech.MAX_AUDIO_BYTES:
                 raise HTTPException(413, "audio_too_large")
             audio.extend(chunk)
-        return await invoke(model, "transcribe", cold, bytes(audio), threads, provider)
+        return bytes(audio)
+
+    @router.post("/transcribe")
+    async def transcribe(request: Request):
+        return await invoke(speech.MODEL, "transcribe", await audio_bytes(request), replay=False)
+
+    @router.post("/speech-eval/prepare")
+    async def prepare(
+        model: str = Query(default=speech.MODEL, max_length=32),
+        provider: Literal["remote"] = "remote",
+        threads: int | None = None,
+    ):
+        return await invoke(model, "prepare", threads=threads)
+
+    @router.post("/speech-eval/transcribe")
+    async def replay(
+        request: Request,
+        model: str = Query(default=speech.MODEL, max_length=32),
+        provider: Literal["remote"] = "remote",
+        threads: int | None = None,
+    ):
+        return await invoke(model, "transcribe", await audio_bytes(request), threads=threads)
 
     return router

@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -13,7 +12,6 @@ import android.os.SystemClock
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import com.mentra.bluetoothsdk.MicPcmEvent
-import com.rnwhisper.GlassesWhisperBridge
 import java.io.File
 import java.util.concurrent.ArrayBlockingQueue
 
@@ -22,15 +20,14 @@ object GlassesListening {
   private val main = Handler(Looper.getMainLooper())
   private var context: Context? = null
   private var account: String? = null
-  private var model: String? = null
-  private var enabled = false
-  private var armed = false
-  private var active = false
+  @Volatile private var enabled = false
+  @Volatile private var armed = false
+  @Volatile private var active = false
   private var transitioning = false
   private val callSources = linkedMapOf<String, Long>()
   private var blockedUntil = 0L
   private var wakeSession: GlassesWakeSession? = null
-  private var sessionGeneration = 0L
+  @Volatile private var sessionGeneration = 0L
   private var lastWake = -6000L
   private var baseUri: String? = null
   private var capturing = false
@@ -54,11 +51,11 @@ object GlassesListening {
   private var vadEnabled: Boolean? = null
   private var speechGeneration = 0
   private var captureWake: PowerManager.WakeLock? = null
-  private data class Job(val account: String, val model: String, val baseUri: String, val capture: WakeCapture, val generation: Long, val queuedAt: Long = SystemClock.elapsedRealtime())
+  private data class Job(val account: String, val baseUri: String, val capture: WakeCapture, val generation: Long, val queuedAt: Long = SystemClock.elapsedRealtime())
   private val queue = ArrayBlockingQueue<Job>(4)
   private var worker: Thread? = null
   @Volatile private var keepWorker = false
-  @Volatile private var engine: GlassesWhisperBridge? = null
+  @Volatile private var engine: GlassesTranscriptionClient? = null
   @Volatile private var busy = false
   // Retain the foreground microphone type while waiting for reconnect/call end within this session.
   internal val commandFeedbackGeneration get() = if (active && armed && enabled) sessionGeneration else null
@@ -89,13 +86,17 @@ object GlassesListening {
     if (prefs != null && prefs.getInt("wakeModeVersion", 0) != 2) {
       check(prefs.edit().putBoolean("enabled", false).putInt("wakeModeVersion", 2).remove("count").remove("lastTranscriptAtMs").commit())
     }
+    // Previous consent was for local-only transcription. Require enabling the upload path once.
+    if (prefs != null && prefs.getInt("transcriptionModeVersion", 0) != 1) {
+      check(prefs.edit().putBoolean("enabled", false).putInt("transcriptionModeVersion", 1).remove("model").commit())
+    }
     enabled = prefs?.getBoolean("enabled", false) == true
     baseUri = prefs?.getString("wakeBaseUri", null)
     if (!legacyCleanupStarted) {
       legacyCleanupStarted = true
       Thread({ runCatching { GlassesWakeStore.deleteLegacy(c) }.onFailure { main.post { failures++; legacyCleanupStarted = false } } }, "glasses-log-cleanup").start()
     }
-    model = prefs?.getString("model", null)
+    prefs?.edit()?.remove("model")?.apply()
     minimumVolume = (prefs?.getInt("minimumVolume", 0) ?: 0).coerceIn(0, 100)
     audioLevel = 0; levelAt = 0L
     status = if (enabled) "Open the app to resume listening" else "Listening is off"
@@ -115,21 +116,15 @@ object GlassesListening {
     "failures" to failures, "completed" to completed, "speechDurationMs" to processedMs,
     "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0)
 
-  fun configure(c: Context, value: Boolean, modelUri: String?, storageUri: String? = null) {
+  fun configure(c: Context, value: Boolean, storageUri: String? = null) {
     load(c); val who = checkNotNull(account) { "Sign in first" }
     if (value) {
       check(RuntimeGlasses.enabled(c) && RuntimeGlasses.signedIn(c)) { "Enable your glasses first" }
       check(permitted(c)) { "Allow microphone and Phone access to listen" }
-      val path = checkNotNull(Uri.parse(modelUri).path)
-      val file = File(path).canonicalFile
-      check(file.name == "ggml-base.en.bin" && file.length() > 100_000_000 &&
-        (file.path.startsWith(c.filesDir.canonicalPath + "/") || file.path.startsWith(c.cacheDir.canonicalPath + "/"))) {
-        "Prepare the speech model before listening"
-      }
-      model = file.path
+      check(RuntimeLocationUploadConfigStore.load(c) != null) { "Configure your server first" }
       baseUri = checkNotNull(storageUri) { "Choose your Digital Brain folder first" }
     }
-    check(GlassesWakeStore.prefs(c, who).edit().putBoolean("enabled", value).putString("model", model).putString("wakeBaseUri", baseUri).commit())
+    check(GlassesWakeStore.prefs(c, who).edit().putBoolean("enabled", value).remove("model").putString("wakeBaseUri", baseUri).commit())
     enabled = value
     if (value) resumeForeground(c) else { shutdown(discard = false); status = "Listening is off" }
     DigitalBrainRuntime.service?.refresh(forceNotification = true)
@@ -145,10 +140,7 @@ object GlassesListening {
     .all { ContextCompat.checkSelfPermission(c, it) == PackageManager.PERMISSION_GRANTED }
   fun resumeForeground(c: Context) {
     load(c)
-    if (comparisonPaused || !enabled || !RuntimeGlasses.enabled(c) || !RuntimeGlasses.signedIn(c) || !permitted(c) || model == null || baseUri == null) return
-    if (model?.let { File(it).length() > 100_000_000 } != true) {
-      shutdown(discard = true); status = "Turn listening on again to prepare speech recognition"; return
-    }
+    if (comparisonPaused || !enabled || !RuntimeGlasses.enabled(c) || !RuntimeGlasses.signedIn(c) || !permitted(c) || baseUri == null) return
     armed = true
     DigitalBrainRuntime.service?.refresh(forceNotification = true)
     reconcile(c)
@@ -272,7 +264,7 @@ object GlassesListening {
   }
   fun pause() {
     if (!active) return
-    active = false; sessionGeneration++; capturing = false; wakeSession?.close(); wakeSession = null
+    active = false; sessionGeneration++; engine?.cancel(); capturing = false; wakeSession?.close(); wakeSession = null
     val wasTransitioning = transitioning; transitioning = true
     runCatching { RuntimeGlasses.setListeningMic(false) }
     transitioning = wasTransitioning
@@ -281,12 +273,12 @@ object GlassesListening {
   fun runtimeStopped() { shutdown(discard = true); status = if (enabled) "Open the app to resume listening" else "Listening is off" }
   private fun shutdown(discard: Boolean) {
     armed = false; pause(); keepWorker = false; callSources.clear(); main.removeCallbacks(watchdog)
-    if (discard) { queue.clear(); engine?.abort() }
+    if (discard) { queue.clear(); engine?.cancel() }
   }
   private fun submit(capture: WakeCapture) {
-    val who = account ?: return; val path = model ?: return
+    val who = account ?: return
     val folder = baseUri ?: return
-    if (!queue.offer(Job(who, path, folder, capture, sessionGeneration))) { dropped++; status = "Captures are arriving faster than they can be saved"; return }
+    if (!queue.offer(Job(who, folder, capture, sessionGeneration))) { dropped++; status = "Captures are arriving faster than they can be saved"; return }
     keepWorker = true
     // The main-looper completion owns restart, even if the old thread has just exited.
     if (worker != null) return
@@ -294,39 +286,35 @@ object GlassesListening {
   }
   private fun consume() {
     val c = context ?: return
-    val whisper = GlassesWhisperBridge(); engine = whisper
-    var loadedModel: String? = null
-    var lastUsed = SystemClock.elapsedRealtime()
+    val currentJob = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+    val client = GlassesTranscriptionClient(c) {
+      val job = checkNotNull(currentJob.get())
+      check(active && armed && enabled && sessionGeneration == job.generation &&
+        RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account) { "interrupted" }
+    }
+    engine = client
     try {
       while (keepWorker || queue.isNotEmpty()) {
         val job = queue.poll(1, java.util.concurrent.TimeUnit.SECONDS)
-        if (job == null) {
-          if (SystemClock.elapsedRealtime() - lastUsed > 60_000) { whisper.release(); loadedModel = null }
-          continue
-        }
+        if (job == null) continue
+        currentJob.set(job)
         busy = true
         val wake = c.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:Transcription")
         wake.acquire(90_000L)
-        val timeout = Runnable { whisper.abort() }
+        val timeout = Runnable { if (currentJob.get() === job) client.cancel() }
         var staged: File? = null
         val timing = SpeechTiming({ SystemClock.elapsedRealtime() },
           job.capture.completedElapsedMs.takeIf { it > 0 } ?: job.queuedAt)
         timing.values["queueWaitMs"] = SystemClock.elapsedRealtime() - job.queuedAt
-        timing.values["modelFile"] = File(job.model).name
-        timing.values["modelAlreadyLoaded"] = loadedModel == job.model
         try {
           if (!RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != job.account) continue
           staged = timing.measure("stagingMs") { GlassesWakeStore.stage(c, job.account, job.capture, job.baseUri) }
-          timing.measure("modelLoadMs") {
-            if (loadedModel != job.model) { whisper.release(); whisper.load(job.model); loadedModel = job.model }
-          }
-          val samples = FloatArray(job.capture.chunk.pcm.size / 2) { i ->
-            val v = (job.capture.chunk.pcm[i * 2].toInt() and 255) or (job.capture.chunk.pcm[i * 2 + 1].toInt() shl 8)
-            v.toShort().toFloat() / 32768f
-          }
-          main.postDelayed(timeout, 60_000)
+          main.postDelayed(timeout, 30_000)
           val started = SystemClock.elapsedRealtime()
-          val text = timing.measure("inferenceMs") { whisper.transcribe(samples) }
+          val response = timing.measure("transcriptionMs") { client.request(GlassesWakeStore.wav(job.capture.chunk.pcm)) }
+          val text = response.getString("text")
+          for (field in listOf("authMs", "requestWriteMs", "responseWaitMs", "roundTripMs", "upstreamRequestMs", "serverTotalMs", "upstreamModel"))
+            timing.values[field] = response.opt(field)
           val duration = SystemClock.elapsedRealtime() - started
           main.removeCallbacks(timeout)
           if (RuntimeGlasses.signedIn(c) && GlassesWakeStore.account(c) == job.account) {
@@ -351,17 +339,20 @@ object GlassesListening {
               GlassesWakeStore.publish(c, job.account, staged)
             else staged.deleteRecursively()
           } else staged.deleteRecursively()
-          main.post { completed++; processedMs += samples.size * 1000L / 16000; inferenceMs += duration }
-        } catch (_: Exception) {
+          main.post { completed++; processedMs += job.capture.chunk.pcm.size * 1000L / 32000; inferenceMs += duration }
+        } catch (error: Exception) {
           staged?.let { if (!RuntimeGlasses.signedIn(c) || GlassesWakeStore.account(c) != job.account) it.deleteRecursively()
             else runCatching {
               val metadata = org.json.JSONObject(File(it, "capture.json").readText())
-              if (metadata.getString("transcriptionStatus") == "pending") GlassesWakeStore.transcript(it, "", timing.duration("inferenceMs"), false)
+              if (metadata.getString("transcriptionStatus") == "pending") {
+                GlassesWakeStore.transcript(it, "", timing.duration("transcriptionMs"), false)
+                GlassesWakeStore.transcriptionFailure(it, error)
+              }
             }
           }
           main.post { failures++; status = "Could not finish a capture. Retry saving below." }
         } catch (_: LinkageError) {
-          staged?.let { runCatching { GlassesWakeStore.transcript(it, "", timing.duration("inferenceMs"), false) } }
+          staged?.let { runCatching { GlassesWakeStore.transcript(it, "", timing.duration("transcriptionMs"), false) } }
           main.post { failures++; status = "Could not transcribe a capture. Retry saving below." }
         }
         finally {
@@ -369,12 +360,12 @@ object GlassesListening {
             if (it.exists()) runCatching { GlassesWakeStore.timing(it, timing.snapshot()) }
             GlassesWakeStore.endProcessing(it)
           }
-          lastUsed = SystemClock.elapsedRealtime(); busy = false; main.removeCallbacks(timeout)
+          currentJob.set(null); busy = false; main.removeCallbacks(timeout)
           if (wake.isHeld) wake.release()
         }
       }
     } finally {
-      whisper.release(); engine = null
+      client.cancel(); engine = null
       main.post { worker = null; if (queue.isNotEmpty()) { keepWorker = true; worker = Thread({ consume() }, "glasses-transcription").apply { start() } } }
     }
   }

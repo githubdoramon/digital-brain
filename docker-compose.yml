@@ -40,7 +40,6 @@ services:
       - ./backend/orchestrator/storage/documents:/app/storage/documents
       - ./backend/orchestrator/storage/glasses-media:/app/storage/glasses-media
       - ./backend/orchestrator/storage/glasses-commands:/app/storage/glasses-commands
-      - ./backend/orchestrator/storage/whisper-models:/app/storage/whisper-models
       - ./backend/orchestrator/storage/whatsapp:/app/storage/whatsapp
       - ./backend/orchestrator/storage/telegram:/app/storage/telegram
 

@@ -11,15 +11,12 @@ class SpeechEvalPolicyTest {
     putShort(1); putShort(1); putInt(rate); putInt(rate * 2); putShort(2); putShort(16)
     put("data".toByteArray()); putInt(4); putShort(32767); putShort(-32768)
   }.array()
-  @Test fun validatesWaveAndSignedSamples() {
-    val samples = SpeechEvalPolicy.pcm(wav())
-    assertEquals(2, samples.size)
-    assertEquals(32767f / 32768, samples[0], 0.0001f)
-    assertEquals(-1f, samples[1], 0.0001f)
+  @Test fun validatesPcmWaveWithoutAllocatingInferenceSamples() {
+    SpeechEvalPolicy.validateAudio(wav())
   }
   @Test fun rejectsTruncatedWrongRateAndMalformedSizes() {
     listOf(wav(8000), wav().copyOf(47), wav().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putInt(40, Int.MAX_VALUE) }).forEach {
-      try { SpeechEvalPolicy.pcm(it); fail("accepted invalid WAV") } catch (_: IllegalArgumentException) { }
+      try { SpeechEvalPolicy.validateAudio(it); fail("accepted invalid WAV") } catch (_: IllegalArgumentException) { }
     }
   }
   @Test fun wordErrorsCountEdits() {

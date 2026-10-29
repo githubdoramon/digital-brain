@@ -1,3 +1,4 @@
+/* global __dirname, setTimeout, clearTimeout, AbortController */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -199,6 +200,7 @@ async function retiredDebugCleanup() {
       'file:///test/digital-brain-location-debug-log.jsonl.previous',
       'file:///test/event-photo-debug-log.txt',
       'file:///test/voice-debug/',
+      'file:///test/whisper/',
     ].sort(),
     'Upgrade deletes only retired private debug artifacts',
   );

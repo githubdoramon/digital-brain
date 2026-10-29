@@ -4,16 +4,20 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-import glasses_speech_eval_remote as remote
-from glasses_speech_eval import EvalFailure
+import speech_transcription as remote
+from speech_transcription import EvalFailure
 from tests.test_glasses_speech_eval import client, wav
 
 
 @pytest.fixture(autouse=True)
 def settings(monkeypatch):
+    monkeypatch.delenv("SPEECH_BASE_URL", raising=False)
+    monkeypatch.delenv("SPEECH_API_KEY", raising=False)
     monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "true")
     monkeypatch.setenv("LLM_BASE_URL", "https://provider.invalid/v1")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.delenv("GLASSES_TRANSCRIPTION_BASE_URL", raising=False)
+    monkeypatch.delenv("GLASSES_TRANSCRIPTION_API_KEY", raising=False)
     monkeypatch.delenv("GLASSES_SPEECH_EVAL_REMOTE_BASE_URL", raising=False)
     monkeypatch.delenv("GLASSES_SPEECH_EVAL_REMOTE_API_KEY", raising=False)
 
@@ -143,11 +147,13 @@ def test_prepare_never_claims_to_load_remote_model(monkeypatch):
 def test_busy_remote_slot_does_not_queue_parallel_inference(monkeypatch):
     post = stub_post(monkeypatch)
     assert remote._slot.acquire(blocking=False)
+    assert remote._slot.acquire(blocking=False)
     try:
         with pytest.raises(EvalFailure, match="server_busy"):
             remote.request(remote.MODEL, "transcribe", wav())
         post.assert_not_called()
     finally:
+        remote._slot.release()
         remote._slot.release()
 
 
@@ -177,3 +183,105 @@ def test_bad_configuration_is_safe(monkeypatch, base):
     monkeypatch.setenv("LLM_BASE_URL", base)
     with pytest.raises(EvalFailure, match="remote_not_configured"):
         remote.configuration()
+
+
+def test_live_transcription_works_when_replay_is_off(monkeypatch):
+    post = stub_post(monkeypatch)
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "false")
+    assert remote.transcribe(wav())["provider"] == "remote"
+    post.assert_called_once()
+
+
+def test_new_speech_settings_override_both_legacy_and_llm(monkeypatch):
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_REMOTE_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_REMOTE_API_KEY", "legacy-key")
+    monkeypatch.setenv("GLASSES_TRANSCRIPTION_BASE_URL", "https://speech.example/v1")
+    monkeypatch.setenv("GLASSES_TRANSCRIPTION_API_KEY", "speech-key")
+    assert remote.configuration() == (
+        "https://speech.example/v1/audio/transcriptions",
+        "speech-key",
+    )
+
+
+def test_live_invalid_audio_never_reaches_provider(monkeypatch):
+    post = stub_post(monkeypatch)
+    response = client().post("/mobile/glasses/transcribe", content=b"invalid wav")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_audio"
+    post.assert_not_called()
+
+
+def test_live_provider_failure_retains_only_safe_status(monkeypatch):
+    stub_post(monkeypatch, status=400, body={"error": "private provider text"})
+    response = client().post("/mobile/glasses/transcribe", content=wav())
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "remote_http_error",
+        "failureStage": "inference",
+        "upstreamHttpStatus": 400,
+    }
+
+
+def test_dictation_uses_same_provider_and_allows_longer_recordings(monkeypatch):
+    post = stub_post(monkeypatch)
+    data = wav(seconds=31)
+    url = "/mobile/speech/transcribe"
+    assert client(False).post(url, content=data).status_code == 401
+    post.assert_not_called()
+    monkeypatch.setenv("GLASSES_SPEECH_EVAL_ENABLED", "false")
+    response = client().post(url, content=data)
+    assert response.status_code == 200
+    assert post.call_args.kwargs["files"]["file"][1] == data
+    assert post.call_args.kwargs["data"]["model"] == "whisper-large-v3-turbo"
+    assert post.call_args.kwargs["timeout"] == (5, 60)
+    assert client().post("/mobile/glasses/transcribe", content=data).status_code == 413
+    assert post.call_count == 1
+
+
+def test_dictation_upload_bounds_and_format_before_provider(monkeypatch):
+    post = stub_post(monkeypatch)
+    monkeypatch.setattr(remote, "MAX_DICTATION_BYTES", 128)
+    assert client().post("/mobile/speech/transcribe", content=b"x" * 129).status_code == 413
+    assert client().post("/mobile/speech/transcribe", content=b"bad wav").status_code == 400
+    post.assert_not_called()
+    with pytest.raises(EvalFailure, match="audio_too_large"):
+        remote.validate_audio(wav(seconds=601), 600)
+
+
+def test_shared_speech_settings_take_precedence(monkeypatch):
+    monkeypatch.setenv("SPEECH_BASE_URL", "https://dictation.example/v1")
+    monkeypatch.setenv("SPEECH_API_KEY", "shared-key")
+    monkeypatch.setenv("GLASSES_TRANSCRIPTION_API_KEY", "legacy-key")
+    assert remote.configuration() == (
+        "https://dictation.example/v1/audio/transcriptions",
+        "shared-key",
+    )
+
+
+def test_parakeet_replay_uses_its_model_without_whisper_parameters(monkeypatch):
+    post = stub_post(monkeypatch)
+    result = remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav())
+    assert post.call_args.kwargs["data"] == {
+        "model": "parakeet-tdt-0.6b-v3",
+        "response_format": "json",
+    }
+    assert result["model"] == result["upstreamModel"] == "parakeet-tdt-0.6b-v3"
+    assert result["decoding"] == {"language": "provider_default"}
+    assert result["coldStartControlled"] is False
+    assert (
+        client()
+        .post("/mobile/glasses/speech-eval/prepare?provider=remote&model=parakeet-tdt-0.6b-v3")
+        .json()["model"]
+        == "parakeet-tdt-0.6b-v3"
+    )
+
+
+def test_parakeet_does_not_change_production_transcription(monkeypatch):
+    post = stub_post(monkeypatch)
+    remote.transcribe(wav())
+    assert post.call_args.kwargs["data"]["model"] == "whisper-large-v3-turbo"
+    remote.transcribe(wav(), dictation=True)
+    assert post.call_args.kwargs["data"]["model"] == "whisper-large-v3-turbo"
+    with pytest.raises(EvalFailure, match="invalid_model"):
+        remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav(), replay=False)
+    assert post.call_count == 2

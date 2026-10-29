@@ -11,22 +11,13 @@ internal class SpeechEvalFailure(
 ) : Exception(reason)
 
 internal object SpeechEvalFailures {
-  val reasons = setOf("preparation_failed", "insufficient_memory", "warm_context_lost", "inference_timeout",
+  val reasons = setOf("interrupted", "retired_candidate", "preparation_failed", "insufficient_memory", "warm_context_lost", "inference_timeout",
     "audio_changed", "server_busy", "server_timeout", "evaluation_disabled", "inference_failed",
     "engine_unavailable", "invalid_audio", "invalid_model", "engine_import_failed", "model_download_http_error",
     "engine_http_error", "cache_storage_full", "cache_access_denied", "network_timeout",
     "model_download_unavailable", "model_download_failed", "model_load_failed", "network_unavailable",
     "tls_failed", "server_update_required", "cpu_configuration_mismatch", "invalid_cpu_threads", "auth_rejected", "endpoint_unavailable", "upstream_unavailable", "remote_not_configured", "remote_http_error", "remote_invalid_response", "evaluation_failed")
   private val stages = setOf("request", "initialization", "model_download", "model_load", "inference")
-  fun validateCpuResponse(response: JSONObject, requestedThreads: Int?) {
-    if (requestedThreads == null) return
-    if (!response.has("cpuThreads") || response.isNull("cpuThreads")) {
-      throw SpeechEvalFailure("server_update_required", "request", 200)
-    }
-    if (response.optInt("cpuThreads", -1) != requestedThreads) {
-      throw SpeechEvalFailure("cpu_configuration_mismatch", "request", 200)
-    }
-  }
   fun counts(rows: List<JSONObject>): Map<String, Int> = rows
     .filter { it.optString("status") == "failed" }
     .map { it.optString("error").takeIf { reason -> reason in reasons } ?: "evaluation_failed" }

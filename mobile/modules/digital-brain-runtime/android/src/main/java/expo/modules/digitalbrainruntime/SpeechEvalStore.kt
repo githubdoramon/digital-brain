@@ -45,8 +45,6 @@ internal object SpeechEvalStore {
     write(run(c, owner), metadata.toString().toByteArray())
   }
   fun array(a: JSONArray) = (0 until a.length()).map(a::getJSONObject)
-  fun models(c: Context): List<JSONObject> = array(JSONArray(c.assets.open("speech-eval/models.json").bufferedReader().use { it.readText() }))
-  fun local(c: Context, id: String) = models(c).first { "local:" + it.getString("id") == id }
   fun bytes(c: Context, file: DocumentFile, max: Int): ByteArray {
     check(file.isFile) { "Choose a dataset folder containing dataset.json and its recordings" }
     return checkNotNull(c.contentResolver.openInputStream(file.uri)).use {
@@ -60,10 +58,8 @@ internal object SpeechEvalStore {
     return out.toByteArray()
   }
   fun import(c: Context, owner: String, folderUri: String, candidates: List<String>, repeats: Int): JSONObject {
-    require(candidates.isNotEmpty() && candidates.size <= 48 && candidates.distinct().size == candidates.size)
+    require(SpeechEvalServerCandidate.supportsCandidates(candidates)) { "Choose a supported GPU model" }
     require(repeats in 1..5)
-    val allowed = models(c).map { "local:" + it.getString("id") } + listOf("server:base.en", "server:small.en", "server:medium.en", "server:large-v3", "server:large-v3-turbo")
-    require(candidates.all { it in allowed || SpeechEvalServerCandidate.parse(it) != null }) { "Choose a supported model" }
     val folder = checkNotNull(DocumentFile.fromTreeUri(c, Uri.parse(folderUri)))
     val manifest = bytes(c, checkNotNull(folder.findFile("dataset.json")) { "Place dataset.json in the selected folder" }, 1024 * 1024)
     val dataset = JSONObject(String(manifest, Charsets.UTF_8))
@@ -88,7 +84,7 @@ internal object SpeechEvalStore {
         require(command == null || GlassesCommand.entries.any { it.key == command })
         require(sample.get("expectedTranscript") is String && sample.getString("expectedTranscript").length <= 2048)
         val audio = bytes(c, checkNotNull(folder.findFile(name)) { "A recording is missing from the dataset folder" }, SpeechEvalPolicy.MAX_WAV_BYTES)
-        SpeechEvalPolicy.pcm(audio)
+        SpeechEvalPolicy.validateAudio(audio)
         write(File(dir, "$i.wav"), audio)
         prepared.put(JSONObject(sample.toString()).put("sha256", hash(audio)).put("index", i))
       }
@@ -98,7 +94,7 @@ internal object SpeechEvalStore {
         .put("device", android.os.Build.MODEL).put("androidVersion", android.os.Build.VERSION.SDK_INT)
         .put("appVersion", c.packageManager.getPackageInfo(c.packageName, 0).versionName)
         .put("appUpdatedAtMs", c.packageManager.getPackageInfo(c.packageName, 0).lastUpdateTime)
-        .put("engineVersion", "whisper.rn-0.5.5").put("createdAtMs", System.currentTimeMillis())
+        .put("engine", "openai-compatible").put("provider", "remote").put("createdAtMs", System.currentTimeMillis())
       val previous = read(c, owner)
       save(c, owner, value)
       previous?.optString("id")?.takeIf { it != id && it.matches(Regex("[a-f0-9-]{36}")) }?.let { File(root(c, owner), it).deleteRecursively() }
@@ -150,7 +146,8 @@ internal object SpeechEvalStore {
     val export = JSONObject(value.toString()).put("summary", JSONArray(summary(value)))
     writeExport("speech-$id.json", "application/json", export.toString(2).toByteArray())
     val rows = array(value.getJSONArray("results"))
-    val columns = listOf("candidate", "sample", "mode", "repeat", "status", "error", "failureStage", "httpStatus", "upstreamHttpStatus", "preparationDurationMs", "correct", "expectedCommand", "command", "totalMs", "modelLoadMs", "inferenceMs", "inferenceCpuMs", "cpuThreads", "roundTripMs", "provider", "model", "coldStartControlled", "upstreamRequestMs", "serverTotalMs", "warmupMs", "wordErrors", "referenceWords", "text")
+    val columns = listOf("candidate", "sample", "mode", "repeat", "matcherVersion", "literalCommand", "literalCorrect", "grammarCommand", "grammarCorrect", "matchingStage", "matchingCost", "matchingMargin", "rejectionReason", "status", "error", "failureStage", "httpStatus", "upstreamHttpStatus", "preparationDurationMs", "correct", "expectedCommand", "command", "totalMs", "matchingMs", "roundTripMs", "authMs", "requestWriteMs", "responseWaitMs", "provider", "model", "upstreamModel", "coldStartControlled", "upstreamRequestMs", "serverTotalMs", "warmupMs", "wordErrors", "referenceWords", "text") +
+      listOf("modelLoadMs", "inferenceMs", "inferenceCpuMs", "cpuThreads").filter { field -> rows.any { it.has(field) } }
     fun cell(value: String): String {
       val safe = if (value.trimStart().firstOrNull() in listOf('=', '+', '-', '@', '\t', '\r')) "'" + value else value
       return "\"" + safe.replace("\"", "\"\"") + "\""
