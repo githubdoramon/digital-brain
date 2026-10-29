@@ -11,13 +11,14 @@ internal enum class GlassesWakeMatch { EXACT, FUZZY, MISSING }
 internal data class GlassesCommandDecision(val match: GlassesCommandMatch, val command: GlassesCommand? = null,
   val wakeMatch: GlassesWakeMatch = if (match == GlassesCommandMatch.MISSING_WAKE) GlassesWakeMatch.MISSING else GlassesWakeMatch.EXACT,
   val stage: String = "rejected", val cost: Double? = null, val margin: Double? = null,
-  val reason: String? = null) {
+  val reason: String? = null, val repairs: List<String> = emptyList()) {
   val wakeVerified: Boolean get() = match != GlassesCommandMatch.MISSING_WAKE
 }
 
 /** Ordered, whole-utterance grammar. Distances are costs, never confidence probabilities. */
 internal object GlassesCommandMatcher {
-  const val VERSION = 3
+  const val VERSION = 4
+  const val PREVIOUS_VERSION = 3
   private const val MAX_COST = 1.0
   private const val MIN_MARGIN = 0.4
   private data class Phrase(val command: GlassesCommand, val words: List<String>, val protected: Set<Int>)
@@ -43,11 +44,15 @@ internal object GlassesCommandMatcher {
   // Only known adjacent target/noun pairs may be fused by ASR. No arbitrary token deletion.
   private val fused = mapOf("cargate" to listOf("car", "gate"), "cardoor" to listOf("car", "door"),
     "frontgate" to listOf("front", "gate"), "frontdoor" to listOf("front", "door"))
-  fun match(text: String): GlassesCommandDecision = decide(text, true, true)
+  // Explicit pronunciation confusions only; never repair protected action/target positions.
+  private val toggleSounds = setOf("tuggle", "tugle", "duggle")
+  private data class Candidate(val command: GlassesCommand, val cost: Double, val repairs: List<String>)
+  fun match(text: String): GlassesCommandDecision = decide(text, true, true, true)
+  fun previous(text: String): GlassesCommandDecision = decide(text, true, true)
   fun grammar(text: String): GlassesCommandDecision = decide(text, true, false)
   fun literal(text: String): GlassesCommandDecision = decide(text, false, false)
 
-  private fun decide(text: String, boundaries: Boolean, phonetic: Boolean): GlassesCommandDecision {
+  private fun decide(text: String, boundaries: Boolean, phonetic: Boolean, commandRepairs: Boolean = false): GlassesCommandDecision {
     if (text.length > 512) return GlassesCommandDecision(GlassesCommandMatch.MISSING_WAKE, reason = "input_too_long")
     val words = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFKD)
       .replace(Regex("\\p{M}+"), "").replace('’', '\'')
@@ -62,33 +67,48 @@ internal object GlassesCommandMatcher {
     if (body.lastOrNull() == "please") body.removeAt(body.lastIndex)
     val canonical = body.filter { it !in articles }
     if (canonical.isEmpty()) return GlassesCommandDecision(GlassesCommandMatch.UNKNOWN, wakeMatch = wake, reason = "missing_command")
-    val repairs = if (boundaries) canonical.count { it in fused } else 0
+    val repairs = if (boundaries) canonical.count { it in fused || (commandRepairs && it == "cartgate") } else 0
     if (repairs > 1) return GlassesCommandDecision(GlassesCommandMatch.UNKNOWN, wakeMatch = wake, reason = "too_many_repairs")
-    val tokens = if (boundaries) canonical.flatMap { fused[it] ?: listOf(it) } else canonical
+    val boundaryRepairs = if (boundaries) canonical.mapNotNull {
+      when {
+        it in fused -> "$it->${fused.getValue(it).joinToString(" ")}"
+        commandRepairs && it == "cartgate" -> "cartgate->car gate"
+        else -> null
+      }
+    } else emptyList()
+    val tokens = if (boundaries) canonical.flatMap {
+      if (commandRepairs && it == "cartgate") listOf("car", "gate") else fused[it] ?: listOf(it)
+    } else canonical
     val ranked = phrases.mapNotNull { phrase ->
       if (tokens.size != phrase.words.size) return@mapNotNull null
-      var cost = repairs * 0.2
+      var cost = if (commandRepairs && "cartgate" in canonical) 0.6 else repairs * 0.2
+      val edits = boundaryRepairs.toMutableList()
       for (i in tokens.indices) {
         val actual = tokens[i]; val expected = phrase.words[i]
-        cost += when {
+        val tokenCost = when {
           actual == expected -> 0.0
+          commandRepairs && phrase.command == GlassesCommand.TAKE_PICTURE &&
+            tokens == listOf("take", "pick") && expected == "pic" -> 0.6
           i in phrase.protected || actual.length < 4 || expected.length < 4 -> 100.0
+          commandRepairs && expected == "toggle" && actual in toggleSounds -> 0.6
           actual == "gait" && expected == "gate" -> 1.0
           distance(actual, expected) == 1 -> 1.0
           phonetic && transposition(actual, expected) -> 0.8
           phonetic && actual.length >= 4 && expected.length >= 4 && sound(actual) == sound(expected) -> 0.8
           else -> 100.0
         }
+        cost += tokenCost
+        if (tokenCost > 0 && tokenCost < 100) edits.add("$actual->$expected")
       }
-      if (cost >= 100) null else phrase.command to cost
-    }.groupBy({ it.first }, { it.second }).map { (intent, costs) -> intent to costs.min() }.sortedBy { it.second }
+      if (cost >= 100) null else Candidate(phrase.command, cost, edits)
+    }.groupBy { it.command }.map { (_, candidates) -> candidates.minBy { it.cost } }.sortedBy { it.cost }
     val best = ranked.firstOrNull()
       ?: return GlassesCommandDecision(GlassesCommandMatch.UNKNOWN, wakeMatch = wake, reason = "outside_grammar")
-    val margin = ranked.getOrNull(1)?.let { it.second - best.second }
-    if (best.second > MAX_COST) return GlassesCommandDecision(GlassesCommandMatch.UNKNOWN, wakeMatch = wake, cost = best.second, margin = margin, reason = "cost_too_high")
-    if (margin != null && margin < MIN_MARGIN) return GlassesCommandDecision(GlassesCommandMatch.AMBIGUOUS, wakeMatch = wake, cost = best.second, margin = margin, reason = "intent_margin_too_small")
-    return GlassesCommandDecision(if (best.second == 0.0) GlassesCommandMatch.EXACT else GlassesCommandMatch.FUZZY,
-      best.first, wake, if (best.second == 0.0) "exact" else if (repairs > 0) "boundary" else "phonetic_or_spelling", best.second, margin)
+    val margin = ranked.getOrNull(1)?.let { it.cost - best.cost }
+    if (best.cost > MAX_COST) return GlassesCommandDecision(GlassesCommandMatch.UNKNOWN, wakeMatch = wake, cost = best.cost, margin = margin, reason = "cost_too_high", repairs = best.repairs)
+    if (margin != null && margin < MIN_MARGIN) return GlassesCommandDecision(GlassesCommandMatch.AMBIGUOUS, wakeMatch = wake, cost = best.cost, margin = margin, reason = "intent_margin_too_small", repairs = best.repairs)
+    return GlassesCommandDecision(if (best.cost == 0.0) GlassesCommandMatch.EXACT else GlassesCommandMatch.FUZZY,
+      best.command, wake, if (best.cost == 0.0) "exact" else if (repairs > 0) "boundary" else "phonetic_or_spelling", best.cost, margin, repairs = best.repairs)
   }
   // Vowel-preserving spelling-to-sound rules: do not collapse goat/gate, card/car, or front/frond.
   private fun sound(word: String): String = word.replace("ph", "f").replace("ck", "k")

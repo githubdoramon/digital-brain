@@ -11,7 +11,7 @@ class GlassesCommandMatcherTest {
     assertEquals("boundary", car.stage)
     assertEquals(0.2, car.cost!!, 0.0001)
     assertEquals(GlassesCommand.OPEN_FRONT_GATE, GlassesCommandMatcher.match("hey brain open frontdoor").command)
-    for (text in listOf("cargate frontgate", "cargauge", "cartgate", "not cargate", "cargate later", "openfrontdoor"))
+    for (text in listOf("cargate frontgate", "cargauge", "not cargate", "cargate later", "openfrontdoor"))
       assertNull(text, GlassesCommandMatcher.match("hey brain $text").command)
   }
   @Test fun phoneticsAndTranspositionsDoNotChangeProtectedWords() {
@@ -93,4 +93,30 @@ class GlassesCommandMatcherTest {
     assertNull(GlassesCommandMatcher.match("hey brain " + "a".repeat(513)).command)
     assertNull(GlassesCommandMatcher.match("").command)
   }
+  @Test fun versionFourRepairsAreBoundedAndAuditable() {
+    for ((text, expected, repair) in listOf(
+      Triple("take a pick", GlassesCommand.TAKE_PICTURE, "pick->pic"),
+      Triple("cartgate", GlassesCommand.TOGGLE_CAR_GATE, "cartgate->car gate"),
+      Triple("tugle cargate", GlassesCommand.TOGGLE_CAR_GATE, "tugle->toggle"),
+      Triple("tuggle car gate", GlassesCommand.TOGGLE_CAR_GATE, "tuggle->toggle"),
+      Triple("duggle cargate", GlassesCommand.TOGGLE_CAR_GATE, "duggle->toggle")
+    )) {
+      val decision = GlassesCommandMatcher.match("hey brain $text")
+      assertEquals(text, expected, decision.command)
+      assertTrue(text, repair in decision.repairs)
+      if (text != "tuggle car gate") assertNull(text, GlassesCommandMatcher.previous("hey brain $text").command)
+      assertTrue(decision.cost!! <= 1.0)
+    }
+    for (text in listOf("take a pick", "cartgate", "tugle cargate")) {
+      for (prefix in listOf("hey brain don't ", "hey brain should I ", "I said hey brain ", "brain "))
+        assertNull(GlassesCommandMatcher.match(prefix + text).command)
+      assertNull(GlassesCommandMatcher.match("hey brain $text and take photo").command)
+      assertNull(GlassesCommandMatcher.match("hey brain $text later").command)
+    }
+    for (text in listOf("cardgate", "catgate", "cartdoor", "open phone door", "tugle front gate",
+      "tugle card gate", "take a pig", "take pick up", "tugle cartgate", "open cartgate frontdoor"))
+      assertNull(text, GlassesCommandMatcher.match("hey brain $text").command)
+    assertNull(GlassesCommandMatcher.match("Brain open front door").command)
+  }
+
 }

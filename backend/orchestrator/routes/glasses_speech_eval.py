@@ -1,5 +1,6 @@
 """Authenticated GPU speech for user-enabled glasses captures and labeled replays."""
 
+import time
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -8,10 +9,15 @@ from starlette.concurrency import run_in_threadpool
 
 import speech_transcription as speech
 from auth import get_current_user
+from speech_timing import SpeechTimedRoute
 
 
 def create_glasses_speech_eval_router() -> APIRouter:
-    router = APIRouter(prefix="/mobile/glasses", dependencies=[Depends(get_current_user)])
+    router = APIRouter(
+        prefix="/mobile/glasses",
+        dependencies=[Depends(get_current_user)],
+        route_class=SpeechTimedRoute,
+    )
 
     @router.get("/speech-eval/models")
     def models():
@@ -45,7 +51,12 @@ def create_glasses_speech_eval_router() -> APIRouter:
                 if reason in {"server_timeout", "network_timeout"}
                 else 503
             )
-            if reason in {"invalid_audio", "invalid_model", "invalid_cpu_threads", "invalid_vocabulary"}:
+            if reason in {
+                "invalid_audio",
+                "invalid_model",
+                "invalid_cpu_threads",
+                "invalid_vocabulary",
+            }:
                 status = 400
             if reason == "audio_too_large":
                 status = 413
@@ -55,11 +66,13 @@ def create_glasses_speech_eval_router() -> APIRouter:
             return JSONResponse(response, status_code=status)
 
     async def audio_bytes(request):
+        started = time.perf_counter()
         audio = bytearray()
         async for chunk in request.stream():
             if len(audio) + len(chunk) > speech.MAX_AUDIO_BYTES:
                 raise HTTPException(413, "audio_too_large")
             audio.extend(chunk)
+        request.state.speech_upload_ms = (time.perf_counter() - started) * 1000
         return bytes(audio)
 
     @router.post("/transcribe")
@@ -83,6 +96,8 @@ def create_glasses_speech_eval_router() -> APIRouter:
         threads: int | None = None,
         vocabulary: Literal["none", "commands-v1"] = "none",
     ):
-        return await invoke(model, "transcribe", await audio_bytes(request), threads=threads, vocabulary=vocabulary)
+        return await invoke(
+            model, "transcribe", await audio_bytes(request), threads=threads, vocabulary=vocabulary
+        )
 
     return router

@@ -11,6 +11,7 @@ class SpeechEvalServerCandidateTest {
     assertFalse(SpeechEvalServerCandidate.supportsRun(run("local:base.en", GlassesCommandMatcher.VERSION)))
     assertFalse(SpeechEvalServerCandidate.supportsRun(run("server:small.en", GlassesCommandMatcher.VERSION)))
     assertFalse(SpeechEvalServerCandidate.supportsRun(run(SpeechEvalServerCandidate.ID, 2)))
+    assertFalse(SpeechEvalServerCandidate.supportsRun(run(SpeechEvalServerCandidate.ID, GlassesCommandMatcher.PREVIOUS_VERSION)))
   }
   @Test fun onlyTheGpuCandidateCanRun() {
     val remote = SpeechEvalServerCandidate.parse(SpeechEvalServerCandidate.ID)!!

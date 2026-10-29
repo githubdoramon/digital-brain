@@ -3,11 +3,13 @@
 import base64
 import json
 import os
+import time
 
-from fastapi import Header, HTTPException, status
-from google.auth.transport import requests
+from fastapi import Header, HTTPException, Request, status
 from google.oauth2 import id_token
+from starlette.concurrency import run_in_threadpool
 
+from google_token_transport import certificate_request
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -40,7 +42,9 @@ def get_allowed_users() -> set[str]:
     """Get the required set of allowed user emails."""
     allowlist = os.environ.get("ALLOWED_USERS", "").strip()
     if not allowlist:
-        raise ValueError("ALLOWED_USERS must be configured and non-empty unless DEV_BYPASS_AUTH is enabled")
+        raise ValueError(
+            "ALLOWED_USERS must be configured and non-empty unless DEV_BYPASS_AUTH is enabled"
+        )
     users = {email.strip() for email in allowlist.split(",") if email.strip()}
     if not users:
         raise ValueError("ALLOWED_USERS must contain at least one email address")
@@ -96,7 +100,7 @@ def verify_google_token(token: str) -> dict:
     """
     try:
         last_error: ValueError | None = None
-        request = requests.Request()
+        request = certificate_request
         for client_id in GOOGLE_CLIENT_IDS:
             try:
                 # Verify the token
@@ -149,7 +153,7 @@ def check_user_allowed(email: str) -> None:
         )
 
 
-async def get_current_user(authorization: str | None = Header(None)) -> dict:
+async def _current_user(authorization: str | None) -> dict:
     """
     FastAPI dependency to get and validate current user from JWT.
 
@@ -190,7 +194,7 @@ async def get_current_user(authorization: str | None = Header(None)) -> dict:
     token = parts[1]
 
     # Verify token and get user info
-    user_info = verify_google_token(token)
+    user_info = await run_in_threadpool(verify_google_token, token)
 
     # Check if user is allowed
     email = user_info.get("email")
@@ -204,3 +208,15 @@ async def get_current_user(authorization: str | None = Header(None)) -> dict:
     check_user_allowed(email)
 
     return user_info
+
+
+async def get_current_user(
+    authorization: str | None = Header(None),
+    request: Request = None,
+) -> dict:
+    started = time.perf_counter()
+    try:
+        return await _current_user(authorization)
+    finally:
+        if request is not None:
+            request.state.auth_duration_ms = round((time.perf_counter() - started) * 1000, 2)

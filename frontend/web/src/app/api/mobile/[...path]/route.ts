@@ -26,6 +26,7 @@ export async function handler(
     return new Response("Method Not Allowed", { status: 405 });
   }
 
+  const proxyStartedAt = performance.now();
   const { path = [] } = await context.params;
   const targetPath = path.join("/");
   const url = new URL(`${ORCHESTRATOR_BASE}/mobile/${targetPath}`);
@@ -42,7 +43,12 @@ export async function handler(
     : null;
   const startedAt = Date.now();
 
+  const isSpeechRequest = request.method === "POST" && new Set([
+    "glasses/transcribe", "glasses/speech-eval/prepare", "glasses/speech-eval/transcribe", "speech/transcribe",
+  ]).has(targetPath);
+  const authStartedAt = performance.now();
   const authHeader = await buildAuthorizationHeader(request);
+  const proxyAuthMs = performance.now() - authStartedAt;
   if (authHeader) {
     headers.set("authorization", authHeader);
   } else {
@@ -76,7 +82,9 @@ export async function handler(
         method: request.method,
       });
     }
+    const backendStartedAt = performance.now();
     const backendResponse = await fetch(url, init);
+    const proxyBackendMs = performance.now() - backendStartedAt;
     if (isLocationUpdate) {
       console.info("[mobile location proxy] response", {
         debug_request_id: locationRequestId,
@@ -95,6 +103,14 @@ export async function handler(
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("transfer-encoding");
     responseHeaders.delete("content-length");
+    if (isSpeechRequest) {
+      const backendTiming = responseHeaders.get("server-timing");
+      const timing = [backendTiming, `speech_proxy_auth;dur=${proxyAuthMs.toFixed(2)}`,
+        `speech_proxy_backend;dur=${proxyBackendMs.toFixed(2)}`,
+        `speech_proxy;dur=${(performance.now() - proxyStartedAt).toFixed(2)}`].filter(Boolean).join(", ");
+      responseHeaders.set("server-timing", timing);
+      responseHeaders.set("cache-control", "no-store");
+    }
     return new Response(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,

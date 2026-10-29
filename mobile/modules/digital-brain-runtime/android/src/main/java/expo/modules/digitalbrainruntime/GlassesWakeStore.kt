@@ -88,6 +88,7 @@ internal object GlassesWakeStore {
       .put("wakeVerified", decision.wakeVerified).put("wakeMatch", decision.wakeMatch.name.lowercase())
       .put("commandMatch", decision.match.name.lowercase()).put("matcherVersion", GlassesCommandMatcher.VERSION)
       .put("matchingStage", decision.stage).put("matchingCost", decision.cost ?: JSONObject.NULL)
+      .put("matchingRepairs", org.json.JSONArray(decision.repairs))
       .put("matchingMargin", decision.margin ?: JSONObject.NULL).put("rejectionReason", decision.reason ?: JSONObject.NULL)
       .put("command", decision.command?.key ?: JSONObject.NULL)
       .put("commandRequestId", requestId)

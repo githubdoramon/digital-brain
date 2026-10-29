@@ -14,6 +14,7 @@ tryx==1.5.0+digitalbrain.1
 qrcode==8.2
 ollama==0.6.3
 google-auth==2.62.0
+CacheControl==0.14.4
 python-jose[cryptography]==3.5.0
 pdfminer.six==20260107
 pymupdf==2.0

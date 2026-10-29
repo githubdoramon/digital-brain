@@ -1,23 +1,32 @@
 """Authenticated foreground dictation; audio/text never enter chat or command dispatch."""
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 import speech_transcription as speech
 from auth import get_current_user
+from speech_timing import SpeechTimedRoute
 
 
 def create_speech_router() -> APIRouter:
-    router = APIRouter(prefix="/mobile/speech", dependencies=[Depends(get_current_user)])
+    router = APIRouter(
+        prefix="/mobile/speech",
+        dependencies=[Depends(get_current_user)],
+        route_class=SpeechTimedRoute,
+    )
 
     @router.post("/transcribe")
     async def transcribe(request: Request):
+        started = time.perf_counter()
         audio = bytearray()
         async for chunk in request.stream():
             if len(audio) + len(chunk) > speech.MAX_DICTATION_BYTES:
                 raise HTTPException(413, "audio_too_large")
             audio.extend(chunk)
+        request.state.speech_upload_ms = (time.perf_counter() - started) * 1000
         try:
             return await run_in_threadpool(speech.transcribe, bytes(audio), dictation=True)
         except speech.EvalFailure as exc:

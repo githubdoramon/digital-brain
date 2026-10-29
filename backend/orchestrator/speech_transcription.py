@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import wave
@@ -60,6 +61,14 @@ COMMAND_VOCABULARY = (
 )
 logger = logging.getLogger(__name__)
 _slot = threading.BoundedSemaphore(2)
+# One lease per session, bounded by the same two inference slots. No shared mutable
+# session state across concurrent users, and no transcription retries.
+_sessions = queue.LifoQueue(maxsize=2)
+for _ in range(2):
+    _session = requests.Session()
+    _session.mount("https://", requests.adapters.HTTPAdapter(max_retries=0, pool_maxsize=1))
+    _session.mount("http://", requests.adapters.HTTPAdapter(max_retries=0, pool_maxsize=1))
+    _sessions.put(_session)
 
 
 def configuration() -> tuple[str, str]:
@@ -136,7 +145,11 @@ def request(
             "model": selected,
             "upstreamModel": upstream_model,
             "vocabularyProfile": vocabulary,
-            "vocabularyMethod": "none" if vocabulary == "none" else "prompt" if selected == MODEL else "server_alias",
+            "vocabularyMethod": "none"
+            if vocabulary == "none"
+            else "prompt"
+            if selected == MODEL
+            else "server_alias",
             "coldStartControlled": False,
         }
         if operation == "prepare":
@@ -145,6 +158,8 @@ def request(
         validate_audio(audio, max_seconds)
         if not _slot.acquire(timeout=1):
             raise EvalFailure("server_busy")
+        session = _sessions.get_nowait()
+        session.cookies.clear()
         try:
             logger.info(
                 "[speech] started provider=remote model=%s operation=transcribe audio_bytes=%d",
@@ -158,7 +173,7 @@ def request(
                 fields.update(language="en", temperature="0")
                 if vocabulary == "commands-v1":
                     fields["prompt"] = COMMAND_VOCABULARY
-            with requests.post(
+            with session.post(
                 url,
                 headers=headers,
                 files={"file": ("sample.wav", audio, "audio/wav")},
@@ -199,6 +214,8 @@ def request(
                 else {"language": "provider_default"},
             }
         finally:
+            session.cookies.clear()
+            _sessions.put_nowait(session)
             _slot.release()
     except requests.Timeout:
         failure = EvalFailure("network_timeout", "inference")

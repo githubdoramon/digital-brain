@@ -33,7 +33,7 @@ def stub_post(monkeypatch, *, status=200, body=None, chunks=None):
     )
     response.__enter__.return_value = response
     post = MagicMock(return_value=response)
-    monkeypatch.setattr(remote.requests, "post", post)
+    monkeypatch.setattr(remote.requests.Session, "post", post)
     return post
 
 
@@ -119,7 +119,7 @@ def test_invalid_and_oversized_responses(monkeypatch, chunks):
     ],
 )
 def test_network_failure_is_safe(monkeypatch, caplog, error, reason):
-    monkeypatch.setattr(remote.requests, "post", MagicMock(side_effect=error))
+    monkeypatch.setattr(remote.requests.Session, "post", MagicMock(side_effect=error))
     with pytest.raises(EvalFailure, match=reason):
         remote.request(remote.MODEL, "transcribe", wav())
     assert "private" not in caplog.text
@@ -318,7 +318,10 @@ def test_parakeet_boosting_requires_distinct_configured_server_alias(monkeypatch
     monkeypatch.setenv("SPEECH_EVAL_PARAKEET_BOOSTED_MODEL", "parakeet-commands-v1")
     assert client().post(url).json()["upstreamModel"] == "parakeet-commands-v1"
     result = remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav(), vocabulary="commands-v1")
-    assert post.call_args.kwargs["data"] == {"model": "parakeet-commands-v1", "response_format": "json"}
+    assert post.call_args.kwargs["data"] == {
+        "model": "parakeet-commands-v1",
+        "response_format": "json",
+    }
     assert result["vocabularyProfile"] == "commands-v1"
     assert result["vocabularyMethod"] == "server_alias"
     remote.request("parakeet-tdt-0.6b-v3", "transcribe", wav())

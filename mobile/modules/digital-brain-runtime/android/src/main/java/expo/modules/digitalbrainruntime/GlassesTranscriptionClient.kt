@@ -14,7 +14,7 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
     guard()
     val config = RuntimeLocationUploadConfigStore.load(c) ?: throw SpeechEvalFailure("remote_not_configured")
     val started = SystemClock.elapsedRealtime()
-    val token = RuntimeGoogleIdTokenProvider.getFreshIdToken(c, config.googleWebClientId)
+    val token = RuntimeGoogleIdTokenProvider.getSpeechIdToken(c, config.googleWebClientId)
       ?: throw SpeechEvalFailure("auth_rejected")
     guard()
     val authMs = SystemClock.elapsedRealtime() - started
@@ -26,7 +26,7 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
       guard()
       http.requestMethod = "POST"; http.instanceFollowRedirects = false
       http.connectTimeout = 5_000; http.readTimeout = 25_000
-      http.setRequestProperty("Authorization", "Bearer $token")
+      http.setRequestProperty("Authorization", "Bearer ${token.value}")
       http.setRequestProperty("Content-Type", "audio/wav")
       http.doOutput = true; http.setFixedLengthStreamingMode(audio.size)
       val writeAt = SystemClock.elapsedRealtime()
@@ -36,6 +36,7 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
       val responseAt = SystemClock.elapsedRealtime()
       val status = http.responseCode
       if (status !in 200..299) {
+        if (status == 401) RuntimeGoogleIdTokenProvider.rejectSpeechToken(token.value)
         val body = runCatching { JSONObject(String(read(http.errorStream), Charsets.UTF_8)) }.getOrNull()
         throw SpeechEvalFailures.http(status, body)
       }
@@ -44,7 +45,8 @@ internal class GlassesTranscriptionClient(private val c: Context, private val gu
       if (!prepare && (result.opt("text") !is String || result.getString("text").length > 8192))
         throw SpeechEvalFailure("remote_invalid_response")
       guard()
-      return result.put("authMs", authMs).put("requestWriteMs", writeMs)
+      SpeechServerTiming.apply(http.getHeaderField("Server-Timing"), result)
+      return result.put("authMs", authMs).put("authSource", token.source).put("requestWriteMs", writeMs)
         .put("responseWaitMs", SystemClock.elapsedRealtime() - responseAt)
         .put("roundTripMs", SystemClock.elapsedRealtime() - started)
     } finally { http.disconnect(); connection = null }
