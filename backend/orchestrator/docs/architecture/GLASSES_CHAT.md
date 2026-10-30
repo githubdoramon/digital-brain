@@ -65,7 +65,7 @@ never reused. Complete synthesis is requested as WAV; responses must be
 nonempty mono PCM16 at a supported rate, at most four MiB and forty-five seconds.
 Provider redirects, retries, oversized streams and malformed/truncated WAVs are
 rejected. Local CPU synthesis has a sixty-second deadline, including cold initialization
-and phonemization, within the 180-second chat request. The optional HTTP provider
+and phonemization, within the 300-second chat request. The optional HTTP provider
 retains its separate deadline capped at twenty-five seconds. Local deadline
 failures report `tts_timeout`; timed-out inference retains its slot until it
 actually finishes, without retrying or queuing new work. Validated PCM and its rate are returned inline in a
@@ -91,8 +91,8 @@ invalidate the native generation, cancel the HTTP connection, and stop playback.
 The proxy forwards client cancellation. The backend cancels its running chat/TTS
 task on disconnect/deadline. An already dispatched regular chat tool effect
 cannot be undone by transport cancellation; requests are never automatically
-retried. Native requests have a 200-second watchdog and job wake locks are
-bounded to 300 seconds including transcription and playback.
+retried. Native requests have a 320-second watchdog and job wake locks are
+bounded to 420 seconds including transcription and playback.
 
 Before chat/tool execution the backend fsyncs an owner-scoped UUID claim under
 `GLASSES_COMMAND_RECEIPT_DIR/chat` (the existing persistent command mount).
@@ -124,8 +124,8 @@ routing, response echo exclusion, real provider latency, call/OTA/disconnect rac
 and memory/battery cost. Host tests and compilation do not establish those results.
 
 Audio validation diagnostics distinguish empty and overlong Kokoro output and
-record only frame count, sample rate and duration. Android waits up to 190 seconds
-for the bounded 180-second server turn, with a 200-second HTTP watchdog. These
+record only frame count, sample rate and duration. Android waits up to 310 seconds
+for the bounded 300-second server turn, with a 320-second HTTP watchdog. These
 bounds accommodate regular chat latency; capture freshness and session inactivity
 limits remain unchanged.
 
@@ -134,3 +134,16 @@ Remote WAV encoders may use explicit unknown-length RIFF/data size sentinels
 is fully received, validate duration from actual PCM bytes for those headers.
 Ordinary declared-length truncation, partial PCM frames, unsupported formats,
 empty/overlong audio and response-size limits remain rejected.
+
+The whole-turn server deadline is 300 seconds; Android reads for 310 seconds
+with a 320-second request watchdog. Native job wake locks and recognition-test
+worker joins are bounded to 420 seconds to include transcription and playback.
+Synchronous routing/model inference runs on worker threads with copied time,
+privacy, tracing and request-scoped model policy context, so it cannot prevent
+the HTTP event loop from observing cancellation and deadline expiration.
+Already-running provider inference can finish after cancellation, but the
+cancelled coroutine cannot continue to tool execution, persistence or speech.
+This does not make a multi-round model response fast; it permits longer normal
+chat runs within an explicit bound. The observed failing run took 206 seconds,
+including an initial routing failure and seven model rounds, and exceeded the
+previous phone watchdog before synthesis could finish.

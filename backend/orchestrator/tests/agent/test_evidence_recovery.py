@@ -261,7 +261,7 @@ def test_info_cards_do_not_finish_work_or_request_input():
     assert validation.coverage is GoalCoverage.NEEDS_MORE_TOOLS
 
 
-def test_retired_conversation_route_cannot_waive_query_evidence():
+def test_conversational_route_cannot_waive_explicit_archive_evidence():
     achieved, _, pending = GoalCompletionValidator().check_goal_achieved(
         goal="Find the saved project details",
         tool_calls=[],

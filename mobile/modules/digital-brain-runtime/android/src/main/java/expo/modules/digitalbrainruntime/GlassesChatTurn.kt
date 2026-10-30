@@ -23,7 +23,7 @@ internal object GlassesChatTurn {
     val client = GlassesChatClient(c) { check(onMain(eligible)) }
     register(client)
     val timeout = Runnable { client.cancel() }
-    main.postDelayed(timeout, 200_000)
+    main.postDelayed(timeout, 320_000)
     var thread: String? = null
     try {
       val response = client.request(text, requestId, capturedAt, timezone)

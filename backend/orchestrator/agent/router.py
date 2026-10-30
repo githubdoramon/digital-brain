@@ -9,6 +9,7 @@ This is a separate, dedicated LLM call at the start of each request.
 It can use a smaller/faster model for efficiency.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -32,6 +33,7 @@ from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 class IntentType(str, Enum):
     """Classified intent types."""
 
+    CONVERSATIONAL = "conversational"  # Answer from dialogue or general knowledge
     MEMORY_SEARCH = "memory_search"  # Semantic recall over memories, events, documents
     DATA_QUERY = "data_query"  # Structured counting/aggregation over the memory graph
     CONTACT_UPDATE = "contact_update"  # Explicit contact mutation, owned by preview workflow
@@ -88,6 +90,7 @@ TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 
 # Intent to tool group mappings
 INTENT_TOOL_MAP = {
+    IntentType.CONVERSATIONAL: [],
     IntentType.MEMORY_SEARCH: ["memory", "resolution", "visual"],
     IntentType.DATA_QUERY: ["graph", "memory", "resolution"],
     IntentType.CONTACT_UPDATE: [],
@@ -105,6 +108,7 @@ INTENT_TOOL_MAP = {
 # Conservative defaults: only pre-resolve when the intent itself is about a
 # named person.
 INTENT_PRE_RESOLVE_CONTACTS = {
+    IntentType.CONVERSATIONAL: False,
     IntentType.MEMORY_SEARCH: False,
     IntentType.DATA_QUERY: False,
     IntentType.CONTACT_UPDATE: False,
@@ -215,7 +219,7 @@ class IntentRouter:
             trace.trace_router_llm_start()
             try:
                 llm_start = perf_counter()
-                llm_result = self._llm_classify(question, conversation_history)
+                llm_result = await asyncio.to_thread(self._llm_classify, question, conversation_history)
                 llm_duration = (perf_counter() - llm_start) * 1000
                 trace.trace_router_llm_result(
                     llm_result.intent.value,
@@ -259,6 +263,19 @@ class IntentRouter:
         """
         q_lower = question.lower()
 
+        # Only a complete, standalone request can bypass semantic routing.
+        # Never swallow an appended retrieval request or device action.
+        if re.fullmatch(
+            r"\s*(?:(?:please|can you|could you|would you)\s+)*"
+            r"(?:tell|give) me (?:(?:a|another|one|short|funny)\s+)*joke"
+            r"(?:\s+please)?[.!?\s]*", q_lower,
+        ):
+            return IntentClassification(
+                intent=IntentType.CONVERSATIONAL, confidence=0.98,
+                allowed_tool_groups=[], pre_resolve_contacts=False,
+                reasoning="Standalone conversational request", route_source=RouteSource.RULE,
+            )
+
         # Home control patterns
         # Use word-aware regex matching and action-oriented phrases to avoid
         # substring and generic-term false positives.
@@ -279,7 +296,12 @@ class IntentRouter:
             r"\bair conditioner\b",
             r"\bheater\b",
         ]
-        if any(re.search(pattern, q_lower) for pattern in home_patterns):
+        home_action = re.match(
+            r"\s*(?:(?:please|can you|could you|would you)\s+)*"
+            r"(?:turn|switch|set|adjust|change|dim|brighten|open|close|lock|unlock)\b",
+            q_lower,
+        )
+        if home_action and any(re.search(pattern, q_lower) for pattern in home_patterns):
             return IntentClassification(
                 intent=IntentType.HOME_CONTROL,
                 confidence=0.9,
@@ -290,8 +312,8 @@ class IntentRouter:
             )
 
         # Web search patterns
-        web_keywords = ["search the web", "google", "look up online", "latest news", "news about"]
-        if any(kw in q_lower for kw in web_keywords):
+        web_keywords = ["search the web", "look up online", "latest news", "news about"]
+        if any(kw in q_lower for kw in web_keywords) or re.match(r"^\s*google\s+", q_lower):
             return IntentClassification(
                 intent=IntentType.WEB_SEARCH,
                 confidence=0.85,
@@ -359,7 +381,6 @@ class IntentRouter:
             "look in my memories",
             "find my meetings",
             "meetings from",
-            "what happened",
             "last time i",
             "when did i",
         ]
@@ -384,7 +405,14 @@ class IntentRouter:
             "average",
             "total",
         ]
-        if any(kw in q_lower for kw in sql_keywords):
+        archive_subject = re.search(
+            r"\b(?:contacts?|meetings?|events?|documents?|notes?|todos?|tasks?|reminders?|"
+            r"messages?|records?|my|our)\b", q_lower,
+        )
+        if archive_subject and (
+            any(re.search(r"\b" + re.escape(kw) + r"\b", q_lower) for kw in sql_keywords)
+            or re.search(r"\b(?:list|show)(?:\s+me)?\s+all\b", q_lower)
+        ):
             return IntentClassification(
                 intent=IntentType.DATA_QUERY,
                 confidence=0.8,
@@ -404,7 +432,11 @@ class IntentRouter:
             "script",
             "terminal",
         ]
-        if any(kw in q_lower for kw in system_keywords):
+        system_action = re.match(
+            r"\s*(?:(?:please|can you|could you|would you)\s+)*"
+            r"(?:run|execute|use|launch)\b", q_lower,
+        )
+        if system_action and any(re.search(r"\b" + re.escape(kw) + r"\b", q_lower) for kw in system_keywords):
             return IntentClassification(
                 intent=IntentType.SYSTEM_COMMAND,
                 confidence=0.85,
@@ -451,7 +483,8 @@ class IntentRouter:
             response = call_llm_chat(
                 messages,
                 context_policy=CompactionPolicy(
-                    current_request=question, recent_dialogue_messages=12
+                    current_request=question, recent_dialogue_messages=12,
+                    target_input_tokens=12000,
                 ),
                 timeout=self.llm_timeout,
                 model=resolved_model,
@@ -501,6 +534,7 @@ CONTACT RELEVANCE:
   identity resolution is useful. Mentioning a name alone is insufficient.
 
 INTENT TYPES:
+- conversational: Ordinary conversation, jokes, creative writing, explanations, translation, advice, or answers already supported by the dialogue. No tools or personal archive retrieval are required. Words such as 'tell me', 'what', 'how', 'create', and 'write' do not by themselves imply retrieval or execution. Requests to search stored personal information, obtain current external facts, save a file, or perform an action use the appropriate tool intent instead. Preserve the original task for genuine follow-ups; a new conversational request starts a new task.
 - memory_search: Qualitative recall over the personal memory graph: events, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
 - data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type", "list me all contacts with email @example.com"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
 - contact_update: The user explicitly asks to add, update or correct a contact, birthday, relationship, contact detail or contact place. Route requests such as "Set Alex Carter's birthday to today; born in 1987" here. This starts a controller-owned preview and confirmation flow; do not also classify it as background learning. Questions about details remain contact_lookup. Plain factual statements without a request to modify remain eligible for ordinary learning.
@@ -509,7 +543,7 @@ INTENT TYPES:
 - home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands and system management on a server
-- unknown: General conversation, drafting, document creation, or uncertainty. Direct answers are allowed when no evidence or action is needed; this route does not waive verification.
+- unknown: Uncertain or mixed requests, including document creation requiring tools. Direct answers are allowed when no evidence or action is needed; this route does not waive verification.
 
 Also decide whether pre-resolving contacts is beneficial when creating a answer for the user in upcoming steps:
 - Set `pre_resolve_contacts` to true when the query references a specific person by name,

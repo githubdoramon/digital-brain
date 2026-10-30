@@ -2,6 +2,15 @@
 
 The bounded agent uses hard limits plus no-progress detection.
 
+Completion depends on the routed task and specific evidence requirements, not
+generic words such as "tell me", "what", "how" or "create". Conversation and
+general explanations can finish without tools, including short complete replies.
+Personal retrieval and execution retain source/result validation; a conversational
+classification cannot waive an explicit saved-record search or meeting evidence
+requirements. Empty successful searches can end with an honest no-results answer.
+Continuation repair targets actual tool promises, not incidental phrases inside
+answers or stories. UI follow-up tools are optional, never a completion prerequisite.
+
 Every model round also passes through the shared complete-request budget and
 working-context compactor. See [LLM_CONTEXT.md](LLM_CONTEXT.md) for reservations,
 protected context, bounded LLM summaries and source-processing behavior.

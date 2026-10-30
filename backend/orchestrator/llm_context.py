@@ -166,6 +166,7 @@ class CompactionPolicy:
     read_only_tools: frozenset[str] = frozenset()
     current_request: str | None = None
     recent_dialogue_messages: int = 0
+    target_input_tokens: int | None = None
     # Owned by one agent run, never a process-global or persistent source cache.
     cache: dict[str, str] = field(default_factory=dict)
 
@@ -341,6 +342,8 @@ def prepare_request(
     measurement = input_measurement(payload)
     before = measurement["estimated_tokens"]
     target = int(budget.input_limit * 0.8)
+    if policy and policy.target_input_tokens is not None:
+        target = min(target, policy.target_input_tokens)
     diagnostic(
         "llm_context_budget",
         **measurement,

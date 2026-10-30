@@ -814,66 +814,6 @@ class GoalCompletionValidator:
     3. Verifying actual results exist
     """
 
-    # Patterns that indicate an ACTION goal (user wants something done)
-    ACTION_PATTERNS: ClassVar[list[str]] = [
-        # Device/IoT actions
-        "turn on",
-        "turn off",
-        "switch on",
-        "switch off",
-        "dim",
-        "brighten",
-        "set",
-        "change",
-        "adjust",
-        "open",
-        "close",
-        "lock",
-        "unlock",
-        "start",
-        "stop",
-        "pause",
-        "resume",
-        # Data actions
-        "create",
-        "add",
-        "insert",
-        "save",
-        "store",
-        "delete",
-        "remove",
-        "update",
-        "modify",
-        "edit",
-        "send",
-        "execute",
-        "run",
-        "trigger",
-    ]
-
-    # Patterns that indicate a QUERY goal (user wants information)
-    QUERY_PATTERNS: ClassVar[list[str]] = [
-        "what",
-        "who",
-        "when",
-        "where",
-        "why",
-        "how",
-        "find",
-        "search",
-        "list",
-        "show",
-        "tell me",
-        "do i have",
-        "is there",
-        "are there",
-        "get",
-        "retrieve",
-        "fetch",
-        "look up",
-        "lookup",
-    ]
-
     # Tool-specific discovery actions that need follow-up execution
     # Format: {tool_name: {discovery_action: execution_action}}
     DISCOVERY_EXECUTION_PAIRS: ClassVar[dict[str, dict[str, str]]] = {
@@ -907,11 +847,42 @@ class GoalCompletionValidator:
         goal_lower = goal.lower()
 
         # Determine goal type
-        is_action_goal = intent not in {"memory_search", "data_query", "contact_lookup", "web_search"} and any(
-            re.search(r"\b" + re.escape(pattern) + r"\b", goal_lower) for pattern in self.ACTION_PATTERNS
+        retrieval_intents = {"memory_search", "data_query", "contact_lookup", "web_search"}
+        action_intents = {"home_control", "system_command", "skill_execution", "contact_update"}
+        is_action_goal = intent in action_intents or (
+            intent in {None, "unknown"}
+            and bool(re.search(
+                r"^(?:(?:please|can you|could you|would you)\s+)*"
+                r"(?:turn (?:on|off)|switch (?:on|off)|"
+                r"(?:open|close|lock|unlock|save|delete|remove|update|send|execute|run|trigger|"
+                r"create|add|write|set|change|adjust)\s+(?:(?:a|an|the|my|this)\s+)?"
+                r"(?:task|todo|event|contact|file|pdf|document|alarm|temperature|lights?|"
+                r"gate|door|script|command|email|message|notification))\b", goal_lower
+            ))
         )
-        is_query_goal = intent in {"memory_search", "data_query", "contact_lookup", "web_search"} or any(
-            p in goal_lower for p in self.QUERY_PATTERNS
+        # Interrogative words and 'tell me' are not evidence requirements.
+        # Retain grounding for personal recall when routing is unavailable, and
+        # for retrieved candidates even if a fallback route was used.
+        explicit_archive_request = bool(re.search(
+            r"^(?:(?:please|can you|could you|would you)\s+)*"
+            r"(?:find|search|retrieve|fetch|look up)\b.*\b(?:saved|stored|archive|records?)\b",
+            goal_lower,
+        ))
+        is_query_goal = intent in retrieval_intents or explicit_archive_request or (
+            intent in {None, "unknown"}
+            and (
+                any(tc.tool_name in {
+                    "search_memories", "get_events", "get_document", "get_conversation",
+                    "get_message", "web_search", "lookup_contact", "resolve_contacts",
+                    "fetch_web_page",
+                } for tc in tool_calls)
+                or bool(re.search(
+                    r"^(?:(?:please|can you|could you)\s+)*"
+                    r"(?:(?:what|when|where|who|which|tell me about|show me|list)\b.*\b(?:my|our)\b|"
+                    r"(?:when|where|what)\s+(?:did|do|have|was|am) i\b)",
+                    goal_lower,
+                ))
+            )
         )
 
         # Check for discovery-only pattern (generic across all tools)
@@ -941,7 +912,7 @@ class GoalCompletionValidator:
             return (True, "Tools executed successfully", [])
 
         # No tool calls but has content - might be conversational
-        if final_content and len(final_content.strip()) > 20:
+        if final_content and final_content.strip():
             return (True, "Response generated", [])
 
         return (False, "No successful tool execution detected", [])
@@ -1208,7 +1179,13 @@ class GoalCompletionValidator:
                         )
                     return (True, "Query returned data", [])
 
-            # Query succeeded but no results
+            # A completed empty search is evidence of absence in that search,
+            # not a reason to retry forever. Never override detailed inspection
+            # requirements for actual candidates above.
+            if final_content_lower and any(marker in final_content_lower for marker in no_data_markers):
+                return (True, "Query completed; no matching records reported", [])
+
+            # Query succeeded but no results and no explanation yet.
             return (
                 False,
                 "Query executed but returned no results",

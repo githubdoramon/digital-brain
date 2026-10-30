@@ -22,7 +22,7 @@ internal class GlassesChatClient(private val c: Context, private val guard: () -
     try {
       current()
       http.requestMethod = "POST"; http.instanceFollowRedirects = false
-      http.connectTimeout = 5_000; http.readTimeout = 190_000
+      http.connectTimeout = 5_000; http.readTimeout = 310_000
       http.setRequestProperty("Authorization", "Bearer ${token.value}")
       http.setRequestProperty("Content-Type", "application/json")
       val body = JSONObject().put("transcript", transcript).put("request_id", requestId)

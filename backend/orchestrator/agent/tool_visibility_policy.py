@@ -55,6 +55,10 @@ def resolve_tool_visibility(
     )
     state_groups = list(classification.allowed_tool_groups or [])
 
+    # Conversation needs neither the full catalogue nor an obligatory UI call.
+    if classification.intent == "conversational":
+        return [], ToolVisibilityMode.NONE, []
+
     if restriction_mode != "conservative":
         selected_groups = _with_always_available(state_groups, known_groups)
         tool_defs = tool_registry.get_tool_definitions_for_groups(selected_groups)

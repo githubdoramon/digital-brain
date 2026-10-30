@@ -40,6 +40,30 @@ def old_dialogue():
     ]
 
 
+def test_conversational_soft_budget_compacts_before_hard_limit(monkeypatch):
+    monkeypatch.setenv("LLM_CONTEXT_WINDOW_TOKENS", "64000")
+    messages = old_dialogue()
+    original = deepcopy(messages)
+    request = payload(messages)
+    assert context.estimate_input(request) < context.request_budget("smart-test").input_limit
+    summaries = []
+
+    def summarize(fragment):
+        summaries.append(fragment)
+        return "Alex Carter chose Slate; warranty confirmation remains unresolved."
+
+    result = context.prepare_request(
+        request, summarize=summarize,
+        policy=context.CompactionPolicy(current_request="What is still unresolved?",
+                                        target_input_tokens=2000),
+    )
+    assert summaries
+    assert context.estimate_input(result) <= 2000
+    assert result["messages"][-1] == messages[-1]
+    assert result["messages"][0] == messages[0]
+    assert messages == original
+
+
 def result_messages(name="get_document", result=None):
     if result is None:
         result = {

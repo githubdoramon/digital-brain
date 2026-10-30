@@ -8,9 +8,11 @@ from typing import Any
 def build_execution_plan(goal: str, intent: str | None) -> list[str]:
     """Build a compact execution plan that the controller can track explicitly."""
     normalized_goal = str(goal or "").strip()
-    normalized_intent = str(intent or "").strip().upper()
+    normalized_intent = str(getattr(intent, "value", intent) or "").strip().upper()
     if not normalized_goal:
         return ["Clarify user request before tool execution"]
+    if normalized_intent == "CONVERSATIONAL":
+        return ["Answer the current request directly from dialogue or general knowledge"]
 
     from .evidence_requirements import meeting_request
     if meeting_request(normalized_goal):
@@ -26,7 +28,7 @@ def build_execution_plan(goal: str, intent: str | None) -> list[str]:
         plan.append("Execute requested action safely")
         plan.append("Verify execution result before reporting")
     else:
-        plan.append("Gather relevant evidence with available tools")
+        plan.append("Use tools only if the request needs evidence or execution")
         plan.append("Verify answer matches the user goal")
 
     return plan
@@ -36,9 +38,9 @@ def build_verification_retry_prompt(reason: str, missing: list[str]) -> str:
     """Prompt used when verifier rejects a premature final response."""
     missing_text = "; ".join(missing[:2]) if missing else "complete missing evidence"
     return (
-        "VERIFICATION_FAILED: The draft response is not yet grounded enough. "
+        "VERIFICATION_FAILED: The draft response does not yet satisfy the request. "
         f"Reason: {reason}. Required next action: {missing_text}. "
-        "Do not answer yet. First run the needed tool call(s), then respond."
+        "Address this specific issue, then respond. Use a tool only if the missing action requires it."
     )
 
 
@@ -58,8 +60,8 @@ def verify_final_response(
         )
 
     normalized = str(final_content or "").strip()
-    if len(normalized) < 20:
-        return False, "Final response is too short", ["Provide a complete grounded answer"]
+    if not normalized:
+        return False, "Final response is empty", ["Provide an answer"]
 
     if tool_calls_count > 0 and not completion_evidence:
         return (

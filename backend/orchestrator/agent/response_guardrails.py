@@ -1,5 +1,6 @@
 """Guardrails for malformed or non-actionable LLM text responses."""
 
+import re
 
 CONTINUATION_PROMPT_SYNC = (
     "You expressed intent to perform an action but didn't call any tool. "
@@ -29,19 +30,15 @@ CODE_DESCRIBING_TOOL_PROMPT = (
 
 def looks_like_continuation(content: str) -> bool:
     """Check if content indicates model wants to continue but didn't call a tool."""
-    patterns = [
-        "let me try", "let me find", "let me search",
-        "let me check", "let me look", "let me query",
-        "i need to", "i will try", "i'll try",
-        "i will search", "i'll search", "i will query",
-        "first, i need", "i should", "i'll need to",
-    ]
-
     lower = content.lower().strip()
     if len(lower) > 800:
         return False
 
-    return any(pattern in lower for pattern in patterns)
+    return bool(re.match(
+        r"(?:first,?\s+)?(?:let me|i need to|i will|i'll|i should|i'll need to)\s+"
+        r"(?:try(?:\s+to)?\s+)?(?:find|search|check|look\s+up|query|fetch|retrieve|"
+        r"call|execute|run)\b", lower
+    ))
 
 
 def looks_like_malformed_tool_call(content: str) -> bool:

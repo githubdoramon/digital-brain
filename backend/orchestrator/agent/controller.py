@@ -158,6 +158,8 @@ class AgentController:
         self._compaction_context: ContextVar[CompactionPolicy | None] = ContextVar(
             "agent_compaction_context", default=None
         )
+        self._active_policy_context: ContextVar[LLMCallPolicy | None] = ContextVar("agent_active_policy", default=None)
+        self._last_policy_context: ContextVar[LLMCallPolicy | None] = ContextVar("agent_last_policy", default=None)
         self.agent_profile = base_interface.profile
         self.runtime_profile = self.agent_profile.runtime
 
@@ -169,6 +171,22 @@ class AgentController:
         self._tool_executor = None
         self._active_llm_policy: LLMCallPolicy | None = None
         self._last_llm_policy: LLMCallPolicy | None = None
+
+    @property
+    def _active_llm_policy(self):
+        return self._active_policy_context.get()
+
+    @_active_llm_policy.setter
+    def _active_llm_policy(self, value):
+        self._active_policy_context.set(value)
+
+    @property
+    def _last_llm_policy(self):
+        return self._last_policy_context.get()
+
+    @_last_llm_policy.setter
+    def _last_llm_policy(self, value):
+        self._last_policy_context.set(value)
 
     @property
     def tool_registry(self):
@@ -355,7 +373,8 @@ class AgentController:
             raise RuntimeError("No conversational agent interface provided to AgentController")
         self._agent_interface_context.set(base_interface)
         self._compaction_context.set(
-            CompactionPolicy(current_request=question.strip(), recent_dialogue_messages=12)
+            CompactionPolicy(current_request=question.strip(), recent_dialogue_messages=12,
+                             target_input_tokens=12000)
         )
         self.agent_profile = base_interface.profile
         self.runtime_profile = base_interface.profile.runtime
@@ -593,7 +612,7 @@ class AgentController:
                 trace.trace_llm_request(len(tools))
                 llm_start = perf_counter()
                 self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
-                response = self._call_llm(messages, tools)
+                response = await asyncio.to_thread(self._call_llm, messages, tools)
                 llm_duration = (perf_counter() - llm_start) * 1000
 
                 message = response.get("message", {})
@@ -692,7 +711,8 @@ class AgentController:
 
                 # Check if this is a continuation intent
                 if (
-                    looks_like_continuation(content)
+                    state.intent != "conversational"
+                    and looks_like_continuation(content)
                     and state.step_count < self.config.max_steps - 1
                 ):
                     trace.trace_continuation_detected(content)
@@ -709,7 +729,7 @@ class AgentController:
                 malformed_prompt, malformed_reason = (
                     self._agent_interface().classify_malformed_output(content)
                 )
-                if malformed_prompt and state.step_count < self.config.max_steps - 1:
+                if state.intent != "conversational" and malformed_prompt and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(
                         content, malformed_reason or "Malformed tool output"
                     )
@@ -1061,7 +1081,8 @@ class AgentController:
                     continue
 
                 if (
-                    looks_like_continuation(current_content)
+                    state.intent != "conversational"
+                    and looks_like_continuation(current_content)
                     and state.step_count < self.config.max_steps - 1
                 ):
                     trace.trace_continuation_detected(current_content)
@@ -1080,7 +1101,7 @@ class AgentController:
                 malformed_prompt, malformed_reason = (
                     self._agent_interface().classify_malformed_output(current_content)
                 )
-                if malformed_prompt and state.step_count < self.config.max_steps - 1:
+                if state.intent != "conversational" and malformed_prompt and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(
                         current_content, malformed_reason or "Malformed tool output"
                     )

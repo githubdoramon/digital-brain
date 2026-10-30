@@ -38,6 +38,28 @@ profile overrides and `LLM_IMAGE_INPUT_TOKENS` support different providers.
 
 ## Conversational requests
 
+Intent routing and agent turns use a 12,000 estimated-token soft target rather
+than waiting until the model's hard window is nearly full. The existing compactor
+can summarize eligible older dialogue and read-only results; explicit instructions,
+the current request and the latest twelve dialogue messages remain protected.
+The target is best effort: protected context can exceed it. Stored messages and
+learning evidence are unchanged.
+
+Initial archive knowledge injection selects at most 1,400 estimated tokens of
+whole fact excerpts. Excerpts retain knowledge/subject references, predicates,
+statements, uncertainty, inferred origin/reason and applicability/validity dates.
+Full source quotes, ownership fields, embeddings and revision bookkeeping stay
+in the archive. The prompt identifies this as a bounded selection and directs the
+agent to retrieve originals when needed. Explicit user rules are kept separately
+and are never cut to fit this fact budget.
+
+The `conversational` intent handles direct answers, jokes, explanations, drafting
+and dialogue-supported follow-ups. It uses a short protocol, explicit user rules,
+time and dialogue; it does not inject archive facts, tag taxonomy, skills or tool
+schemas. A standalone joke request also skips the router model call. Mixed or
+uncertain requests still use semantic routing. Other main-profile requests inject
+matching skill instructions without the global skill catalogue.
+
 Above 80% of the available input budget, the preflight attempts LLM summaries of
 older dialogue and successful registered read-only tool results. The summary model
 is the model selected for that request, with reasoning disabled, no tools and a

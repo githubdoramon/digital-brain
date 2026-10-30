@@ -76,7 +76,7 @@ object GlassesListening {
   }
   internal fun awaitSpeechWorker() {
     val current = worker
-    current?.join(300_000)
+    current?.join(420_000)
     check(current?.isAlive != true) { "Waiting for speech recognition to finish" }
   }
   val foregroundOwned get() = armed && enabled
@@ -308,7 +308,7 @@ object GlassesListening {
         currentJob.set(job)
         busy = true
         val wake = c.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DigitalBrain:Transcription")
-        wake.acquire(300_000L)
+        wake.acquire(420_000L)
         val timeout = Runnable { if (currentJob.get() === job) client.cancel() }
         var staged: File? = null
         val timing = SpeechTiming({ SystemClock.elapsedRealtime() },
