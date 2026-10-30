@@ -128,3 +128,9 @@ record only frame count, sample rate and duration. Android waits up to 190 secon
 for the bounded 180-second server turn, with a 200-second HTTP watchdog. These
 bounds accommodate regular chat latency; capture freshness and session inactivity
 limits remain unchanged.
+
+Remote WAV encoders may use explicit unknown-length RIFF/data size sentinels
+(`0xFFFFFFFF` or `0x7FFFFFFF`) for streaming output. After the bounded HTTP body
+is fully received, validate duration from actual PCM bytes for those headers.
+Ordinary declared-length truncation, partial PCM frames, unsupported formats,
+empty/overlong audio and response-size limits remain rejected.

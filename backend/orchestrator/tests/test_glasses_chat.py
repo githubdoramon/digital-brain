@@ -544,3 +544,29 @@ async def test_cpu_synthesis_uses_a_budget_that_covers_cold_start(monkeypatch):
         assert observed == [60]
     finally:
         slot.release()
+
+
+@pytest.mark.parametrize("sentinel", [0xFFFFFFFF, 0x7FFFFFFF])
+def test_remote_streaming_wav_uses_received_pcm_length(sentinel):
+    import struct
+
+    data = bytearray(wav(frames=200))
+    struct.pack_into("<I", data, 4, sentinel)
+    struct.pack_into("<I", data, 40, sentinel)
+    result = glasses_tts.pcm_payload(bytes(data))
+    assert len(base64.b64decode(result["data"])) == 400
+    assert result["sample_rate"] == 24000
+
+
+def test_streaming_wav_still_rejects_partial_frames_and_overlong_audio():
+    import struct
+
+    for original in [wav(frames=100)[:-1], wav(frames=24000 * 46), wav(frames=0)]:
+        data = bytearray(original)
+        struct.pack_into("<I", data, 4, 0xFFFFFFFF)
+        struct.pack_into("<I", data, 40, 0xFFFFFFFF)
+        with pytest.raises(glasses_tts.SpeechUnavailable):
+            glasses_tts.pcm_payload(bytes(data))
+    # A normal file claiming more bytes than received is still a truncated file.
+    with pytest.raises(glasses_tts.SpeechUnavailable):
+        glasses_tts.pcm_payload(wav()[:-2])

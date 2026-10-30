@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import os
+import struct
 import wave
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,6 +18,26 @@ MAX_AUDIO_SECONDS = 45
 
 class SpeechUnavailable(Exception):
     pass
+
+
+def _streaming_pcm_size(data: bytes) -> int | None:
+    """Recognize explicit unknown-length RIFF/data headers, not ordinary truncation."""
+    unknown = {0xFFFFFFFF, 0x7FFFFFFF}
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    if struct.unpack_from("<I", data, 4)[0] not in unknown:
+        return None
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk = data[offset : offset + 4]
+        size = struct.unpack_from("<I", data, offset + 4)[0]
+        offset += 8
+        if chunk == b"data":
+            return len(data) - offset if size in unknown else None
+        if size in unknown or offset + size > len(data):
+            return None
+        offset += size + size % 2
+    return None
 
 
 def speech_endpoint() -> str:
@@ -50,11 +71,17 @@ def pcm_payload(data: bytes) -> dict:
                 or audio.getnchannels() != 1
                 or audio.getsampwidth() != 2
                 or rate not in {16000, 22050, 24000, 44100, 48000}
-                or not 0 < frames <= rate * MAX_AUDIO_SECONDS
             ):
                 raise ValueError()
-            pcm = audio.readframes(frames)
-            if len(pcm) != frames * 2:
+            # Read only the bounded, fully received response. Streaming encoders
+            # cannot seek back to finalize RIFF/data sizes and use sentinel values.
+            pcm = audio.readframes(min(frames, MAX_AUDIO_BYTES // 2 + 1))
+            streaming_size = _streaming_pcm_size(data)
+            if streaming_size is not None:
+                if streaming_size != len(pcm) or streaming_size % 2:
+                    raise ValueError()
+                frames = streaming_size // 2
+            if not 0 < frames <= rate * MAX_AUDIO_SECONDS or len(pcm) != frames * 2:
                 raise ValueError()
         return {
             "encoding": "pcm16",
