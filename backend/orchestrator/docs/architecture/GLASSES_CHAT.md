@@ -43,13 +43,16 @@ supported command, but cannot execute a rejected device request through chat.
 ## Speech and native playback
 
 The backend image bundles the original checksum-verified quantized Kokoro model,
-voices and pinned CPU runtime. No TTS URL is required. Inference is serialized on
+voices and pinned CPU runtime. `TTS_PROVIDER=kokoro` is the default. No TTS URL
+is required, and legacy `TTS_BASE_URL`/key/model/voice settings cannot switch
+the provider. Inference is serialized on
 one worker with two CPU threads; timeouts retain the worker slot until inference
 actually finishes, so interrupted calls cannot accumulate queued synthesis.
 
 For an explicit external-provider override only, configure:
 
 ```dotenv
+TTS_PROVIDER=openai_compatible
 TTS_BASE_URL=http://tts.example:8880/v1
 TTS_API_KEY=
 TTS_MODEL=kokoro

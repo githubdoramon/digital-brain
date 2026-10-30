@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -17,8 +18,8 @@ import {
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
-import { listNonCommandThreads, type ThreadSummary } from '@/chat/threads';
-import { loadChatSession, loadPendingRun } from '@/chat/session';
+import { deleteThread, listNonCommandThreads, type ThreadSummary } from '@/chat/threads';
+import { clearPendingRun, loadChatSession, loadPendingRun, saveChatSession } from '@/chat/session';
 import { getUnreadThreadIds } from '@/chat/threadNotifications';
 import { theme } from '@/theme';
 
@@ -46,6 +47,9 @@ export default function ThreadHistoryScreen() {
   const [searchText, setSearchText] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const requestIdRef = useRef(0);
+  const deletingThreadRef = useRef<string | null>(null);
+  const deletedThreadIdsRef = useRef(new Set<string>());
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
 
   useEffect(() => {
     const timeout = setTimeout(() => setDebouncedQuery(searchText.trim()), 350);
@@ -72,10 +76,12 @@ export default function ThreadHistoryScreen() {
         const unreadIds = await getUnreadThreadIds(nextThreads);
         if (mainSession?.threadId) unreadIds.delete(mainSession.threadId);
         if (requestId === requestIdRef.current) {
-          setThreads(nextThreads);
+          setThreads(nextThreads.filter((thread) => !deletedThreadIdsRef.current.has(thread.id)));
           setUnreadThreadIds(unreadIds);
           setPendingThreadId(
-            pendingRun?.threadId && pendingRun.threadId !== mainSession?.threadId
+            pendingRun?.threadId &&
+              pendingRun.threadId !== mainSession?.threadId &&
+              !deletedThreadIdsRef.current.has(pendingRun.threadId)
               ? pendingRun.threadId
               : null,
           );
@@ -112,6 +118,54 @@ export default function ThreadHistoryScreen() {
     }
     setIsSearchOpen(true);
   }, [isSearchOpen]);
+
+  const handleDeleteThread = useCallback(
+    async (threadId: string) => {
+      if (!token || deletingThreadRef.current) return;
+      deletingThreadRef.current = threadId;
+      setDeletingThreadId(threadId);
+      try {
+        await deleteThread(token, threadId);
+        deletedThreadIdsRef.current.add(threadId);
+        setThreads((current) => current.filter((thread) => thread.id !== threadId));
+        setPendingThreadId((current) => (current === threadId ? null : current));
+        // Clear only cached state belonging to the deleted conversation.
+        const [session, pendingRun] = await Promise.all([loadChatSession(), loadPendingRun()]);
+        if (session?.threadId === threadId) {
+          await saveChatSession({ threadId: null, pendingEventId: null });
+        }
+        if (pendingRun?.threadId === threadId) await clearPendingRun();
+      } catch {
+        if (!deletedThreadIdsRef.current.has(threadId)) {
+          Alert.alert('Could not delete thread', 'Please try again.');
+        }
+      } finally {
+        deletingThreadRef.current = null;
+        setDeletingThreadId(null);
+      }
+    },
+    [token],
+  );
+
+  const confirmDeleteThread = useCallback(
+    (thread: ThreadSummary) => {
+      if (deletingThreadRef.current) return;
+      const title = (thread.title || '').trim() || 'Untitled thread';
+      Alert.alert(
+        'Delete thread?',
+        `“${title}” and all its messages will be permanently deleted. This cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => void handleDeleteThread(thread.id),
+          },
+        ],
+      );
+    },
+    [handleDeleteThread],
+  );
 
   return (
     <>
@@ -183,6 +237,14 @@ export default function ThreadHistoryScreen() {
               contentContainerStyle={styles.listContent}
               renderItem={({ item }) => (
                 <Pressable
+                  disabled={deletingThreadId !== null}
+                  onLongPress={() => confirmDeleteThread(item)}
+                  accessibilityRole="button"
+                  accessibilityHint="Opens the thread. Long press to delete."
+                  accessibilityActions={[{ name: 'delete', label: 'Delete thread' }]}
+                  onAccessibilityAction={({ nativeEvent }) => {
+                    if (nativeEvent.actionName === 'delete') confirmDeleteThread(item);
+                  }}
                   onPress={() =>
                     router.push({
                       pathname: '/chat/[threadId]',
@@ -194,7 +256,9 @@ export default function ThreadHistoryScreen() {
                       },
                     })
                   }
-                  style={({ pressed }) => [pressed && styles.itemPressed]}
+                  style={({ pressed }) => [
+                    (pressed || deletingThreadId === item.id) && styles.itemPressed,
+                  ]}
                 >
                   <Card variant="elevated" style={styles.card}>
                     {unreadThreadIds.has(item.id) || pendingThreadId === item.id ? (

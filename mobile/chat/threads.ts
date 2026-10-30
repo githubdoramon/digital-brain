@@ -139,6 +139,13 @@ export async function listNonCommandThreads(
   return sortThreadsByUpdatedAtDesc((threads || []).filter((thread) => !isCommandThread(thread)));
 }
 
+export async function deleteThread(token: string, threadId: string): Promise<void> {
+  await apiFetch(`/mobile/threads/${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
 export async function regenerateThreadTitle(
   token: string,
   threadId: string,

@@ -14,6 +14,8 @@ def voice_stage(stage: str, reason: str = "none") -> None:
     """Only fixed status enums may leave the speech privacy boundary."""
     if stage not in {
         "started",
+        "synthesis_local",
+        "synthesis_remote",
         "answer_ready",
         "speech_ready",
         "speech_failed",

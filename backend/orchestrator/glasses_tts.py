@@ -9,6 +9,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from voice_context import voice_stage
+
 MAX_AUDIO_BYTES = 4 * 1024 * 1024
 MAX_AUDIO_SECONDS = 45
 
@@ -66,9 +68,15 @@ def pcm_payload(data: bytes) -> dict:
 async def synthesize(text: str) -> dict:
     if not text.strip() or len(text) > 2400:
         raise SpeechUnavailable("tts_text_too_long")
-    if not os.getenv("TTS_BASE_URL", "").strip():
+    provider = os.getenv("TTS_PROVIDER", "kokoro").strip() or "kokoro"
+    if provider == "kokoro":
         from glasses_kokoro import synthesize_local
+
+        voice_stage("synthesis_local")
         return await synthesize_local(text)
+    if provider != "openai_compatible":
+        raise SpeechUnavailable("tts_not_configured")
+    voice_stage("synthesis_remote")
     endpoint = speech_endpoint()
     headers = {"Accept": "audio/wav"}
     if key := os.getenv("TTS_API_KEY", "").strip():

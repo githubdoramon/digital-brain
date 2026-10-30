@@ -2826,7 +2826,7 @@ export function ChatConversationScreen({
             {
               paddingTop: isMainChat
                 ? insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING
-                : insets.top + COLLAPSING_TOP_BAR_HEIGHT - 8,
+                : insets.top + COLLAPSING_TOP_BAR_HEIGHT + 32,
             },
           ]}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {

@@ -306,6 +306,7 @@ async def test_remote_tts_sends_the_canonical_reply_and_returns_ephemeral_pcm(mo
         return httpx.Response(200, content=wav(), headers={"content-type": "audio/wav"})
 
     client = httpx.AsyncClient
+    monkeypatch.setenv("TTS_PROVIDER", "openai_compatible")
     monkeypatch.setenv("TTS_BASE_URL", "http://tts.example/v1")
     monkeypatch.setenv("TTS_API_KEY", "synthetic-test-key")
     monkeypatch.setattr(
@@ -448,3 +449,43 @@ async def test_local_audio_rejections_have_specific_safe_reasons(monkeypatch, fr
     )
     with pytest.raises(glasses_tts.SpeechUnavailable, match=reason):
         await local.synthesize_local("A short reply.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "", "kokoro"])
+async def test_legacy_remote_settings_cannot_override_local_default(monkeypatch, provider, caplog):
+    import glasses_kokoro
+
+    if provider is None:
+        monkeypatch.delenv("TTS_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("TTS_PROVIDER", provider)
+    monkeypatch.setenv("TTS_BASE_URL", "https://legacy-tts.example/v1")
+    monkeypatch.setenv("TTS_API_KEY", "synthetic-legacy-key")
+    monkeypatch.setenv("TTS_MODEL", "legacy-model")
+    monkeypatch.setenv("TTS_VOICE", "legacy-voice")
+
+    async def local(text):
+        assert text == "A short reply."
+        return {"encoding": "pcm16", "sample_rate": 24000, "data": "AAA="}
+
+    monkeypatch.setattr(glasses_kokoro, "synthesize_local", local)
+    monkeypatch.setattr(
+        glasses_tts.httpx,
+        "AsyncClient",
+        lambda **kw: pytest.fail("Remote provider must not be contacted"),
+    )
+    with caplog.at_level(logging.INFO, logger="voice_context"):
+        result = await glasses_tts.synthesize("A short reply.")
+    assert result["sample_rate"] == 24000
+    assert "[glasses-chat] stage=synthesis_local reason=none" in caplog.text
+    assert "synthetic-legacy-key" not in caplog.text
+    assert "legacy-tts.example" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unknown_speech_provider_never_falls_back_to_remote(monkeypatch):
+    monkeypatch.setenv("TTS_PROVIDER", "misspelled-provider")
+    monkeypatch.setenv("TTS_BASE_URL", "https://tts.example/v1")
+    with pytest.raises(glasses_tts.SpeechUnavailable, match="tts_not_configured"):
+        await glasses_tts.synthesize("A short reply.")
