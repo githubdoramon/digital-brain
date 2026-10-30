@@ -27,6 +27,7 @@ def voice_stage(stage: str, reason: str = "none") -> None:
         "none",
         "tts_not_configured",
         "tts_failed",
+        "tts_timeout",
         "tts_invalid_audio",
         "tts_text_too_long",
         "tts_audio_too_long",

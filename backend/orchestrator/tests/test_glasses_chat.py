@@ -489,3 +489,58 @@ async def test_unknown_speech_provider_never_falls_back_to_remote(monkeypatch):
     monkeypatch.setenv("TTS_BASE_URL", "https://tts.example/v1")
     with pytest.raises(glasses_tts.SpeechUnavailable, match="tts_not_configured"):
         await glasses_tts.synthesize("A short reply.")
+
+
+@pytest.mark.asyncio
+async def test_cpu_timeout_retains_slot_until_worker_finishes(monkeypatch):
+    import threading
+    from concurrent.futures import Future
+
+    import glasses_kokoro as local
+
+    slot = threading.BoundedSemaphore(1)
+    future = Future()
+    monkeypatch.setattr(local, "_slot", slot)
+    monkeypatch.setattr(local, "_worker", SimpleNamespace(submit=lambda *a: future))
+    monkeypatch.setattr(local, "LOCAL_TTS_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(glasses_tts.SpeechUnavailable, match="tts_timeout"):
+        await local.synthesize_local("A short reply.")
+    assert not future.cancelled()
+    with pytest.raises(glasses_tts.SpeechUnavailable):
+        await local.synthesize_local("Another reply.")
+    # Production _generate owns releasing the slot when CPU inference finishes.
+    slot.release()
+    future.set_exception(glasses_tts.SpeechUnavailable("tts_failed"))
+    await asyncio.sleep(0)
+    assert slot.acquire(blocking=False)
+    slot.release()
+
+
+@pytest.mark.asyncio
+async def test_cpu_synthesis_uses_a_budget_that_covers_cold_start(monkeypatch):
+    from concurrent.futures import Future
+
+    import glasses_kokoro as local
+
+    future = Future()
+    future.set_result({"encoding": "pcm16", "sample_rate": 24000, "data": "AAA="})
+    monkeypatch.setattr(local, "_worker", SimpleNamespace(submit=lambda *a: future))
+    # A stubbed worker must release its acquired slot as the real worker does.
+    import threading
+
+    slot = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(local, "_slot", slot)
+    observed = []
+    real_wait = asyncio.wait_for
+
+    async def wait(pending, timeout):
+        observed.append(timeout)
+        return await real_wait(pending, timeout)
+
+    monkeypatch.setattr(local.asyncio, "wait_for", wait)
+    try:
+        result = await local.synthesize_local("A short reply.")
+        assert result["sample_rate"] == 24000
+        assert observed == [60]
+    finally:
+        slot.release()

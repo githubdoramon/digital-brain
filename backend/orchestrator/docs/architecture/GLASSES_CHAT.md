@@ -64,8 +64,11 @@ The URL also accepts a host or full `/v1/audio/speech` path. Without that overri
 never reused. Complete synthesis is requested as WAV; responses must be
 nonempty mono PCM16 at a supported rate, at most four MiB and forty-five seconds.
 Provider redirects, retries, oversized streams and malformed/truncated WAVs are
-rejected. Speech has a separate deadline capped at twenty-five seconds within a
-180-second chat request. Validated PCM and its rate are returned inline in a
+rejected. Local CPU synthesis has a sixty-second deadline, including cold initialization
+and phonemization, within the 180-second chat request. The optional HTTP provider
+retains its separate deadline capped at twenty-five seconds. Local deadline
+failures report `tts_timeout`; timed-out inference retains its slot until it
+actually finishes, without retrying or queuing new work. Validated PCM and its rate are returned inline in a
 `no-store` authenticated JSON response. Reply audio stays in bounded memory on
 both sides; no reply audio files or public download URLs are created.
 

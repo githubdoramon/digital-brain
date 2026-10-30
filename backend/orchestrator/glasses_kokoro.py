@@ -14,6 +14,9 @@ _worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="glasses-kokoro")
 _slot = threading.BoundedSemaphore(1)
 _engine = None
 _engine_key = None
+# CPU model initialization and phonemization share this budget with inference.
+# Keep it below the overall 180-second chat deadline, but above observed cold runs.
+LOCAL_TTS_TIMEOUT_SECONDS = 60
 
 
 def _generate(text):
@@ -76,6 +79,10 @@ async def synthesize_local(text):
         _slot.release()
         raise
     try:
-        return await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)), 25)
+        pending = asyncio.wrap_future(future)
+        # A timed-out caller no longer awaits the worker. Consume a possible late
+        # exception while retaining the slot until _generate actually completes.
+        pending.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return await asyncio.wait_for(asyncio.shield(pending), LOCAL_TTS_TIMEOUT_SECONDS)
     except TimeoutError:
-        raise SpeechUnavailable("tts_failed") from None
+        raise SpeechUnavailable("tts_timeout") from None
