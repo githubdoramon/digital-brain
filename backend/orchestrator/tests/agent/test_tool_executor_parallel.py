@@ -173,3 +173,25 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
     assert repaired["contact_id"] == "contact:avery-acme-example"
     assert repaired["place_id"] == "place:home-springfield"
     assert repaired["contact_ids"] == ["contact:avery-acme-example"]
+
+
+def test_successful_search_feedback_does_not_bypass_tool_payload_budget():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+    result = {
+        "results": [
+            {
+                "id": f"event:{i}",
+                "kind": "event",
+                "title": "Beacon review",
+                "snippet": "Source evidence. " * 800,
+            }
+            for i in range(25)
+        ],
+        "count": 25,
+        "_validation": {"suggested_tools": ["get_events"]},
+    }
+    compact = coordinator.build_tool_message_payload("search_memories", result)
+    assert len(compact["results"]) < 25
+    assert compact["_validation"] == result["_validation"]
+    assert len(compact["results"][0]["snippet"]) < len(result["results"][0]["snippet"])
+    assert len(result["results"]) == 25

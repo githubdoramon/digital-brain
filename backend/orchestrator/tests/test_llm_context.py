@@ -500,3 +500,100 @@ def test_repeated_current_question_does_not_pin_the_whole_history():
         messages, context.CompactionPolicy(current_request=question["content"])
     )
     assert units == [(0, len(messages) - 1, None)]
+
+
+@pytest.mark.parametrize(
+    "validation",
+    [
+        {"suggested_tools": ["get_events"]},
+        {"status": "satisfied", "reason": "Read completed"},
+        {"status": "needs_more_tools", "suggested_tools": ["web_search"]},
+    ],
+)
+def test_successful_read_feedback_can_compact_without_losing_validation(validation):
+    from agent.llm_transport import _compaction_policy
+    from tools.registry import get_registry
+
+    registry = get_registry()
+    policy = _compaction_policy(registry.get_tool_definitions_for_groups(["memory"]))
+    assert {"search_memories", "get_message", "get_conversation"} <= policy.read_only_tools
+    fact = {
+        "id": "knowledge:one",
+        "kind": "knowledge",
+        "subject_ref": "contact:alex",
+        "subjects": ["contact:alex", "entity:beacon"],
+        "status": "uncertain",
+        "inferred": True,
+        "valid_until": "2026-12-31",
+        "evidence": [{"source_id": "source:one", "quote": "Original evidence. " * 7000}],
+    }
+    original = payload(
+        result_messages(
+            "search_memories", {"results": [fact], "count": 1, "_validation": validation}
+        )
+    )
+    snapshot = deepcopy(original)
+    assert context.estimate_input(original) > context.request_budget("smart-test").input_limit
+    fitted = context.prepare_request(
+        original,
+        summarize=lambda _: "Alex may work on Beacon; source evidence is uncertain.",
+        policy=policy,
+    )
+    assert context.estimate_input(fitted) <= context.request_budget("smart-test").input_limit
+    compact = json.loads(fitted["messages"][2]["content"])
+    refs = {item["path"]: item["value"] for item in compact["references"]}
+    assert refs["/_validation"] == validation
+    for key in ("subject_ref", "subjects", "status", "inferred", "valid_until"):
+        assert refs["/results/0/" + key] == fact[key]
+    assert refs["/results/0/evidence/0/source_id"] == "source:one"
+    assert fitted["messages"][2]["tool_call_id"] == "call-123"
+    assert original == snapshot
+
+
+@pytest.mark.parametrize(
+    "validation",
+    [
+        {"status": "failed"},
+        {"status": "need_user_input"},
+        {"warnings": ["Check source"]},
+        {"status": ["invalid-shape"]},
+    ],
+)
+def test_real_validation_failures_remain_protected(validation):
+    assert context.has_protected_tool_feedback({"results": [], "_validation": validation})
+
+
+def test_event_compaction_keeps_exact_attendee_identities_for_public_research():
+    people = [
+        {
+            "contact_id": "contact:alex",
+            "display_name": "Alex Carter",
+            "emails": ["alex@example.com"],
+        },
+        {
+            "contact_id": "contact:dana",
+            "display_name": "Dana Lewis",
+            "emails": ["dana@example.org"],
+        },
+    ]
+    result = {
+        "events": [
+            {
+                "id": "event:review",
+                "title": "Beacon review",
+                "people": people,
+                "summary": "Meeting notes. " * 9000,
+            }
+        ],
+        "count": 1,
+    }
+    fitted = context.prepare_request(
+        payload(result_messages("get_events", result)),
+        summarize=lambda _: "Beacon review discussed release timing.",
+        policy=context.CompactionPolicy(read_only_tools=frozenset({"get_events"})),
+    )
+    compact = json.loads(fitted["messages"][2]["content"])
+    refs = {item["path"]: item["value"] for item in compact["references"]}
+    for i, person in enumerate(people):
+        for key, value in person.items():
+            assert refs[f"/events/0/people/{i}/{key}"] == value

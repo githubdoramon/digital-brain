@@ -199,6 +199,25 @@ def _references(value: Any, path: str = "") -> list[dict[str, Any]]:
                 "end_date",
                 "title",
                 "kind",
+                "_validation",
+                "subject_ref",
+                "subjects",
+                "category",
+                "inferred",
+                "inference_reason",
+                "confidence",
+                "applicable_at",
+                "valid_from",
+                "valid_until",
+                "role",
+                "display_name",
+                "emails",
+                "sender_name",
+                "sender_external_id",
+                "outgoing",
+                "deleted_at",
+                "source_at",
+                "sent_at",
             } or key.endswith(("_id", "_ids")):
                 references.append({"path": pointer, "value": item})
             else:
@@ -206,18 +225,23 @@ def _references(value: Any, path: str = "") -> list[dict[str, Any]]:
     return references
 
 
-def _has_failure(value: Any) -> bool:
+def has_protected_tool_feedback(value: Any) -> bool:
     if isinstance(value, dict):
-        if (
-            value.get("valid") is False
-            or value.get("success") is False
-            or value.get("error")
-            or value.get("_validation")
-        ):
+        if value.get("valid") is False or value.get("success") is False or value.get("error"):
             return True
-        return any(_has_failure(item) for item in value.values())
+        validation = value.get("_validation")
+        if validation:
+            # Recommendations on a successful read are not execution failures.
+            # Preserve unknown feedback conservatively, including warnings and
+            # clarification/repair instructions that the model still must see.
+            if not isinstance(validation, dict) or (
+                set(validation) - {"status", "reason", "suggested_tools"}
+                or validation.get("status") not in (None, "satisfied", "needs_more_tools")
+            ):
+                return True
+        return any(has_protected_tool_feedback(item) for item in value.values())
     if isinstance(value, list):
-        return any(_has_failure(item) for item in value)
+        return any(has_protected_tool_feedback(item) for item in value)
     return False
 
 
@@ -275,7 +299,7 @@ def _candidates(messages, policy):
                 value = json.loads(msg.get("content", ""))
             except (TypeError, ValueError):
                 continue
-            if not _has_failure(value) and not (
+            if not has_protected_tool_feedback(value) and not (
                 isinstance(value, dict) and value.get("_context_compacted")
             ):
                 candidates.append((i, i + 1, _references(value)))

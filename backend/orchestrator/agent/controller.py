@@ -1029,6 +1029,12 @@ class AgentController:
                             yield {"type": "token", "content": follow_up_prompt}
                         break
 
+                    # Streaming must advance prerequisites just like the sync loop:
+                    # successful local discovery can reveal a missing web capability.
+                    goal_check = self._check_goal_completion(state, "")
+                    for action in goal_check["pending_actions"]:
+                        state.add_pending_action(action)
+
                     if self._should_escalate_tool_visibility(state):
                         tools = self._escalate_tool_visibility(
                             state=state,

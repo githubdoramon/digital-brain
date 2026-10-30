@@ -66,3 +66,23 @@ Regression coverage includes both controller loops with a scripted model,
 malformed arguments, irrelevant/wrong-date events, five attendees, ambiguity,
 continuations, premature UI completion, and owner-scoped PostgreSQL knowledge and
 participant retrieval. Scripted-model tests do not establish live-model behavior.
+
+## Context pressure and terminal stream failures
+
+Successful read results with validation recommendations remain eligible for context
+compaction. Only actual errors, repair/clarification statuses, warnings, or unknown
+validation feedback protect the full payload. Both tool-result sizing and the shared
+request compactor use this distinction. Memory search and conversation/message
+inspection declare read-only contracts; summaries retain exact source IDs, dates,
+uncertainty, applicability and validation recommendations. Stored evidence and the
+controller's original results are unchanged.
+
+After every streaming tool step, the controller rechecks outstanding evidence
+requirements before choosing the next visible tool set, matching non-streaming
+behavior. Thus attendee discovery can reveal a required web capability immediately.
+
+An emitted error event is terminal for the run-status API even when no Python
+exception escapes. Producer exit without a terminal event also fails the run;
+cancellation and detached producer completion have terminal guards. Connected
+clients and polling clients receive the same failure state. Context overflow is
+reported with an actionable retry message rather than a provider error code.

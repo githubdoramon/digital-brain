@@ -1028,12 +1028,9 @@ class ToolExecutionCoordinator:
 
     def _should_preserve_raw_tool_result(self, result: dict[str, Any]) -> bool:
         """Keep validation and execution failures intact for model-visible repair."""
-        if result.get("valid") is False:
-            return True
-        if result.get("error"):
-            return True
-        validation = result.get("_validation")
-        return bool(isinstance(validation, dict) and validation)
+        from llm_context import has_protected_tool_feedback
+
+        return has_protected_tool_feedback(result)
 
     def _compact_search_memories_result(
         self,
@@ -1333,6 +1330,8 @@ class ToolExecutionCoordinator:
             payload = self._compact_summarize_memories_result(result, aggressive=aggressive)
         else:
             payload = result
+        if result.get("_validation"):
+            payload = {**payload, "_validation": result["_validation"]}
         return self._annotate_budget_compaction(payload, result, aggressive=aggressive)
 
     def _annotate_budget_compaction(

@@ -296,8 +296,11 @@ def test_lexical_title_query_keeps_distinctive_topic():
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("memory_first", [False, True])
 @pytest.mark.asyncio
-async def test_complete_controller_flow_recovers_and_covers_every_participant(monkeypatch, stream):
+async def test_complete_controller_flow_recovers_and_covers_every_participant(
+    monkeypatch, stream, memory_first
+):
     from agent.router import IntentClassification
     from time_context import use_time_context
 
@@ -310,9 +313,9 @@ async def test_complete_controller_flow_recovers_and_covers_every_participant(mo
 
     async def route(*args, **kwargs):
         return IntentClassification(
-            intent=IntentType.WEB_SEARCH,
+            intent=IntentType.MEMORY_SEARCH if memory_first else IntentType.WEB_SEARCH,
             confidence=0.99,
-            allowed_tool_groups=["web"],
+            allowed_tool_groups=["memory"] if memory_first else ["web"],
             contact_references=[],
         )
 
@@ -354,7 +357,11 @@ async def test_complete_controller_flow_recovers_and_covers_every_participant(mo
     )
     responses = iter(
         [
-            {"message": {"tool_calls": [call("web_search", {"query": "Beacon team"})]}},
+            *(
+                []
+                if memory_first
+                else [{"message": {"tool_calls": [call("web_search", {"query": "Beacon team"})]}}]
+            ),
             {
                 "message": {
                     "tool_calls": [call("get_events", {"action": "by_time_span", "limit": "10"})]
@@ -373,6 +380,9 @@ async def test_complete_controller_flow_recovers_and_covers_every_participant(mo
     )
 
     def llm(messages, tools):
+        if memory_first:
+            names = {tool["function"]["name"] for tool in tools}
+            assert ("web_search" in names) == bool(executed)
         assert {"get_events", "lookup_contact", "search_memories"} <= {
             tool["function"]["name"] for tool in tools
         }

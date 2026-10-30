@@ -64,6 +64,7 @@ def _track_detached_ask_task(
     def _discard(done_task: asyncio.Task[Any]) -> None:
         _detached_ask_tasks.discard(done_task)
         if done_task.cancelled():
+            _fail_unfinished_ask_run(run_id, cancelled=True)
             logger.info(
                 "[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id
             )
@@ -75,6 +76,7 @@ def _track_detached_ask_task(
                 "[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id
             )
             return
+        _fail_unfinished_ask_run(run_id)
         if exc:
             logger.warning(
                 "[ask/stream] detached producer failed run=%s thread=%s: %s",
@@ -741,6 +743,13 @@ def create_chat_router() -> APIRouter:
                                 status="running",
                                 status_message=f"Using {name}...",
                             )
+                        elif event_type == "error":
+                            error_payload = _ask_run_error_payload(event)
+                            _touch_ask_run(
+                                run_id, status="failed", status_message=None, result=None,
+                                error=error_payload,
+                            )
+                            event = {"type": "error", **error_payload}
                         elif event_type == "done":
                             _touch_ask_run(
                                 run_id,
@@ -772,6 +781,11 @@ def create_chat_router() -> APIRouter:
 
                         if not disconnect_event.is_set():
                             await queue.put(event)
+                        if event_type == "error":
+                            return
+                except asyncio.CancelledError:
+                    _fail_unfinished_ask_run(run_id, cancelled=True)
+                    raise
                 except Exception as exc:
                     if isinstance(exc, LLMUnavailableError):
                         error_payload = _llm_unavailable_error_payload()
@@ -785,18 +799,22 @@ def create_chat_router() -> APIRouter:
                             await queue.put({"type": "error", **error_payload})
                         return
                     logger.exception("[ask/stream] error session=%s", ctx.session_id)
+                    error_payload = _ask_run_error_payload({"message": str(exc)})
                     _touch_ask_run(
-                        run_id,
-                        status="failed",
-                        status_message=None,
-                        error={"code": "execution_error", "message": str(exc)},
+                        run_id, status="failed", status_message=None, result=None,
+                        error=error_payload,
                     )
                     if not disconnect_event.is_set():
-                        await queue.put({"type": "error", "message": str(exc)})
+                        await queue.put({"type": "error", **error_payload})
                 finally:
-                    delete_staged_chat_media_attachments(staged_media_attachments)
-                    if not disconnect_event.is_set():
-                        await queue.put(None)
+                    terminal_error = _fail_unfinished_ask_run(run_id)
+                    try:
+                        delete_staged_chat_media_attachments(staged_media_attachments)
+                    finally:
+                        if not disconnect_event.is_set():
+                            if terminal_error:
+                                await queue.put({"type": "error", **terminal_error})
+                            await queue.put(None)
 
             try:
                 yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session, 'run_id': run_id}, default=str)}\n\n"
@@ -1018,6 +1036,29 @@ def create_chat_router() -> APIRouter:
         return Response(status_code=204)
 
     return router
+
+
+def _ask_run_error_payload(event: dict[str, Any] | None = None) -> dict[str, str]:
+    event = event or {}
+    if event.get("code") == "llm_unavailable":
+        return _llm_unavailable_error_payload()
+    code = "context_length_exceeded" if (
+        event.get("code") == "context_length_exceeded"
+        or event.get("message") == "context_length_exceeded"
+    ) else "execution_error"
+    return {"code": code, "message": "I couldn’t finish this request. Please try again."}
+
+
+def _fail_unfinished_ask_run(run_id: str, *, cancelled: bool = False) -> dict[str, str] | None:
+    """Producer exit is terminal even if the generator omitted a done/error event."""
+    run = _ask_runs.get(run_id)
+    if not run or run.get("status") != "running":
+        return None
+    error = {"code": "run_cancelled" if cancelled else "stream_incomplete",
+             "message": "This request stopped before finishing. Please try again."}
+    _touch_ask_run(run_id, status="cancelled" if cancelled else "failed",
+                   status_message=None, result=None, error=error)
+    return error
 
 
 def _touch_ask_run(run_id: str, **updates: Any) -> None:
