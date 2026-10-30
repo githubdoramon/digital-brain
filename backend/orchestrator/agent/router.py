@@ -25,6 +25,7 @@ from agent.contact_resolution import FAMILY_RELATIONSHIP_PATTERN, THIRD_PARTY_RE
 from memory_graph_terms import contains_personal_document_term
 from observability import trace
 from observability.mirador import timed_workflow_stage
+from tools.registry import ALWAYS_AVAILABLE_GROUPS
 from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 
 
@@ -39,7 +40,6 @@ class IntentType(str, Enum):
     HOME_CONTROL = "home_control"  # Home Assistant actions
     SKILL_EXECUTION = "skill_execution"  # Running skill scripts
     SYSTEM_COMMAND = "system_command"  # Bash commands
-    CONVERSATIONAL = "conversational"  # General chat, no tools needed
     UNKNOWN = "unknown"  # Fallback
 
 
@@ -96,7 +96,6 @@ INTENT_TOOL_MAP = {
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
-    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "visual", "pdf", "ui"],
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }
 
@@ -114,7 +113,6 @@ INTENT_PRE_RESOLVE_CONTACTS = {
     IntentType.HOME_CONTROL: False,
     IntentType.SKILL_EXECUTION: False,
     IntentType.SYSTEM_COMMAND: False,
-    IntentType.CONVERSATIONAL: False,
     IntentType.UNKNOWN: False,
 }
 
@@ -314,10 +312,10 @@ class IntentRouter:
         ]
         if any(kw in q_lower for kw in pdf_keywords):
             return IntentClassification(
-                intent=IntentType.CONVERSATIONAL,
+                intent=IntentType.UNKNOWN,
                 confidence=0.9,
-                allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONVERSATIONAL],
-                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
+                allowed_tool_groups=INTENT_TOOL_MAP[IntentType.UNKNOWN],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning="PDF generation keywords detected",
                 route_source=RouteSource.RULE,
             )
@@ -416,31 +414,6 @@ class IntentRouter:
                 route_source=RouteSource.RULE,
             )
 
-        # Conversational patterns (greetings, thanks, etc.)
-        conversational_keywords = [
-            "hello",
-            "hi ",
-            "hey ",
-            "thanks",
-            "thank you",
-            "goodbye",
-            "bye",
-            "how are you",
-            "good morning",
-            "good night",
-            "help",
-            "what can you do",
-        ]
-        if any(kw in q_lower for kw in conversational_keywords):
-            return IntentClassification(
-                intent=IntentType.CONVERSATIONAL,
-                confidence=0.9,
-                allowed_tool_groups=[],
-                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
-                reasoning="Conversational keywords detected",
-                route_source=RouteSource.RULE,
-            )
-
         # No clear match - return low confidence result
         return IntentClassification(
             intent=IntentType.UNKNOWN,
@@ -536,8 +509,7 @@ INTENT TYPES:
 - home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands and system management on a server
-- conversational: General chat, content drafting, or generated PDF/document creation requests that do not require a specialized retrieval/control intent.
-- unknown: If you are uncertain about the intent, pick this.
+- unknown: General conversation, drafting, document creation, or uncertainty. Direct answers are allowed when no evidence or action is needed; this route does not waive verification.
 
 Also decide whether pre-resolving contacts is beneficial when creating a answer for the user in upcoming steps:
 - Set `pre_resolve_contacts` to true when the query references a specific person by name,
@@ -549,7 +521,7 @@ Also decide whether pre-resolving contacts is beneficial when creating a answer 
      "which colleagues have I met recently?", "list everyone I met last month")
   - Aggregation or counting queries over interactions without a named person
     (e.g. "how many people did I meet this week?", "how many meetings did I have?")
-  - Web/home/system/conversational requests without specific people
+  - Web/home/system/general requests without specific people
   The agent can resolve contacts later during tool execution if needed.
 
 After applying CONTACT RELEVANCE above, for a user statement that shares useful
@@ -789,7 +761,7 @@ Respond using the required structured response. Keep reasoning brief."""
     def get_allowed_tools(self, classification: IntentClassification) -> list[str]:
         """Get flat list of allowed tool names from classification."""
         tools = []
-        for group in classification.allowed_tool_groups:
+        for group in [*classification.allowed_tool_groups, *ALWAYS_AVAILABLE_GROUPS]:
             tools.extend(TOOL_GROUPS.get(group, []))
         return list(set(tools))  # Deduplicate
 

@@ -714,7 +714,7 @@
         "message": "Write a friendly birthday greeting."
       },
       "expected": {
-        "intent": "conversational",
+        "intent": "unknown",
         "pre_resolve_contacts": "no",
         "should_generate_facts": "no"
       }
@@ -727,7 +727,7 @@
         "message": "I prefer morning meetings because I focus better then."
       },
       "expected": {
-        "intent": "conversational",
+        "intent": "unknown",
         "pre_resolve_contacts": "no",
         "should_generate_facts": "yes"
       }
@@ -811,7 +811,7 @@
         "message": "Prefiro respostas curtas e diretas."
       },
       "expected": {
-        "intent": "conversational",
+        "intent": "unknown",
         "pre_resolve_contacts": "no",
         "should_generate_facts": "yes"
       }
@@ -824,7 +824,7 @@
         "message": "Dana prefers early meetings."
       },
       "expected": {
-        "intent": "conversational",
+        "intent": "unknown",
         "pre_resolve_contacts": "no",
         "should_generate_facts": "no"
       }
@@ -837,7 +837,7 @@
         "message": "I had lunch with Robin at noon yesterday."
       },
       "expected": {
-        "intent": "conversational",
+        "intent": "unknown",
         "pre_resolve_contacts": "no",
         "should_generate_facts": "no"
       }

@@ -182,6 +182,9 @@ def search_memories(
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
+    title_hits = title_token_search(normalized_query, 50) if normalized_query else {}
+    for event_id, score in title_hits.items():
+        bm_events[event_id] = max(bm_events.get(event_id, 0.0), score)
     st_events = structured_candidates(
         span,
         list(people or []),
@@ -693,6 +696,26 @@ def vector_search_contacts(query: str, k: int = 20) -> list[tuple[str, float]]:
             (qvec, qvec, k),
         )
         return [(row["contact_id"], float(row["vscore"])) for row in cur.fetchall()]
+
+
+def title_token_search(query: str, k: int = 50) -> dict[str, float]:
+    """Recall literal topic/title matches even when expanded query terms are absent."""
+    from agent.evidence_requirements import topic_terms
+
+    terms = topic_terms(query)
+    if not terms:
+        return {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """WITH terms AS (SELECT unnest(%s::text[]) AS term)
+            SELECT e.id, count(*)::float / %s AS title_score
+            FROM events e JOIN terms ON
+                to_tsvector('simple', unaccent(coalesce(e.title,''))) @@
+                plainto_tsquery('simple', unaccent(terms.term))
+            GROUP BY e.id ORDER BY title_score DESC, e.id LIMIT %s""",
+            (terms, len(terms), k),
+        )
+        return {row["id"]: 3.0 * float(row["title_score"]) for row in cur.fetchall()}
 
 
 def bm25_search(query: str, k: int = 50):

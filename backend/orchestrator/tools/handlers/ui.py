@@ -45,15 +45,18 @@ def handle_emit_ui_directive(
 
     fallback_text = directive.get("fallback_text") or "Please provide more details."
 
+    needs_input = any(block.get("type") in {"clarification_form", "choice_buttons"}
+                      for block in directive.get("blocks", []) if isinstance(block, dict))
     if state is not None:
         state.ui_directives = directive
-        state.add_question(fallback_text)
+        if needs_input:
+            state.add_question(fallback_text)
         state.add_fact("Prepared structured follow-up UI for the user")
 
     return {
         "success": True,
         "message": fallback_text,
-        "needs_user_input": True,
+        "needs_user_input": needs_input,
         "directive": directive,
     }
 

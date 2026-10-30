@@ -18,6 +18,7 @@ TOOL_GROUPS = {
         "lookup_contact_places",
         "lookup_place_contacts",
     ],
+    "contact_read": ["resolve_contacts", "lookup_contact", "lookup_places", "lookup_contact_places", "lookup_place_contacts"],
     "web": ["web_search", "fetch_web_page"],
     "visual": ["visual_inspect"],
     "home": ["home_assistant"],
@@ -54,7 +55,7 @@ flowchart LR
 - `HOME_CONTROL`: `home`
 - `SKILL_EXECUTION`: `skills`, `memory`
 - `SYSTEM_COMMAND`: `system`
-- `CONVERSATIONAL`: `memory`, `resolution`, `web`, `visual`, `pdf`, `ui`
+- General discussion and drafting use `UNKNOWN`; there is no conversational intent or completion exemption.
 - `UNKNOWN`: all groups
 
 ## Policy Summary
@@ -106,3 +107,19 @@ Negative examples:
 - Updating router intent mappings without updating registry groups.
 - Forgetting that medium tier always includes `resolution` by policy.
 - Assuming all requests are narrowed; low confidence intentionally fails open.
+
+## Shared read capabilities and recovery
+
+Every route retains `memory`, `contact_read`, `graph`, and `ui`. The separate
+`contact_read` group excludes `select_contacts`, whose group-management actions
+can write state. Voice restrictions and execution validation remain authoritative.
+Routing selects an initial strategy and additional tools, rather than excluding
+personal evidence from mixed web-research requests.
+
+Rejected arguments and malformed JSON are recorded as failed attempts. Read tools
+can normalize integer strings and JSON array strings before strict contract
+validation; unknown parameters, invalid array members and bounds still fail.
+Hidden registered tool attempts, validator recommendations for hidden tools,
+failed final verification and repeated failure/no-progress can widen visibility
+once, within the existing budgets. Presentation-only info cards never request input.
+See [RETRIEVAL_RECOVERY.md](RETRIEVAL_RECOVERY.md) for source prerequisites and checks.

@@ -213,8 +213,16 @@ class ToolExecutionCoordinator:
                 else f"Invalid JSON arguments: {raw_args}"
             )
             trace.trace_tool_error(tool_name, error_message)
-            return {"error": error_message}
+            return self._finalize_early_tool_result(
+                tool_name=tool_name, args={}, result={"error": error_message}, state=state,
+                run_id=run_id, call_id=call_id, default_summary="Invalid JSON arguments",
+            )
 
+        if not isinstance(args, dict):
+            return self._finalize_early_tool_result(
+                tool_name=tool_name, args={}, result={"error": "Arguments must be a JSON object"},
+                state=state, run_id=run_id, call_id=call_id, default_summary="Invalid arguments",
+            )
         if isinstance(args, dict):
             args = {key: value for key, value in args.items() if value is not None}
             args = self._repair_reference_ids(args=args, state=state)
@@ -223,6 +231,15 @@ class ToolExecutionCoordinator:
         trace.trace_tool_call_start(tool_name, observed_args)
         trace.trace_tool_lifecycle_start(tool_name, call_id, observed_args)
 
+        if tool_name in {"web_search", "fetch_web_page"}:
+            requirements = self.controller._inspect_evidence_requirements(state)
+            if requirements["required"] and "Inspect linked participants" not in requirements["completed"]:
+                return self._finalize_early_tool_result(
+                    tool_name=tool_name, args=args, state=state, run_id=run_id, call_id=call_id,
+                    result={"error": requirements["missing"][0], "_prerequisite_blocked": True,
+                            "_validation": {"status": "needs_more_tools", "suggested_tools": ["get_events"]}},
+                    default_summary="Personal evidence required before external research",
+                )
         if tool_name == "resolve_contacts":
             blocked_result = self.controller._block_redundant_contact_resolution(state, args)
             if blocked_result is not None:
@@ -327,7 +344,12 @@ class ToolExecutionCoordinator:
                     validation_errors=validation.errors,
                     repair_attempt=state.repair_count,
                 )
-                return validation.to_feedback()
+                feedback = validation.to_feedback()
+                feedback["_validation"] = {"status": "failed", "suggested_tools": [tool_name]}
+                return self._finalize_early_tool_result(
+                    tool_name=tool_name, args=args, result=feedback, state=state,
+                    run_id=run_id, call_id=call_id, default_summary="Arguments rejected before execution",
+                )
             if isinstance(normalized_args, dict):
                 args = normalized_args
                 args = self._repair_reference_ids(args=args, state=state)
@@ -373,6 +395,15 @@ class ToolExecutionCoordinator:
             )
         duration_ms = (perf_counter() - step_start) * 1000
 
+        if tool_name in {"web_search", "fetch_web_page"}:
+            requirements = self.controller._inspect_evidence_requirements(state)
+            if requirements["required"] and "Inspect linked participants" not in requirements["completed"]:
+                return self._finalize_early_tool_result(
+                    tool_name=tool_name, args=args, state=state, run_id=run_id, call_id=call_id,
+                    result={"error": requirements["missing"][0], "_prerequisite_blocked": True,
+                            "_validation": {"status": "needs_more_tools", "suggested_tools": ["get_events"]}},
+                    default_summary="Personal evidence required before external research",
+                )
         if tool_name == "resolve_contacts":
             self.controller._update_contact_resolution_state(state, args, result)
             self._track_resolved_contact_candidates(state, args, result)
@@ -459,6 +490,8 @@ class ToolExecutionCoordinator:
                 suggested_tools=post_result.suggested_next_tools,
             )
 
+            if post_result.suggested_next_tools:
+                result.setdefault("_validation", {})["suggested_tools"] = post_result.suggested_next_tools
             for fact in post_result.extracted_facts:
                 state.add_fact(fact)
                 trace.trace_fact_extracted(fact)
@@ -1031,6 +1064,12 @@ class ToolExecutionCoordinator:
                 "tags": row.get("tags"),
                 "types": row.get("types"),
             }
+            if row.get("kind") == "knowledge":
+                for key in ("knowledge_id", "statement", "subject_ref", "subjects", "category",
+                            "status", "inferred", "inference_reason", "confidence", "valid_from",
+                            "valid_until", "evidence", "context", "updated_at", "revision"):
+                    if key in row:
+                        compact_row[key] = row[key]
             if row.get("kind") == "conversation":
                 for key in ("thread_id", "message_id", "role", "created_at", "source_items"):
                     compact_row[key] = row.get(key)

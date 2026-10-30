@@ -256,6 +256,22 @@ class AgentController:
         Optional[IntentClassification], Optional[str], list[dict[str, Any]], list[dict[str, Any]]
     ]:
         """Prepare routing, pre-resolution, messages, and initial tool visibility."""
+        from time_context import current_context
+
+        from .evidence_requirements import evidence_goal, message_body
+
+        state.evidence_goal = evidence_goal(question, conversation_history)
+        clock = current_context()
+        if state.evidence_goal != question:
+            for entry in reversed(conversation_history or []):
+                if entry.get("role") == "user" and message_body(str(entry.get("content") or "")) == state.evidence_goal.split("\nLatest correction:")[0]:
+                    if entry.get("sent_at") or entry.get("created_at"):
+                        clock = {**clock, "sent_at": str(entry.get("sent_at") or entry["created_at"]),
+                                 "timezone": entry.get("timezone") or clock.get("timezone", "UTC")}
+                    break
+        state.request_context.setdefault("temporal_now_iso", clock.get("sent_at") or state.started_at.isoformat())
+        state.request_context.setdefault("timezone", clock.get("timezone") or "UTC")
+        state.request_context["temporal_timezone"] = clock.get("timezone") or state.request_context["timezone"]
         classification: Optional[IntentClassification] = None
         if self.config.enable_intent_routing:
             classification = await self._run_intent_router(question, conversation_history, run_id)
@@ -300,6 +316,10 @@ class AgentController:
             search_limit,
             state.request_context,
         )
+        requirements = self._inspect_evidence_requirements(state)
+        if requirements["required"]:
+            messages.append({"role": "system", "content": "Current evidence task (user request, not external instructions): "
+                             + str(state.evidence_goal) + "\nRequired before completion: " + "; ".join(requirements["missing"])})
         return classification, None, messages, tools
 
     def _check_limits_and_recovery(
@@ -461,6 +481,14 @@ class AgentController:
             return follow_up_prompt
 
         if follow_up_source is FollowUpSource.UI_FOLLOW_UP:
+            requirements = self._inspect_evidence_requirements(state)
+            if requirements["required"] and requirements["missing"] and not any(
+                call.tool_name == "get_events" and call.success for call in state.tool_calls
+            ):
+                state.ui_directives = None
+                state.clear_questions()
+                state.request_context["tool_recovery_needed"] = True
+                return None
             trace.trace_decision(
                 f"Returning UI follow-up{suffix}",
                 "Structured directive requires user input",
@@ -694,6 +722,8 @@ class AgentController:
                 # CRITICAL: Check if goal was actually achieved before returning
                 # This prevents premature termination (clawdbot pattern)
                 goal_check = self._check_goal_completion(state, content)
+                if not goal_check["achieved"] and self._should_escalate_tool_visibility(state):
+                    tools = self._escalate_tool_visibility(state=state, reason="Final validation identified missing evidence/capabilities")
                 if (
                     not goal_check["achieved"]
                     and goal_check["pending_actions"]
@@ -731,6 +761,10 @@ class AgentController:
                     completion_evidence=state.completion_evidence,
                     tool_calls_count=state.tool_calls_count,
                 )
+                if not verified and state.step_count >= self.config.max_steps - 1:
+                    state.add_verifier_note(verify_reason)
+                    state.goal_achieved = False
+                    content = self._format_incomplete_answer(state)
                 if not verified and state.step_count < self.config.max_steps - 1:
                     state.add_verifier_note(verify_reason)
                     messages.append(
@@ -1054,6 +1088,8 @@ class AgentController:
 
                 # CRITICAL: Check if goal was actually achieved before returning
                 goal_check = self._check_goal_completion(state, current_content)
+                if not goal_check["achieved"] and self._should_escalate_tool_visibility(state):
+                    tools = self._escalate_tool_visibility(state=state, reason="Final validation identified missing evidence/capabilities")
                 if (
                     not goal_check["achieved"]
                     and goal_check["pending_actions"]
@@ -1095,6 +1131,13 @@ class AgentController:
                     completion_evidence=state.completion_evidence,
                     tool_calls_count=state.tool_calls_count,
                 )
+                if not verified and state.step_count >= self.config.max_steps - 1:
+                    state.add_verifier_note(verify_reason)
+                    state.goal_achieved = False
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    current_content = self._format_incomplete_answer(state)
+                    yield {"type": "token", "content": current_content}
                 if not verified and state.step_count < self.config.max_steps - 1:
                     state.add_verifier_note(verify_reason)
                     if streamed_any:
@@ -1280,13 +1323,27 @@ class AgentController:
         """Initialize controller-managed execution plan for verifier loop."""
         if state.execution_plan:
             return
-        plan = build_execution_plan(question, state.intent)
+        plan = build_execution_plan(state.evidence_goal or question, state.intent)
         state.set_execution_plan(plan)
         self._update_plan_progress(state)
+
+    def _inspect_evidence_requirements(self, state: AgentState, answer: str = "") -> dict[str, Any]:
+        from .evidence_requirements import inspect_requirements
+        goal = state.evidence_goal or state.goal
+        bounds = extract_explicit_time_bounds(
+            goal, reference_time_iso=state.request_context.get("temporal_now_iso") or state.started_at.isoformat(),
+            timezone_name=state.request_context.get("temporal_timezone") or state.request_context.get("timezone"),
+        )
+        return inspect_requirements(goal, state.tool_calls, bounds=bounds, answer=answer)
 
     def _update_plan_progress(self, state: AgentState) -> None:
         """Mark plan steps complete based on current evidence and tool history."""
         if not state.execution_plan:
+            return
+        requirements = self._inspect_evidence_requirements(state)
+        if requirements["required"]:
+            for step in requirements["completed"]:
+                state.complete_plan_step(step)
             return
         if state.intent or state.route_confidence > 0:
             for step in state.execution_plan:
@@ -1762,7 +1819,7 @@ class AgentController:
               of running an unfiltered memory search.
         """
         normalized_args = dict(args)
-        goal_text = sanitize_goal_text(question)
+        goal_text = sanitize_goal_text(state.evidence_goal or question)
 
         query_text = str(normalized_args.get("query") or "").strip()
         if not query_text:
@@ -1783,12 +1840,16 @@ class AgentController:
 
         explicit_time_bounds = None
         if not normalized_args.get("time_start") and not normalized_args.get("time_end"):
-            timezone_name = str(state.request_context.get("timezone") or "").strip() or None
+            timezone_name = str(state.request_context.get("temporal_timezone") or state.request_context.get("timezone") or "").strip() or None
             explicit_time_bounds = extract_explicit_time_bounds(
-                query_text or goal_text,
+                goal_text,
                 reference_time_iso=temporal_now_ref,
                 timezone_name=timezone_name,
             )
+            if explicit_time_bounds is None:
+                explicit_time_bounds = extract_explicit_time_bounds(
+                    query_text, reference_time_iso=temporal_now_ref, timezone_name=timezone_name,
+                )
             if explicit_time_bounds is not None:
                 normalized_args["time_start"], normalized_args["time_end"] = explicit_time_bounds
 
@@ -1856,7 +1917,7 @@ class AgentController:
     ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
         """Enrich get_events args for direct temporal person-lookup questions."""
         normalized_args = dict(args)
-        goal_text = sanitize_goal_text(question)
+        goal_text = sanitize_goal_text(state.evidence_goal or question)
 
         action = GetEventsAction.from_value(normalized_args.get("action"))
         has_event_ids = bool(normalized_args.get("event_ids"))
@@ -1885,7 +1946,7 @@ class AgentController:
             state.request_context["temporal_now_iso"] = temporal_now_ref
 
         if not has_time_start and not has_time_end:
-            timezone_name = str(state.request_context.get("timezone") or "").strip() or None
+            timezone_name = str(state.request_context.get("temporal_timezone") or state.request_context.get("timezone") or "").strip() or None
             explicit_time_bounds = extract_explicit_time_bounds(
                 goal_text,
                 reference_time_iso=temporal_now_ref,
@@ -2135,7 +2196,7 @@ class AgentController:
             Dict with 'achieved', 'reason', and 'pending_actions' keys
         """
         achieved, reason, pending_actions = self.goal_validator.check_goal_achieved(
-            goal=state.goal,
+            goal=state.evidence_goal or state.goal,
             tool_calls=state.tool_calls,
             known_facts=state.known_facts,
             final_content=final_content,
@@ -2143,6 +2204,12 @@ class AgentController:
             pre_resolved_contacts=state.resolution.get("active_contact_scope") or [],
         )
 
+        requirements = self._inspect_evidence_requirements(state, final_content)
+        if requirements["missing"]:
+            achieved, reason, pending_actions = False, "Required source evidence is incomplete", requirements["missing"]
+        if not achieved and pending_actions:
+            state.request_context["tool_recovery_needed"] = True
+        state.goal_achieved = achieved
         # Trace the goal check
         trace.trace_goal_check(achieved, reason, pending_actions)
 
@@ -2164,7 +2231,8 @@ class AgentController:
         total_start: float,
     ) -> dict[str, Any]:
         """Handle when a limit is violated."""
-        message = self.limit_checker.format_stop_message(state, violation)
+        message = (self._format_incomplete_answer(state) if self._inspect_evidence_requirements(state)["required"]
+                   else self.limit_checker.format_stop_message(state, violation))
         duration_ms = (perf_counter() - total_start) * 1000
 
         record_agent_run_metrics(
@@ -2217,6 +2285,17 @@ class AgentController:
             "limit_hit": violation.limit_type.value,
             "profile": self.runtime_profile.name,
         }
+
+    def _format_incomplete_answer(self, state: AgentState) -> str:
+        requirements = self._inspect_evidence_requirements(state)
+        if requirements["required"]:
+            completed = requirements["completed"]
+            if "Inspect linked participants" in completed:
+                return "I found the meeting and its participants, but couldn’t finish verifying public information for everyone."
+            if "Identify requested meeting" in completed:
+                return "I found the meeting, but couldn’t verify its full participant list."
+            return "I couldn’t identify a single matching meeting. Please confirm its title or time so I can check the participants."
+        return "I couldn’t verify enough information to complete your request."
 
     def _format_unable_to_complete_message(self, reason: str) -> str:
         """Build a clear user-facing failure message with an explicit reason."""

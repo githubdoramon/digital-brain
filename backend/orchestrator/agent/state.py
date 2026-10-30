@@ -84,6 +84,7 @@ class AgentState:
 
     # Core task tracking
     goal: str
+    evidence_goal: str | None = None
     current_thread_id: str | None = None
     constraints: list[str] = field(default_factory=list)
 
@@ -727,6 +728,7 @@ class AgentState:
         """
         return {
             "goal": self.goal,
+            "evidence_goal": self.evidence_goal,
             "intent": self.intent,
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
@@ -755,6 +757,7 @@ class AgentState:
         """Full serialization for logging/debugging."""
         return {
             "goal": self.goal,
+            "evidence_goal": self.evidence_goal,
             "constraints": self.constraints,
             "known_facts": self.known_facts,
             "completed_actions": self.completed_actions,

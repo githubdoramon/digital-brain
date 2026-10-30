@@ -261,7 +261,7 @@ class PostExecutionValidator:
                         f"Got {len(results)} results, evaluating"
                         if top_candidate is None
                         else (
-                            f"Got {len(results)} results with a relevant "
+                            f"Got {len(results)} results with an unverified "
                             f"{top_candidate.get('kind') or 'information'!s} candidate"
                         )
                     ),
@@ -361,7 +361,8 @@ class PostExecutionValidator:
                     or "Structured follow-up requested from user"
                 )
                 return PostExecutionResult(
-                    coverage=GoalCoverage.NEED_USER_INPUT,
+                    coverage=(GoalCoverage.NEED_USER_INPUT if result.get("needs_user_input", True)
+                              else GoalCoverage.NEEDS_MORE_TOOLS),
                     reason=reason,
                     extracted_facts=["Prepared structured UI follow-up"],
                 )
@@ -533,6 +534,7 @@ Rules:
                         "id": event.get("id") or event.get("event_id"),
                         "title": event.get("title"),
                         "start_date": event.get("start_date"),
+                        "people": event.get("people"),
                         "summary": str(event.get("summary") or "")[:3000],
                         "tags": event.get("tags"),
                         "types": event.get("types"),
@@ -656,7 +658,7 @@ Rules:
             rows = result.get("results", [])
             count = result.get("count", len(rows))
             if count > 0:
-                facts.append(f"Found {count} relevant memories")
+                facts.append(f"Retrieved {count} memory candidates; relevance requires inspection")
             if isinstance(rows, list):
                 top_candidate = self._select_top_search_candidate(rows)
                 if top_candidate is not None:
@@ -902,23 +904,15 @@ class GoalCompletionValidator:
         Returns:
             Tuple of (achieved: bool, reason: str, pending_actions: list[str])
         """
-        # Conversational intent: don't require tool execution or document
-        # inspection. A substantive text response is sufficient.
-        if intent == "conversational":
-            if final_content and len(final_content.strip()) > 20:
-                return (True, "Conversational response generated", [])
-            if not tool_calls:
-                # No tool calls and no content yet — let the loop continue
-                # but don't impose query/action obligations
-                if final_content:
-                    return (True, "Response generated", [])
-                return (False, "No response generated yet", [])
-
         goal_lower = goal.lower()
 
         # Determine goal type
-        is_action_goal = any(p in goal_lower for p in self.ACTION_PATTERNS)
-        is_query_goal = any(p in goal_lower for p in self.QUERY_PATTERNS)
+        is_action_goal = intent not in {"memory_search", "data_query", "contact_lookup", "web_search"} and any(
+            re.search(r"\b" + re.escape(pattern) + r"\b", goal_lower) for pattern in self.ACTION_PATTERNS
+        )
+        is_query_goal = intent in {"memory_search", "data_query", "contact_lookup", "web_search"} or any(
+            p in goal_lower for p in self.QUERY_PATTERNS
+        )
 
         # Check for discovery-only pattern (generic across all tools)
         discovery_check = self._check_discovery_without_execution(tool_calls, known_facts)
@@ -1186,7 +1180,7 @@ class GoalCompletionValidator:
         ]
         result_facts = [f for f in known_facts if any(w in f.lower() for w in result_indicators)]
 
-        if result_facts:
+        if result_facts and has_successful_results:
             if required_detail_tool and not has_required_detail:
                 return (
                     False,
@@ -1220,10 +1214,6 @@ class GoalCompletionValidator:
                 "Query executed but returned no results",
                 ["Try different search terms or alternative tools"],
             )
-
-        # Check if final content has substantive information
-        if final_content and len(final_content.strip()) > 50:
-            return (True, "Response contains substantive information", [])
 
         return (
             False,

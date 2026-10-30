@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tools.registry import ALWAYS_AVAILABLE_GROUPS
+from tools.registry import ALWAYS_AVAILABLE_GROUPS, TOOL_TO_GROUPS
 
 from .enums import ConfidenceTier, ToolVisibilityMode
 from .limits import LimitType
@@ -100,6 +100,15 @@ def should_escalate_tool_visibility(
     }:
         return True
 
+    if state.request_context.get("tool_recovery_needed"):
+        return True
+    latest = state.last_tool_call
+    if latest:
+        suggested = (latest.result or {}).get("_validation", {}).get("suggested_tools", [])
+        for name in [latest.tool_name, *suggested]:
+            groups = TOOL_TO_GROUPS.get(name, [])
+            if groups and not set(groups) & set(state.allowed_tool_groups):
+                return True
     recent_calls = state.get_recent_tool_calls(2)
     if len(recent_calls) < 2:
         return False

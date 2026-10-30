@@ -26,7 +26,6 @@ class TestIntentType:
             "home_control",
             "skill_execution",
             "system_command",
-            "conversational",
             "unknown",
         ]
 
@@ -37,7 +36,7 @@ class TestIntentType:
         """Test IntentType string values."""
         assert IntentType.MEMORY_SEARCH.value == "memory_search"
         assert IntentType.DATA_QUERY.value == "data_query"
-        assert IntentType.CONVERSATIONAL.value == "conversational"
+        assert IntentType.UNKNOWN.value == "unknown"
 
 
 class TestIntentClassification:
@@ -116,10 +115,10 @@ class TestIntentToolMap:
         # memory remains as a semantic fallback for hybrid quantitative + qualitative queries
         assert "memory" in groups
 
-    def test_conversational_has_visual_web_pdf_and_ui_tools(self):
-        """Test CONVERSATIONAL intent has visual, creation, web, and UI tools."""
-        groups = INTENT_TOOL_MAP[IntentType.CONVERSATIONAL]
-        assert groups == ["memory", "resolution", "web", "visual", "pdf", "ui"]
+    def test_fallback_has_visual_web_pdf_and_ui_tools(self):
+        """Test fallback route has visual, creation, web, and UI tools."""
+        groups = INTENT_TOOL_MAP[IntentType.UNKNOWN]
+        assert {"memory", "resolution", "web", "visual", "pdf", "ui"} <= set(groups)
 
     def test_unknown_has_all_tools(self):
         """UNKNOWN remains the catch-all that exposes every tool group."""
@@ -198,9 +197,9 @@ class TestRuleBasedClassification:
 
     def test_follow_up_doc_statement_reuses_memory_graph_context(self, router):
         classification = IntentClassification(
-            intent=IntentType.CONVERSATIONAL,
+            intent=IntentType.UNKNOWN,
             confidence=0.9,
-            allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONVERSATIONAL],
+            allowed_tool_groups=INTENT_TOOL_MAP[IntentType.UNKNOWN],
             pre_resolve_contacts=False,
         )
 
@@ -228,8 +227,8 @@ class TestRuleBasedClassification:
             assert result is not None
             assert result.intent == IntentType.DATA_QUERY
 
-    def test_conversational_keywords(self, router):
-        """Test conversational intent detection via rule-based."""
+    def test_greetings_do_not_disable_tools(self, router):
+        """Greetings use the general fallback without disabling retrieval."""
         questions = [
             "Hello there",
             "Thanks for your help",
@@ -239,7 +238,7 @@ class TestRuleBasedClassification:
         for question in questions:
             result = router._rule_based_classify(question)
             assert result is not None
-            assert result.intent == IntentType.CONVERSATIONAL
+            assert result.intent == IntentType.UNKNOWN
 
     def test_system_command_keywords(self, router):
         """Test system command intent detection via rule-based."""
@@ -315,14 +314,14 @@ class TestGetAllowedTools:
     def test_get_allowed_tools_empty_groups(self, router):
         """Test getting tools for no groups."""
         classification = IntentClassification(
-            intent=IntentType.CONVERSATIONAL,
+            intent=IntentType.UNKNOWN,
             confidence=0.9,
             allowed_tool_groups=[],
         )
 
         tools = router.get_allowed_tools(classification)
 
-        assert tools == []
+        assert {"search_memories", "get_events", "lookup_contact", "query_graph"} <= set(tools)
 
     def test_get_all_tools(self, router):
         """Test getting all available tools."""

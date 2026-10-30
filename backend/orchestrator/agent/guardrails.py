@@ -276,6 +276,24 @@ def extract_explicit_time_bounds(
         except Exception:
             pass
 
+    # Relative calendar windows are explicit user constraints too. The generic
+    # date parser can recognize them but the absolute-date filter below rejects
+    # them, so resolve these against the trusted originating request clock here.
+    if not _EXPLICIT_DATE_HINT.search(text):
+        base = settings.get("RELATIVE_BASE") or datetime.now(request_tz)
+        relative_days = re.findall(r"\b(today|tomorrow|yesterday)\b", text, re.I)
+        if relative_days:
+            offsets = {"today": 0, "tomorrow": 1, "yesterday": -1}
+            starts = [(base + timedelta(days=offsets[word.lower()])).replace(
+                hour=0, minute=0, second=0, microsecond=0) for word in relative_days]
+            return min(starts).isoformat(), (max(starts) + timedelta(days=1) - timedelta(microseconds=1)).isoformat()
+        week = re.search(r"\b(this|last|next)\s+week\b", text, re.I)
+        if week:
+            offset = {"last": -1, "this": 0, "next": 1}[week.group(1).lower()]
+            start = (base - timedelta(days=base.weekday()) + timedelta(weeks=offset)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            return start.isoformat(), (start + timedelta(days=7) - timedelta(microseconds=1)).isoformat()
+
     found = search_dates(text, settings=settings)
     if not found:
         return None

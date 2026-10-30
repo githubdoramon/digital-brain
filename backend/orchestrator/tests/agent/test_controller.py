@@ -387,7 +387,7 @@ class TestToolExposurePolicy:
 
         tool_names = captured.get("tool_names", [])
         assert "home_assistant" in tool_names
-        assert "search_memories" not in tool_names
+        assert "search_memories" in tool_names
 
     @pytest.mark.asyncio
     async def test_medium_confidence_adds_resolution_group(self, monkeypatch):
@@ -836,7 +836,7 @@ class TestContactAwareMemorySearch:
         assert args.get("sort_order") == "oldest"
         assert args.get("limit") == 25
 
-    def test_future_temporal_query_sets_time_start_without_time_end(self, controller, monkeypatch):
+    def test_next_week_search_uses_strict_calendar_bounds(self, controller, monkeypatch):
         state = AgentState(goal="What meetings are scheduled with Gio next week?")
         monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
 
@@ -849,8 +849,8 @@ class TestContactAwareMemorySearch:
         )
 
         assert preempt is None
-        assert args.get("time_start") == "2026-02-07T12:00:00+00:00"
-        assert args.get("time_end") in {None, ""}
+        assert args.get("time_start") == "2026-02-09T00:00:00+00:00"
+        assert args.get("time_end") == "2026-02-15T23:59:59.999999+00:00"
 
     def test_explicit_calendar_date_sets_day_bounds(self, controller, monkeypatch):
         state = AgentState(goal="March 23rd is when we talked about it")
@@ -977,7 +977,7 @@ class TestContactAwareMemorySearch:
         assert "tags" not in args
         assert "types" not in args
 
-    def test_get_events_preparation_accepts_open_ended_future_query(self, controller, monkeypatch):
+    def test_get_events_preparation_uses_requested_week_bounds(self, controller, monkeypatch):
         state = AgentState(goal="What meetings are scheduled with Gio next week?")
         monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
 
@@ -990,8 +990,8 @@ class TestContactAwareMemorySearch:
         )
 
         assert preempt is None
-        assert args.get("time_start") == "2026-02-07T12:00:00+00:00"
-        assert args.get("time_end") in {None, ""}
+        assert args.get("time_start") == "2026-02-09T00:00:00+00:00"
+        assert args.get("time_end") == "2026-02-15T23:59:59.999999+00:00"
 
     def test_ensure_contact_scope_reuses_existing_scope_without_reresolving(
         self, controller, monkeypatch

@@ -3,8 +3,16 @@
 import os
 from datetime import datetime
 
+import pytest
+
 os.environ.setdefault("DOCUMENT_STORAGE_DIR", "/tmp/digital-brain-test-documents")
 import retrieval
+
+
+@pytest.fixture(autouse=True)
+def stub_title_discovery(monkeypatch):
+    # These tests isolate temporal ranking. Literal-title SQL has separate coverage.
+    monkeypatch.setattr(retrieval, "title_token_search", lambda *a, **k: {})
 
 
 def _event_row(event_id: str, start_date: datetime) -> dict:

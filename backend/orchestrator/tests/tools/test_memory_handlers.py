@@ -100,6 +100,8 @@ def test_search_memories_all_query_uses_unbounded_limit(monkeypatch):
 
 
 def test_search_memories_strips_self_contact_for_document_queries(monkeypatch):
+    import knowledge
+    monkeypatch.setattr(knowledge, "list_items", lambda *a, **k: [])
     import messaging_archive
     monkeypatch.setattr(messaging_archive, "search", lambda *a, **k: [])
     calls: dict[str, object] = {}

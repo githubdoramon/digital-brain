@@ -308,7 +308,11 @@ def get_conversation_history(thread_id: str, user_email: str) -> list[dict[str, 
         sent_at = clock.get("sent_at") or message.get("created_at")
         if sent_at:
             content = f"[Message sent at {sent_at}; timezone: {clock.get('timezone', 'unknown')}]\n{content}"
-        history.append({"role": role, "content": content})
+        item = {"role": role, "content": content}
+        if sent_at:
+            item["sent_at"] = str(sent_at)
+            item["timezone"] = str(clock.get("timezone") or "UTC")
+        history.append(item)
     return history
 
 

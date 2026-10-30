@@ -20,6 +20,8 @@ def get_memory_expert_protocol_prompt() -> str:
     return (
         "MEMORY EXPERT PROTOCOL:\n"
         "- Use tool_call for actions. Do not describe pseudo-calls in texts that will be returned to the user, only in internal thinking.\n"
+        "For meeting preparation/research: first use get_events with the original request's date bounds, identify the matching meeting, and inspect its linked participants and emails. Then research each actual participant. Company team members are not evidence of attendance. Ask only if event/identity ambiguity remains after reading stored evidence.\n"
+        "search_memories includes learned knowledge with evidence, uncertainty and validity dates. Treat returned rows as candidates, never infer relevance merely from a nonzero count.\n"
         "- Start with the narrowest retrieval that can answer the question. Expand the search scope if you do not find an answer.\n"
         "- Resolve people before broad memory search only when the user names specific people. Do not search by the user's own name for interaction-ranking questions.\n"
         "- For temporal questions, use explicit sort/time bounds and avoid repeated broad searches. Do not set limits for results in this case, given what matters is the time bound.\n"

@@ -83,6 +83,8 @@ def test_merge_sorts_by_message_date_and_keeps_unbounded_results():
 
 
 def test_memory_search_injects_owner_current_thread_and_time_scope(monkeypatch):
+    import knowledge
+    monkeypatch.setattr(knowledge, "list_items", lambda *a, **k: [])
     import messaging_archive
     monkeypatch.setattr(messaging_archive, "search", lambda *a, **k: [])
     monkeypatch.setitem(

@@ -34,6 +34,7 @@ TOOL_GROUPS = {
         "lookup_contact_places",
         "lookup_place_contacts",
     ],
+    "contact_read": ["resolve_contacts", "lookup_contact", "lookup_places", "lookup_contact_places", "lookup_place_contacts"],
     "web": ["web_search", "fetch_web_page"],
     "visual": ["visual_inspect"],
     "home": ["home_assistant"],
@@ -43,11 +44,10 @@ TOOL_GROUPS = {
     "system": ["bash"],
 }
 
-# Groups whose tools are exposed regardless of intent-based filtering. UI
-# directives are conversational primitives (clarification forms, choice
-# buttons, info cards) and any flow may need them to ask the user for
-# disambiguation or to surface follow-ups.
-ALWAYS_AVAILABLE_GROUPS: frozenset[str] = frozenset({"ui"})
+# Core read capabilities stay visible for mixed requests regardless of route.
+# This is discovery policy, not execution authorization; voice and mutation
+# checks still run at the execution boundary. UI remains available for clarification.
+ALWAYS_AVAILABLE_GROUPS: frozenset[str] = frozenset({"ui", "memory", "contact_read", "graph"})
 
 # Reverse mapping: tool name -> groups
 TOOL_TO_GROUPS: dict[str, list[str]] = {}
@@ -199,7 +199,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="search_memories",
             description=(
-                "Search personal events, notes, documents, past assistant conversations, and archived WhatsApp and Telegram messages. "
+                "Search learned facts and entity relationships with original evidence, personal events, notes, documents, past assistant conversations, and archived WhatsApp and Telegram messages. "
                 "External message retrieval is keyword-based: use concise topic words. Inspect message hits with get_message. "
                 "Conversation results preserve speaker, message date, thread_id and message_id; inspect them with get_conversation. "
                 "Contact/tag filters exclude conversations because chat mentions are not verified associations. "
@@ -212,8 +212,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             parameters=[
                 ToolParameter(
                     name="sources", type="array", required=False, items_type="string",
-                    description="Optional sources: event, document, conversation, message. Defaults to all. Message contact filters use confirmed sender or direct-chat counterpart links. Tags exclude external messages.",
-                    validator=lambda values: all(value in {"event", "document", "conversation", "message"} for value in values),
+                    description="Optional sources: event, document, conversation, message, knowledge. Defaults to all. Knowledge retains source evidence, uncertainty and applicability dates; tags exclude knowledge. Message contact filters use confirmed sender or direct-chat counterpart links. Tags exclude external messages.",
+                    validator=lambda values: all(value in {"event", "document", "conversation", "message", "knowledge"} for value in values),
                 ),
                 ToolParameter(
                     name="query",

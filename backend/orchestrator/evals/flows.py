@@ -574,7 +574,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                         "| Bob Example | Engineer | Owns API work |"
                     )
                 },
-                expected={"intent": "conversational", "pre_resolve_contacts": False},
+                expected={"intent": "unknown", "pre_resolve_contacts": False},
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
@@ -599,7 +599,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                         },
                     ],
                 },
-                expected={"intent": "conversational", "pre_resolve_contacts": False},
+                expected={"intent": "unknown", "pre_resolve_contacts": False},
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
@@ -613,7 +613,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 case_id="router-conversational-guidance",
                 title="Conversational guidance without greeting shortcut",
                 input={"question": "I am not sure where to start with this assistant yet."},
-                expected={"intent": "conversational", "pre_resolve_contacts": False},
+                expected={"intent": "unknown", "pre_resolve_contacts": False},
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
         ],

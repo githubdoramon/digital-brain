@@ -75,7 +75,7 @@ def handle_search_memories(
                             "Removed self contact from document-oriented search scope to avoid over-constraining legacy documents"
                         )
 
-    sources = set(args.get("sources") or ["event", "document", "conversation", "message"])
+    sources = set(args.get("sources") or ["event", "document", "conversation", "message", "knowledge"])
     search_result = (
         retrieval.search_memories(
             query,
@@ -133,11 +133,29 @@ def handle_search_memories(
             results, message_results, limit=limit, sort_order=sort_order,
         )
 
+    if "knowledge" in sources and kwargs.get("user_email") and not tags:
+        import knowledge
+        from conversation_search import merge_memory_results
+        from knowledge_references import contact_ref
+
+        owner = kwargs["user_email"]
+        # Each requested subject remains exact and owner-scoped. Do not silently truncate scopes.
+        subjects = [contact_ref(cid) for cid in contact_ids] or [None]
+        facts = {}
+        for subject in subjects:
+            for fact in knowledge.list_items(owner, query=query, subject=subject, limit=min(limit or 100, 100)):
+                facts[fact["knowledge_id"]] = fact
+        knowledge_results = [{**fact, "id": fact["knowledge_id"], "kind": "knowledge",
+                              "title": fact["statement"], "snippet": fact["statement"],
+                              "created_at": str(fact.get("updated_at") or "")}
+                             for fact in facts.values()]
+        results = merge_memory_results(results, knowledge_results, limit=limit, sort_order=sort_order)
+
     results = results if limit is None else results[:limit]
     _queue_retrieved_knowledge(kwargs.get("user_email"), results)
     # Update state if provided
     if state is not None and results:
-        state.add_fact(f"Found {len(results)} memories matching '{query}'")
+        state.add_fact(f"Found {len(results)} memory candidates for '{query}'")
 
     output = {"results": results, "count": len(results)}
     if conversation_scope_note:
@@ -388,6 +406,18 @@ def handle_get_events(
         kwargs.get("user_email"),
         [{"kind": "event", "id": e.get("id") or e.get("event_id")} for e in events],
     )
+    contact_ids = list(dict.fromkeys(person["contact_id"] for event in events
+                         for person in event.get("people", []) if isinstance(person, dict) and person.get("contact_id")))
+    if contact_ids:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT contact_id, emails FROM contacts WHERE contact_id = ANY(%s)", (contact_ids,))
+            details = {row["contact_id"]: row for row in cur.fetchall()}
+        owner = str(kwargs.get("user_email") or "").casefold()
+        for event in events:
+            for person in event.get("people", []):
+                if isinstance(person, dict):
+                    person["emails"] = list(details.get(person.get("contact_id"), {}).get("emails") or [])
+                    person["is_self"] = bool(owner and owner in {str(email).casefold() for email in person["emails"]})
     return {"events": events, "count": len(events)}
 
 

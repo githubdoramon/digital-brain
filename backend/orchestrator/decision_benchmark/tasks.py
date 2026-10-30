@@ -91,14 +91,13 @@ def questions_for(case: Case) -> dict[str, Question]:
                     "home_control": "Smart-home actions or management.",
                     "skill_execution": "Run a named skill script.",
                     "system_command": "Shell commands or server administration.",
-                    "conversational": "General conversation, drafting or a durable personal assertion.",
-                    "unknown": "Insufficient context to determine the request.",
+                    "unknown": "General conversation, drafting, a durable personal assertion, or insufficient context to determine the request.",
                 },
             ),
             "pre_resolve_contacts": binary(
                 "Should contacts be resolved before answering? Yes for memory/contact queries "
                 "about a specific person named directly or by pronoun/relationship. No for "
-                "unnamed discovery/ranking/counts, or web/home/system/skill/conversational requests."
+                "unnamed discovery/ranking/counts, or web/home/system/skill/general requests."
             ),
             "should_generate_facts": binary(
                 "Does the current user message state a durable first-person preference, goal, "

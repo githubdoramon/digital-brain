@@ -12,6 +12,9 @@ def build_execution_plan(goal: str, intent: str | None) -> list[str]:
     if not normalized_goal:
         return ["Clarify user request before tool execution"]
 
+    from .evidence_requirements import meeting_request
+    if meeting_request(normalized_goal):
+        return ["Identify requested meeting", "Inspect linked participants", "Research linked participants"]
     plan: list[str] = ["Clarify scope and key entities"]
     if normalized_intent in {"MEMORY_SEARCH", "DATA_QUERY", "CONTACT_LOOKUP"}:
         plan.append("Collect evidence with memory/resolution tools")

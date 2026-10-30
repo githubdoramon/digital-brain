@@ -9,6 +9,7 @@ Validates tool calls before execution:
 5. Implements repair loop (max 2 retries)
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
@@ -123,8 +124,8 @@ class PreExecutionValidator:
                 tool_name=tool_name,
                 original_params=params,
                 errors=[error] if error else [],
-                suggestions=suggestions
-                or self._generate_repair_hints(contract, params, tool_name=tool_name),
+                suggestions=[*(suggestions or self._generate_repair_hints(contract, params, tool_name=tool_name)),
+                             "Use this exact parameter schema: " + json.dumps(contract.to_json_schema())],
             )
 
         # Validation passed
@@ -186,6 +187,26 @@ class PreExecutionValidator:
                             normalized_values.append(normalized.strip())
                     obj[key] = normalized_values
 
+        read_tools = {"search_memories", "get_events", "get_document", "get_message",
+                      "get_conversation", "summarize_memories", "lookup_contact",
+                      "resolve_contacts", "query_graph", "lookup_places",
+                      "lookup_contact_places", "lookup_place_contacts",
+                      "web_search", "fetch_web_page"}
+        contract = self.registry.get_contract(tool_name)
+        if tool_name in read_tools and contract:
+            for parameter in contract.parameters:
+                value = canonical.get(parameter.name)
+                if not isinstance(value, str):
+                    continue
+                if parameter.type == "integer" and re.fullmatch(r"-?(?:0|[1-9]\d*)", value.strip()):
+                    canonical[parameter.name] = int(value)
+                elif parameter.type == "array":
+                    try:
+                        parsed = json.loads(value)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(parsed, list):
+                        canonical[parameter.name] = parsed
         _strip_id_fields(canonical)
 
         if tool_name == "get_events":
