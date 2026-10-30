@@ -44,8 +44,9 @@ class GlassesMediaUpload(private val c: Context, private val owner: String) {
         }
         return connection.inputStream.use { JSONObject(String(GlassesMediaStore.readBounded(it, 65536))) }
       } catch (e: Exception) {
-        GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED, phase = GlassesMediaPhase.UPLOAD,
-          path = path, error = GlassesMediaDiagnosticPolicy.failure(e))
+        // HTTP rejections above already carry their safe status and reason.
+        if (e !is GlassesUploadException) GlassesMediaDiagnostics.record(c, GlassesMediaEvent.REQUEST_FAILED,
+          phase = GlassesMediaPhase.UPLOAD, path = path, error = GlassesMediaDiagnosticPolicy.failure(e))
         throw e
       } finally { connection.disconnect() }
     }

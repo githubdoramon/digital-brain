@@ -11,6 +11,7 @@ object GlassesMediaDiagnosticPolicy {
     return "unknown"
   }
   fun failure(error: Exception): GlassesMediaFailure = when (error) {
+    is GlassesUploadException -> GlassesMediaFailure.HTTP
     is GlassesGalleryException -> GlassesMediaFailure.valueOf(error.kind.name)
     is java.net.SocketTimeoutException -> GlassesMediaFailure.TIMEOUT
     is java.io.IOException -> GlassesMediaFailure.NETWORK

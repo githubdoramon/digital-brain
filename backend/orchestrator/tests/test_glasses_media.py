@@ -84,7 +84,7 @@ def test_requires_existing_unambiguous_album(monkeypatch):
         {"albumName": "Example captures", "id": "first"},
         {"albumName": "Example captures", "id": "second"},
     ]
-    monkeypatch.setattr(media.requests, "get", lambda *a, **kw: response)
+    monkeypatch.setattr(media.requests, "get", MagicMock(return_value=response))
     with pytest.raises(ValueError, match="uniquely"):
         media.resolve_album(MagicMock())
 
@@ -114,13 +114,13 @@ def immich_flow(session, monkeypatch):
     monkeypatch.setattr(media.user_locations, "get_nearest_location", lambda **kw: None)
     response = MagicMock()
     monkeypatch.setattr(media.requests, "put", lambda *a, **kw: response)
-    monkeypatch.setattr(media.requests, "get", lambda *a, **kw: response)
+    monkeypatch.setattr(media.requests, "get", MagicMock(return_value=response))
     return key, connection, response
 
 
 def test_album_partial_failure_retains_bytes_and_does_not_commit(immich_flow):
     key, connection, response = immich_flow
-    response.json.return_value = {"assets": []}
+    response.json.return_value = []
     with pytest.raises(ValueError, match="membership"):
         media.complete("viewer@example.test", key)
     connection.commit.assert_not_called()
@@ -130,7 +130,7 @@ def test_album_partial_failure_retains_bytes_and_does_not_commit(immich_flow):
 
 def test_success_commits_receipt_before_releasing_original(immich_flow):
     key, connection, response = immich_flow
-    response.json.return_value = {"assets": [{"id": "fake-asset"}]}
+    response.json.return_value = [{"id": "fake-album", "assetCount": 1}]
     directory, _ = media.session("viewer@example.test", key)
     connection.commit.side_effect = lambda: (
         pytest.fail("bytes removed before commit") if not (directory / "media").exists() else None
@@ -139,6 +139,34 @@ def test_success_commits_receipt_before_releasing_original(immich_flow):
     assert result["confirmed"] is True
     connection.commit.assert_called_once()
     assert not (directory / "media").exists()
+    assert media.requests.get.call_args.kwargs["params"] == {"assetId": "fake-asset"}
+    assert media.requests.get.call_args.args[0].endswith("/api/albums")
+
+
+@pytest.mark.parametrize("albums", [[], [{"id": "other-album"}], {}, None])
+def test_unconfirmed_album_response_never_releases_original(immich_flow, albums):
+    key, connection, response = immich_flow
+    response.json.return_value = albums
+    with pytest.raises(ValueError, match="membership"):
+        media.complete("viewer@example.test", key)
+    connection.commit.assert_not_called()
+    directory, _ = media.session("viewer@example.test", key)
+    assert (directory / "media").exists()
+
+
+def test_trashed_duplicate_never_adds_to_album_or_releases_original(immich_flow, monkeypatch):
+    key, connection, _ = immich_flow
+    monkeypatch.setattr(
+        media.immich_client, "fetch_asset", lambda *a, **kw: {"id": "fake-asset", "isTrashed": True}
+    )
+    put = MagicMock()
+    monkeypatch.setattr(media.requests, "put", put)
+    with pytest.raises(ValueError, match="not readable"):
+        media.complete("viewer@example.test", key)
+    put.assert_not_called()
+    connection.commit.assert_not_called()
+    directory, _ = media.session("viewer@example.test", key)
+    assert (directory / "media").exists()
 
 
 def test_staging_reservation_covers_sessions_before_bytes_arrive(session):

@@ -70,14 +70,21 @@ class GlassesMediaWorker(c: Context, params: WorkerParameters) : CoroutineWorker
     try {
       // Upload cached originals even while glasses are disconnected.
       val uploader = GlassesMediaUpload(c, owner)
+      val batch = GlassesMediaUploadBatch { guard() }
+      fun upload(record: JSONObject, file: JSONObject) {
+        if (batch.attempt(file.getString("key")) {
+            phase = GlassesMediaPhase.UPLOAD
+            state("Uploading originals to Immich")
+            uploader.upload(record, file, deadline) { eligible() }
+          }) save(record)
+      }
       for (record in GlassesMediaStore.records(c, owner).filter { !it.optBoolean("done") }) {
         for (file in files(record).filter { !it.optBoolean("confirmed") && it.has("sha256") }) {
-          guard(); state("Uploading originals to Immich")
-          uploader.upload(record, file, deadline) { eligible() }; save(record)
+          upload(record, file)
         }
       }
       device = withContext(Dispatchers.Main) { RuntimeGlasses.mediaDevice() }
-      if (device == null) { GlassesMediaDiagnostics.record(c, GlassesMediaEvent.WAITING_FOR_GLASSES); state("Waiting for glasses"); return@withContext Result.success() }
+      if (device == null) { batch.throwIfFailed(); GlassesMediaDiagnostics.record(c, GlassesMediaEvent.WAITING_FOR_GLASSES); state("Waiting for glasses"); return@withContext Result.success() }
       val current = device
       ownedHotspot = c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE).getString("owned_hotspot", null) == current.key
       phase = GlassesMediaPhase.GALLERY
@@ -89,7 +96,7 @@ class GlassesMediaWorker(c: Context, params: WorkerParameters) : CoroutineWorker
       c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE).edit()
         .putString("remote_owner", owner).putInt("remote_count", count).apply()
       val needsCleanup = GlassesMediaStore.records(c, owner).any { !it.optBoolean("done") && it.optString("device") == current.key }
-      if (count == 0 && !needsCleanup && !inputData.getBoolean("manual", false)) { state("Up to date"); return@withContext Result.success() }
+      if (count == 0 && !needsCleanup && !inputData.getBoolean("manual", false)) { phase = GlassesMediaPhase.UPLOAD; batch.throwIfFailed(); state("Up to date"); return@withContext Result.success() }
       val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
       check(ContextCompat.checkSelfPermission(c, permission) == PackageManager.PERMISSION_GRANTED) { "Open Glasses settings and tap Sync now to allow Wi-Fi transfers" }
       phase = GlassesMediaPhase.WIFI
@@ -149,14 +156,13 @@ class GlassesMediaWorker(c: Context, params: WorkerParameters) : CoroutineWorker
               file.put("confirmed", true); save(record)
             } else {
               if (!file.has("sha256")) { phase = GlassesMediaPhase.DOWNLOAD; state("Downloading originals from glasses"); download(local, record, file); save(record) }
-              phase = GlassesMediaPhase.UPLOAD
-              state("Uploading originals to Immich")
-              uploader.upload(record, file, deadline) { eligible() }; save(record)
+              upload(record, file)
             }
           }
         }
         guard()
-        check(files(record).all { it.optBoolean("confirmed") })
+        // Retain failed originals and continue with the other captures.
+        if (!files(record).all { it.optBoolean("confirmed") }) continue
         phase = GlassesMediaPhase.CLEANUP
         state("Cleaning up confirmed media")
         if (record.optBoolean("v3")) {
@@ -179,6 +185,8 @@ class GlassesMediaWorker(c: Context, params: WorkerParameters) : CoroutineWorker
         GlassesMediaDiagnostics.record(c, GlassesMediaEvent.CAPTURE_CLEANED)
         files(record).forEach { GlassesMediaStore.bytes(c, owner, it.getString("key")).delete() }
       }
+      phase = GlassesMediaPhase.UPLOAD
+      batch.throwIfFailed()
       c.getSharedPreferences("glasses_media_status", Context.MODE_PRIVATE).edit().putInt("remote_count", unsupportedCaptures).apply()
       state(if (unsupportedCaptures > 0) "Unsupported originals remain on glasses" else if (GlassesMediaStore.records(c, owner).any { !it.optBoolean("done") }) "Waiting for saved glasses" else "Up to date")
       Result.success()

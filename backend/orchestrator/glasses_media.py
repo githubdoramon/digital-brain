@@ -277,14 +277,20 @@ def complete(user: str, session_id: str) -> dict:
                 timeout=cfg.http_timeout,
             )
             response.raise_for_status()
-            # A 2xx bulk response can still report per-asset failures. Verify membership.
+            # Album detail responses in Immich v3 no longer include assets. Query
+            # albums containing this exact asset to verify membership independently
+            # of the bulk-add response (including already-present retry results).
             response = requests.get(
-                f"{cfg.base_url}/api/albums/{album_id}",
+                f"{cfg.base_url}/api/albums",
                 headers={"x-api-key": cfg.api_key},
+                params={"assetId": asset_id},
                 timeout=cfg.http_timeout,
             )
             response.raise_for_status()
-            if asset_id not in {a["id"] for a in response.json().get("assets", [])}:
+            albums = response.json()
+            if not isinstance(albums, list) or not any(
+                isinstance(album, dict) and album.get("id") == album_id for album in albums
+            ):
                 raise ValueError("Immich album membership is not confirmed")
             cur.execute(
                 "INSERT INTO glasses_media_receipts(user_email,capture_key,sha256,asset_id,album_id,captured_at) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (user_email,capture_key) DO NOTHING",

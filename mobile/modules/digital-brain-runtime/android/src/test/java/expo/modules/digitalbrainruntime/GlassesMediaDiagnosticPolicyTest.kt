@@ -16,6 +16,8 @@ class GlassesMediaDiagnosticPolicyTest {
     assertEquals("unknown", GlassesMediaDiagnosticPolicy.endpoint("/unexpected/private-value"))
   }
   @Test fun rawExceptionMessagesAreDiscarded() {
+    assertEquals(GlassesMediaFailure.HTTP, GlassesMediaDiagnosticPolicy.failure(
+      GlassesUploadException(409, GlassesUploadReason.ASSET_UNREADABLE)))
     assertEquals(GlassesMediaFailure.OTHER, GlassesMediaDiagnosticPolicy.failure(IllegalStateException("private-value")))
     assertEquals(GlassesMediaFailure.NETWORK, GlassesMediaDiagnosticPolicy.failure(java.io.IOException("private-network")))
     assertEquals(GlassesMediaFailure.HTTP, GlassesMediaDiagnosticPolicy.failure(
