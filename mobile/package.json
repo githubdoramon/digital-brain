@@ -45,7 +45,7 @@
     "expo-media-library": "~55.0.21",
     "expo-modules-core": "55.0.26",
     "expo-notifications": "~55.0.27",
-    "expo-router": "~55.0.18",
+    "expo-router": "~58.0.28",
     "expo-secure-store": "~55.0.18",
     "expo-splash-screen": "~55.0.25",
     "expo-status-bar": "~55.0.6",

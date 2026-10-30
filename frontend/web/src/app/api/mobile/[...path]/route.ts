@@ -46,7 +46,8 @@ export async function handler(
   const isSpeechRequest = request.method === "POST" && new Set([
     "glasses/transcribe", "glasses/speech-eval/prepare", "glasses/speech-eval/transcribe", "speech/transcribe",
   ]).has(targetPath);
-  const isGlassesChat = request.method === "POST" && targetPath === "glasses/chat";
+  const isGlassesChat = request.method === "POST" &&
+    new Set(["glasses/chat", "glasses/chat/speech-test"]).has(targetPath);
   const authStartedAt = performance.now();
   const authHeader = await buildAuthorizationHeader(request);
   const proxyAuthMs = performance.now() - authStartedAt;

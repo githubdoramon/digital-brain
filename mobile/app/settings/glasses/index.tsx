@@ -224,6 +224,15 @@ export default function GlassesSettingsScreen() {
               onPress={() => router.push('/settings/glasses/listening')}
             />
           </Card>
+          <Card style={styles.card}>
+            <Text style={styles.title}>Spoken replies</Text>
+            <Text style={styles.body}>Type a short message and hear it through your glasses.</Text>
+            <Button
+              label="Test spoken reply"
+              variant="secondary"
+              onPress={() => router.push('/settings/glasses/reply-test')}
+            />
+          </Card>
           {loadError && (
             <Card style={styles.card}>
               <Text style={styles.error}>{loadError}</Text>

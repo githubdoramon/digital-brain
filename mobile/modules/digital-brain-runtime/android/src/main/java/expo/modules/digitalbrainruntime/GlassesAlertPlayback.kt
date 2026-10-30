@@ -26,6 +26,8 @@ internal object GlassesAlertPlayback {
   private var routeDeadline: Runnable? = null
   private var kind: String? = null
   private var speechCompletion: ((Boolean) -> Unit)? = null
+  private var speechDiagnostics: Map<String, Any?> = emptyMap()
+  fun speechDiagnostics() = speechDiagnostics
   var lastError: String? = null
     private set
   private var lastChime: Long? = null
@@ -54,11 +56,27 @@ internal object GlassesAlertPlayback {
 
   fun speech(c: Context, audio: GlassesReplyAudio, complete: (Boolean) -> Unit): Boolean {
     if (kind == "call" || !RuntimeGlasses.alertsReady() || !GlassesAlertSettings.eligible(c)) return false
-    if (!play(c, false, false, speech = audio)) return false
+    stop()
+    speechDiagnostics = mapOf("atMs" to System.currentTimeMillis(), "state" to "starting",
+      "sampleRate" to audio.sampleRate, "frames" to audio.pcm.size / 2,
+      "peak" to GlassesSpeechPlaybackPolicy.peak(audio.pcm), "playedFrames" to 0L,
+      "routeVerified" to false)
+    if (!play(c, false, false, speech = audio)) {
+      speechDiagnostics = speechDiagnostics + mapOf("state" to "failed", "error" to speechFailure())
+      return false
+    }
     speechCompletion = complete
     return true
   }
   fun stopSpeech() { if (kind == "speech") stop() }
+  fun speechFailure(): String = when (lastError) {
+    "Could not verify the glasses audio route" -> "playback_route_unverified"
+    "Glasses audio route was lost", "Glasses audio disconnected" -> "playback_route_lost"
+    "Audio focus was taken by another app" -> "playback_focus_lost"
+    "Speech playback did not finish" -> "playback_stalled"
+    "Could not restart glasses speech audio" -> "playback_restart_failed"
+    else -> "playback_failed"
+  }
 
   private fun play(c: Context, call: Boolean, preview: Boolean, feedback: GlassesFeedbackSound? = null,
                    speech: GlassesReplyAudio? = null): Boolean {
@@ -88,6 +106,7 @@ internal object GlassesAlertPlayback {
       val sampleRate = speech?.sampleRate ?: GlassesAlertTone.SAMPLE_RATE
       val config = GlassesAlertSettings.config(c)
       val gain = (if (call) config.callVolume else config.chimeVolume) / 100f
+      if (speech != null) speechDiagnostics = speechDiagnostics + mapOf("gainPercent" to config.chimeVolume)
       val created = AudioTrack.Builder().setAudioAttributes(attributes)
         .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
           .setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
@@ -110,23 +129,66 @@ internal object GlassesAlertPlayback {
             routeDeadline?.let(handler::removeCallbacks); routeDeadline = null
             // The muted primer loops until routing is established. Restart the entire tone.
             created.pause()
-            created.setPlaybackHeadPosition(0)
-            if (!call) created.setLoopPoints(0, 0, 0)
-            created.setVolume(gain)
+            if (speech != null) {
+              // Reset both the static-buffer offset and frame counter. A primer
+              // must never count as audible progress or consume the reply.
+              if (created.reloadStaticData() != AudioTrack.SUCCESS ||
+                  created.setLoopPoints(0, 0, 0) != AudioTrack.SUCCESS ||
+                  created.setVolume(gain) != AudioTrack.SUCCESS) {
+                lastError = "Could not restart glasses speech audio"; stop(); return
+              }
+              speechDiagnostics = speechDiagnostics + mapOf("state" to "playing", "routeVerified" to true)
+              created.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                override fun onPeriodicNotification(audioTrack: AudioTrack) {
+                  if (track === created) speechDiagnostics = speechDiagnostics + mapOf(
+                    "playedFrames" to (created.playbackHeadPosition.toLong() and 0xffffffffL))
+                }
+                override fun onMarkerReached(audioTrack: AudioTrack) {
+                  if (track !== created) return
+                  checkRoute()
+                  if (track !== created) return
+                  val played = created.playbackHeadPosition.toLong() and 0xffffffffL
+                  speechDiagnostics = speechDiagnostics + mapOf("playedFrames" to played)
+                  if (!GlassesSpeechPlaybackPolicy.complete(pcm.size / 2, played, verified)) return
+                  cleanup?.let(handler::removeCallbacks)
+                  cleanup = Runnable { if (track === created) {
+                    speechDiagnostics = speechDiagnostics + mapOf("state" to "completed")
+                    val complete = speechCompletion; speechCompletion = null
+                    stop(); complete?.invoke(true)
+                  } }.also { handler.postDelayed(it, 500) }
+                }
+              }, handler)
+              if (created.setPositionNotificationPeriod((sampleRate / 4).coerceAtLeast(1)) != AudioTrack.SUCCESS ||
+                  created.setNotificationMarkerPosition(pcm.size / 2) != AudioTrack.SUCCESS) {
+                lastError = "Could not restart glasses speech audio"; stop(); return
+              }
+            } else {
+              created.setPlaybackHeadPosition(0)
+              if (!call) created.setLoopPoints(0, 0, 0)
+              created.setVolume(gain)
+            }
             created.play()
             val duration = if (!call) pcm.size * 1000L / (sampleRate * 2) + 250 else
               if (preview) GlassesAlertTone.CALL_CYCLE_MS * 3L else GlassesAlertPolicy.CALL_TIMEOUT_MS
             cleanup = Runnable { if (track === created) {
-              val complete = speechCompletion; speechCompletion = null
-              stop(); complete?.invoke(true)
-            } }.also { handler.postDelayed(it, duration) }
+              if (speech != null) {
+                speechDiagnostics = speechDiagnostics + mapOf("playedFrames" to
+                  (created.playbackHeadPosition.toLong() and 0xffffffffL))
+                lastError = "Speech playback did not finish"
+                stop()
+              } else stop()
+            } }.also { handler.postDelayed(it, duration + if (speech != null) 3000 else 0) }
           }
         } else if (action == GlassesAudioRouteAction.STOP) {
           created.setVolume(0f)
           lastError = "Glasses audio route was lost"; stop()
         }
       }
-      val routing = AudioRouting.OnRoutingChangedListener { checkRoute() }
+      val routing = AudioRouting.OnRoutingChangedListener {
+        try { checkRoute() } catch (_: RuntimeException) {
+          if (track === created) { lastError = "Could not restart glasses speech audio"; stop() }
+        }
+      }
       routeListener = routing
       created.addOnRoutingChangedListener(routing, handler)
       devices = object : AudioDeviceCallback() {
@@ -153,6 +215,9 @@ internal object GlassesAlertPlayback {
 
   private fun failed(message: String): Boolean { lastError = message; return false }
   fun stop() {
+    if (kind == "speech" && speechDiagnostics["state"] != "completed") {
+      speechDiagnostics = speechDiagnostics + mapOf("state" to "failed", "error" to speechFailure())
+    }
     val complete = speechCompletion; speechCompletion = null
     cleanup?.let(handler::removeCallbacks); cleanup = null
     routeDeadline?.let(handler::removeCallbacks); routeDeadline = null

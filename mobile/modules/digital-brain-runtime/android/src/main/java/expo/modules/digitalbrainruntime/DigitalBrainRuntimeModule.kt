@@ -34,7 +34,15 @@ class DigitalBrainRuntimeModule : Module() {
         appContext.reactContext?.applicationContext?.let { GlassesListening.resumeForeground(it) }
       }
     }
-    OnActivityEntersBackground { DigitalBrainRuntime.activityVisible = false }
+    OnActivityEntersBackground {
+      DigitalBrainRuntime.activityVisible = false
+      kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch { GlassesReplyTest.cancel() }
+    }
+    AsyncFunction("testGlassesReply") Coroutine { text: String ->
+      check(appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to test a spoken reply" }
+      withContext(Dispatchers.IO) { GlassesReplyTest.run(context(), text) }
+    }
+    AsyncFunction("cancelGlassesReplyTest") Coroutine { -> withContext(Dispatchers.Main) { GlassesReplyTest.cancel() } }
     AsyncFunction("getGlassesSpeechTestStatus") Coroutine { -> withContext(Dispatchers.IO) { SpeechEvalStore.snapshot(context()) } }
     AsyncFunction("startGlassesSpeechTest") Coroutine { folder: String, models: List<String>, repeats: Int ->
       check(appContext.currentActivity?.hasWindowFocus() == true) { "Open the app to start a comparison" }

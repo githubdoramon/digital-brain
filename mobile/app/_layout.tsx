@@ -251,6 +251,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         />
         <Stack.Screen name="settings/glasses/index" options={{ headerShown: false }} />
         <Stack.Screen name="settings/glasses/listening/index" options={{ headerShown: false }} />
+        <Stack.Screen name="settings/glasses/reply-test/index" options={{ headerShown: false }} />
         <Stack.Screen
           name="settings/glasses/listening/comparison/index"
           options={{ headerShown: false }}

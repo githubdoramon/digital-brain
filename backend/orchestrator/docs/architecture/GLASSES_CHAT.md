@@ -129,6 +129,13 @@ for the bounded 300-second server turn, with a 320-second HTTP watchdog. These
 bounds accommodate regular chat latency; capture freshness and session inactivity
 limits remain unchanged.
 
+Android speech completion uses the end-of-audio playback marker and actual frame
+progress after resetting the muted primer, rather than elapsed duration. Restart
+return codes are checked; stalled playback fails with a safe reason. The existing
+glasses debug export includes bounded content-free playback metadata. A `spoken`
+result establishes Android playback progress on the verified route, not acoustic
+proof that the wearer heard it.
+
 Remote WAV encoders may use explicit unknown-length RIFF/data size sentinels
 (`0xFFFFFFFF` or `0x7FFFFFFF`) for streaming output. After the bounded HTTP body
 is fully received, validate duration from actual PCM bytes for those headers.
@@ -147,3 +154,22 @@ This does not make a multi-round model response fast; it permits longer normal
 chat runs within an explicit bound. The observed failing run took 206 seconds,
 including an initial routing failure and seven model rounds, and exceeded the
 previous phone watchdog before synthesis could finish.
+
+## Explicit spoken-reply test
+
+`POST /mobile/glasses/chat/speech-test` accepts an authenticated, explicit test with
+`{"text":"Hello."}` (1–400 trimmed characters). It calls the same configured TTS
+provider and returns the normal ephemeral PCM envelope and safe `audio_error`.
+It never calls the chat model, claims a chat request, changes the main session,
+persists text/audio or queues learning. It shares per-owner admission with chat,
+allows no automatic retries and cancels synthesis on disconnect or its 80-second
+server deadline. The frontend proxy propagates cancellation and sets `no-store`.
+
+Settings → Glasses → Test spoken reply owns a foreground native test using the
+same authenticated native transport, PCM validator and glasses-only player.
+The native read deadline is 85 seconds, with a 90-second request watchdog and the
+normal bounded playback wait. Screen exit/background, calls, recording, OTA,
+disconnect, sign-out and disable invalidate pending output. Listening is paused
+without enabling it or arming a microphone; an already-active detector is replaced
+with a fresh one afterward. The diagnostic export retains only test timestamps,
+outcome and safe errors alongside content-free playback metadata.

@@ -277,7 +277,8 @@ async def test_disconnect_and_deadline_cancel_chat_and_release_owner(
 
     monkeypatch.setattr(glasses_chat, "ask", waiting)
     monkeypatch.setattr(glasses_chat, "CHAT_DEADLINE_SECONDS", 0.05)
-    endpoint = glasses_chat.create_glasses_chat_router().routes[0].endpoint
+    endpoint = next(r.endpoint for r in glasses_chat.create_glasses_chat_router().routes
+                    if r.path == "/mobile/glasses/chat")
     with pytest.raises(HTTPException) as exc:
         await endpoint(
             glasses_chat.GlassesChatIn(**body()),
@@ -570,3 +571,98 @@ def test_streaming_wav_still_rejects_partial_frames_and_overlong_audio():
     # A normal file claiming more bytes than received is still a truncated file.
     with pytest.raises(glasses_tts.SpeechUnavailable):
         glasses_tts.pcm_payload(wav()[:-2])
+
+
+def test_explicit_speech_test_uses_canonical_tts_without_chat_or_receipts(route, monkeypatch):
+    client, calls, _ = route
+    received = []
+
+    async def synthesize(text):
+        assert is_voice_request()
+        received.append(text)
+        return {"encoding": "pcm16", "sample_rate": 24000, "data": "AAA="}
+
+    monkeypatch.setattr(glasses_chat, "synthesize", synthesize)
+    monkeypatch.setattr(glasses_chat, "claim", lambda *a: pytest.fail("No chat receipt needed"))
+    response = client.post("/mobile/glasses/chat/speech-test", json={"text": "  Open the gate.  "})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert received == ["Open the gate."]
+    assert response.json()["audio"]["encoding"] == "pcm16"
+    assert "thread_id" not in response.json()
+    assert calls == []
+
+
+@pytest.mark.parametrize("text", ["", "   ", "a" * 401])
+def test_speech_test_rejects_empty_or_oversized_input(route, text):
+    client, calls, _ = route
+    assert client.post("/mobile/glasses/chat/speech-test", json={"text": text}).status_code == 422
+    assert calls == []
+
+
+def test_speech_test_requires_auth_and_shares_owner_limit(route):
+    client, calls, app = route
+    glasses_chat._active_owners.add("viewer@example.com")
+    try:
+        assert client.post("/mobile/glasses/chat/speech-test", json={"text": "Hello."}).status_code == 429
+    finally:
+        glasses_chat._active_owners.discard("viewer@example.com")
+    app.dependency_overrides.clear()
+    assert client.post("/mobile/glasses/chat/speech-test", json={"text": "Hello."}).status_code == 401
+    assert calls == []
+
+
+def test_speech_test_returns_safe_tts_failure_and_releases_slot(route, monkeypatch):
+    client, calls, _ = route
+
+    async def unavailable(text):
+        raise glasses_tts.SpeechUnavailable("tts_timeout")
+
+    monkeypatch.setattr(glasses_chat, "synthesize", unavailable)
+    response = client.post("/mobile/glasses/chat/speech-test", json={"text": "Hello."})
+    assert response.json() == {"audio": None, "audio_error": "tts_timeout"}
+    assert "viewer@example.com" not in glasses_chat._active_owners
+    assert calls == []
+
+
+def test_speech_test_deadline_cancels_synthesis_and_releases_slot(route, monkeypatch):
+    client, _, _ = route
+    cancelled = []
+
+    async def slow(text):
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled.append(True)
+
+    monkeypatch.setattr(glasses_chat, "synthesize", slow)
+    monkeypatch.setattr(glasses_chat, "SPEECH_TEST_DEADLINE_SECONDS", 0.01)
+    response = client.post("/mobile/glasses/chat/speech-test", json={"text": "Hello."})
+    assert response.status_code == 504 and cancelled == [True]
+    assert "viewer@example.com" not in glasses_chat._active_owners
+
+
+@pytest.mark.asyncio
+async def test_speech_test_disconnect_cancels_synthesis(route, monkeypatch):
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def waiting(text):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def disconnected():
+        await started.wait()
+        return True
+
+    monkeypatch.setattr(glasses_chat, "synthesize", waiting)
+    endpoint = next(r.endpoint for r in glasses_chat.create_glasses_chat_router().routes
+                    if r.path.endswith("/speech-test"))
+    with pytest.raises(HTTPException) as exc:
+        await endpoint(glasses_chat.GlassesSpeechTestIn(text="Hello."),
+                       SimpleNamespace(is_disconnected=disconnected), Response(),
+                       {"email": "viewer@example.com"})
+    assert exc.value.status_code == 499 and cancelled.is_set()
+    assert "viewer@example.com" not in glasses_chat._active_owners

@@ -22,6 +22,7 @@ from voice_context import spoken_reply, voice_stage
 
 _active_owners: set[str] = set()
 CHAT_DEADLINE_SECONDS = 300
+SPEECH_TEST_DEADLINE_SECONDS = 80
 _wake = re.compile(r"^\W*([^\W\d_]+)\W+([^\W\d_]+)\b[\s,.:;!?-]*(.*)$", re.S)
 
 
@@ -31,6 +32,11 @@ class GlassesChatIn(BaseModel):
     request_id: UUID
     captured_at_ms: int = Field(gt=0)
     timezone: str = Field(default="UTC", max_length=100)
+
+
+class GlassesSpeechTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    text: str = Field(min_length=1, max_length=400)
 
 
 def chat_phrase(transcript: str) -> str:
@@ -54,6 +60,46 @@ async def _voice_background_tasks(tasks: BackgroundTasks):
 
 def create_glasses_chat_router() -> APIRouter:
     router = APIRouter(prefix="/mobile/glasses/chat")
+
+    @router.post("/speech-test")
+    async def speech_test(
+        payload: GlassesSpeechTestIn, request: Request, response: Response,
+        user: dict = Depends(get_current_user),
+    ):
+        """Explicit foreground TTS test; never creates chat or learning evidence."""
+        response.headers["Cache-Control"] = "no-store"
+        owner = user["email"]
+        if owner in _active_owners or len(_active_owners) >= 8:
+            raise HTTPException(429, "voice_chat_busy")
+        _active_owners.add(owner)
+
+        async def run():
+            with spoken_reply():
+                try:
+                    audio = await synthesize(payload.text)
+                    voice_stage("speech_ready")
+                    return {"audio": audio, "audio_error": None}
+                except SpeechUnavailable as exc:
+                    voice_stage("speech_failed", str(exc))
+                    return {"audio": None, "audio_error": str(exc)}
+
+        task = None
+        try:
+            task = asyncio.create_task(run())
+            async with asyncio.timeout(SPEECH_TEST_DEADLINE_SECONDS):
+                while not task.done():
+                    if await request.is_disconnected():
+                        raise HTTPException(499, "request_cancelled")
+                    await asyncio.wait({task}, timeout=0.2)
+                return await task
+        except TimeoutError as exc:
+            raise HTTPException(504, "speech_test_timeout") from exc
+        finally:
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            _active_owners.discard(owner)
 
     @router.post("")
     async def chat(

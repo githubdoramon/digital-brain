@@ -87,6 +87,18 @@ Live glasses transcription uses the fixed shared `commands-v1` Whisper prompt, i
 
 ## Regular spoken chat
 
+Settings → Glasses → Test spoken reply accepts up to 400 characters and uses the
+authenticated `/mobile/glasses/chat/speech-test` proxy to synthesize that exact text
+with the configured TTS provider. It reuses the native chat transport, PCM decoder,
+verified glasses-only player and completion checks. It does not call the chat model,
+create a session, save text/audio or enqueue learning. Listening is paused during
+the test and gets a fresh detector afterward only if it was already active. No
+microphone opt-in is needed merely to play a test. Cancel, screen exit/background,
+calls, recording, OTA, disconnect, sign-out and disable invalidate pending output;
+tests never retry automatically. The existing diagnostic export includes the last
+test's content-free status, timestamps and safe error alongside speech playback
+metadata. It never retains the typed text.
+
 After local command matching, verified nonempty wake phrases without a matched
 command use the normal chat handler and main session, including its thirty-minute
 inactivity timeout. Each turn starts with Hey Brain; spoken “slash new” resets
@@ -102,6 +114,15 @@ A fresh detector resumes afterward; idle audio is never sent to chat. Calls,
 recordings, OTA, disconnect, sign-out and disable cancel requests/playback. Reply
 text remains available in ordinary chat when synthesis/playback fails. No chat or
 playback retry occurs during recovery. Original WAV/JSON saving remains intact.
+
+Speech rewinds the static PCM buffer and resets Android's played-frame counter
+after muted route priming, checking restart return codes. `spoken` requires the
+end-of-audio frame marker on the verified glasses route; a wall-clock watchdog
+can only fail playback. Keep a short output-drain allowance before releasing the
+track. This confirms Android frame progress, not physical audibility. The glasses
+debug export retains only the latest attempt's timestamp, state, rate, expected
+and played frame counts, PCM peak level, gain, route-verification flag and safe
+failure reason. It contains no response text, PCM or device identifiers.
 
 See [GLASSES_CHAT.md](../backend/orchestrator/docs/architecture/GLASSES_CHAT.md)
 for authentication, privacy, timing, idempotency, configuration and validation.

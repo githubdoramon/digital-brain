@@ -36,8 +36,6 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     ignore:
-      # Hold Expo Router on the current Expo SDK until a coordinated migration.
-      - dependency-name: expo-router
       # Keep React Native and React aligned with the current Expo SDK.
       - dependency-name: react-native
         update-types:
@@ -106,10 +104,13 @@ updates:
       - dependency-name: "@react-native-async-storage/async-storage"
         update-types:
           - version-update:semver-major
-      # Expo SDK module majors are coordinated as an SDK migration.
+      # Expo SDK packages use SDK-specific version lines; block SDK 56+ until a coordinated migration.
       - dependency-name: "expo*"
-        update-types:
-          - version-update:semver-major
+        versions: [">=56.0.0"]
+      # Keep the current @expo/vector-icons major until a coordinated migration.
+      - dependency-name: "@expo/vector-icons"
+        versions: [">=16.0.0"]
+      # Defer routine majors for other @expo packages.
       - dependency-name: "@expo/*"
         update-types:
           - version-update:semver-major

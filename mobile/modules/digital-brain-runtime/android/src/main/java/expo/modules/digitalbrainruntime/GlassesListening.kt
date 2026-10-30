@@ -58,8 +58,25 @@ object GlassesListening {
   @Volatile private var engine: GlassesTranscriptionClient? = null
   @Volatile private var busy = false
   @Volatile private var chatBusy = false
+  private var replyTest = false
+  internal fun beginReplyTest(): Boolean {
+    if (busy || chatBusy || replyTest || capturing || comparisonPaused || queue.isNotEmpty()) return false
+    replyTest = true
+    if (active) sessionGeneration++
+    wakeSession?.close(); wakeSession = null
+    return true
+  }
+  internal fun endReplyTest(c: Context) {
+    if (!replyTest) return
+    replyTest = false
+    if (active && armed && enabled) {
+      lastWake = SystemClock.elapsedRealtime()
+      wakeSession = newWakeSession(c, sessionGeneration)
+    }
+  }
   private var lastChatStatus: String? = null
   private var lastChatAudioError: String? = null
+  private var lastChatAtMs: Long? = null
   @Volatile private var chatClient: GlassesChatClient? = null
   // Retain the foreground microphone type while waiting for reconnect/call end within this session.
   internal val commandFeedbackGeneration get() = if (active && armed && enabled) sessionGeneration else null
@@ -119,7 +136,8 @@ object GlassesListening {
     "speechEvents" to speechEvents, "vadEnabled" to vadEnabled, "dropped" to dropped,
     "failures" to failures, "completed" to completed, "speechDurationMs" to processedMs,
     "transcriptionDurationMs" to inferenceMs, "pending" to queue.size + if (busy) 1 else 0,
-    "lastChatStatus" to lastChatStatus, "lastChatAudioError" to lastChatAudioError)
+    "lastChatStatus" to lastChatStatus, "lastChatAudioError" to lastChatAudioError,
+    "lastChatAtMs" to lastChatAtMs)
 
   fun configure(c: Context, value: Boolean, storageUri: String? = null) {
     load(c); val who = checkNotNull(account) { "Sign in first" }
@@ -153,7 +171,7 @@ object GlassesListening {
   }
   fun reconcile(c: Context) {
     load(c)
-    if (comparisonPaused || !enabled || !armed || transitioning) return
+    if (replyTest || comparisonPaused || !enabled || !armed || transitioning) return
     if (!RuntimeGlasses.signedIn(c) || !RuntimeGlasses.enabled(c) || !permitted(c)) {
       shutdown(discard = true); status = "Open the app to resume listening"; return
     }
@@ -232,7 +250,7 @@ object GlassesListening {
     }
   }
   fun speaking(value: Boolean) {
-    if (!active || chatBusy) return
+    if (!active || chatBusy || replyTest) return
     speechEvents++
     val generation = ++speechGeneration
     wakeSession?.vad(value)
@@ -247,7 +265,7 @@ object GlassesListening {
   }
   fun vadStatus(value: Boolean) { if (active) vadEnabled = value }
   fun pcm(event: MicPcmEvent) {
-    if (!active || chatBusy) return
+    if (!active || chatBusy || replyTest) return
     if (!GlassesRecordingPolicy.validPcm(event.sampleRate, event.bitsPerSample, event.channels, event.encoding, event.pcm.size)) {
       pause(); failures++; status = "Could not read glasses audio"; return
     }
@@ -261,16 +279,18 @@ object GlassesListening {
     wakeSession?.pcm(event.pcm, minimumVolume)
   }
   fun callNotification(key: String, interrupted: Boolean) {
-    if (interrupted && armed && callSources.size < 32) {
+    if (interrupted && (armed || GlassesReplyTest.running) && callSources.size < 32) {
       callSources[key] = SystemClock.elapsedRealtime(); callInterrupted()
     } else callSources.remove(key)
   }
   fun callInterrupted() {
+    GlassesReplyTest.cancel()
     if (!armed) return
     blockedUntil = SystemClock.elapsedRealtime() + 5000
     pause(); status = "Paused for a call"
   }
   fun pause() {
+    GlassesReplyTest.cancel()
     if (!active) return
     active = false; sessionGeneration++; chatClient?.cancel(); GlassesAlertPlayback.stopSpeech(); chatBusy = false; engine?.cancel(); capturing = false; wakeSession?.close(); wakeSession = null
     val wasTransitioning = transitioning; transitioning = true
@@ -342,6 +362,7 @@ object GlassesListening {
               GlassesWakeStore.chat(staged, result)
               main.post {
                 lastChatStatus = result.status; lastChatAudioError = result.audioError
+                lastChatAtMs = System.currentTimeMillis()
                 if (eligible()) status = when (result.status) {
                 "spoken" -> "Listening for Hey Brain"
                 "audio_unavailable" -> "Your reply is in chat. Could not play it through your glasses."

@@ -178,6 +178,8 @@ type DigitalBrainRuntimeModule = NativeModule & {
   openGlassesNotificationAccess(): Promise<void>;
   openGlassesSoundSettings(): Promise<void>;
   testGlassesAlert(call: boolean): Promise<void>;
+  testGlassesReply(text: string): Promise<{ status: string; audioError: string | null }>;
+  cancelGlassesReplyTest(): Promise<void>;
   stopGlassesAlertTest(): Promise<void>;
   refreshGlassesAlerts(): Promise<void>;
   setRuntimeLocationEnabled(enabled: boolean): Promise<void>;

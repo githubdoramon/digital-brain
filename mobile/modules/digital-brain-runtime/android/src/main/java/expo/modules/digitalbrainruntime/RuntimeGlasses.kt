@@ -502,7 +502,10 @@ object RuntimeGlasses {
     )
   }
   fun diagnostics(c: Context): Map<String, Any?> = snapshot(c).filterKeys { it !in setOf("savedName", "devices", "wifi") } +
-    mapOf("ledFeedback" to GlassesLedDiagnostics.events(c), "listening" to GlassesListening.diagnostics(), "recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
+    mapOf("ledFeedback" to GlassesLedDiagnostics.events(c), "listening" to GlassesListening.diagnostics(),
+      "speechPlayback" to GlassesAlertPlayback.speechDiagnostics(),
+      "replyTest" to GlassesReplyTest.diagnostics(),
+      "recording" to GlassesRecording.diagnostics(), "events" to trail.toList(), "energy" to RuntimeEnergyDiagnostics.sample(c),
       // UI status may contain SDK-provided error text. Export structured media events instead.
       "media" to GlassesMediaStore.status(c).filterKeys { it in setOf("pending", "transport") })
 }

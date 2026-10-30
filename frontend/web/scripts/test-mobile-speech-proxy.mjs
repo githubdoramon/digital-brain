@@ -70,18 +70,20 @@ test('backend rejection is returned without retry', async () => {
   assert.equal(calls, 1);
 });
 
-test('glasses chat carries cancellation, authentication and ephemeral audio without retries', async () => {
-  const req = request('glasses/chat');
+for (const target of ['glasses/chat', 'glasses/chat/speech-test']) {
+test(`${target} carries cancellation, authentication and ephemeral audio without retries`, async () => {
+  const req = request(target);
   let calls = 0;
   const route = load(async (url, options) => {
     calls++;
-    assert.equal(url.pathname, '/mobile/glasses/chat');
+    assert.equal(url.pathname, `/mobile/${target}`);
     assert.equal(options.signal, req.signal);
     assert.equal(options.headers.get('authorization'), 'Bearer synthetic-token');
     return new Response('{"audio":{"encoding":"pcm16"}}', { headers: { 'content-type': 'application/json' } });
   });
-  const response = await route.handler(req, { params: Promise.resolve({ path: ['glasses', 'chat'] }) });
+  const response = await route.handler(req, { params: Promise.resolve({ path: target.split('/') }) });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(calls, 1);
 });
+}
