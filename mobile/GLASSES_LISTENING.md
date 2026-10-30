@@ -105,3 +105,10 @@ playback retry occurs during recovery. Original WAV/JSON saving remains intact.
 
 See [GLASSES_CHAT.md](../backend/orchestrator/docs/architecture/GLASSES_CHAT.md)
 for authentication, privacy, timing, idempotency, configuration and validation.
+
+Capture endpointing also waits for the latest received PCM: a stale firmware
+silence event cannot end capture while command audio is still arriving. Received
+PCM postpones the active four-second/1.5-second deadline without applying the
+minimum-volume gate or asserting speech onset. Missing VAD resumption therefore
+keeps the longer allowance. Continuous PCM can extend capture to the existing
+thirty-second bound. Quiet PCM is preserved; no waveform content enters logs.

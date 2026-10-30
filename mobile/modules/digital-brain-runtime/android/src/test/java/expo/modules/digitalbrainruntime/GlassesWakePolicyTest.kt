@@ -169,6 +169,34 @@ class GlassesWakePolicyTest {
     repeat(100) { policy.tick(14500 + it * 1000L, 4600 + it * 1000L) }
     assertEquals(resets, detector.resets)
   }
+  @Test fun delayedQuestionPcmKeepsInitialWindowOpenWhenVadResumeIsMissing() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    policy.vad(false, 120)
+    // The question begins near the initial deadline, but firmware never sends speech=true.
+    repeat(150) { policy.pcm(tone(10), 13400 + it * 20L, 3500 + it * 20L, 100) }
+    assertTrue(policy.capturing); assertTrue(out.isEmpty())
+    policy.tick(20379, 10479); assertTrue(out.isEmpty())
+    policy.tick(20380, 10480)
+    assertEquals(151 * 640, out.single().chunk.pcm.size)
+    assertEquals(WakeEnd.SILENCE, out.single().reason)
+  }
+  @Test fun receivedPcmPostponesShortDeadlineDespiteStaleFirmwareSilence() {
+    val detector = Detector().apply { fire = true }; val out = mutableListOf<WakeCapture>()
+    val policy = GlassesWakePolicy(detector, {}, out::add, {})
+    policy.vad(true, 100); policy.pcm(tone(2000), 10000, 100, 0)
+    repeat(15) { policy.pcm(tone(2000), 10020 + it * 20L, 120 + it * 20L, 0) }
+    policy.vad(false, 420)
+    repeat(150) { policy.pcm(tone(10), 11300 + it * 20L, 1400 + it * 20L, 100) }
+    assertTrue(policy.capturing); assertTrue(out.isEmpty())
+    assertTrue(policy.waitMs(5000) > 1)
+    policy.tick(15779, 5879); assertTrue(out.isEmpty())
+    policy.tick(15780, 5880)
+    assertEquals(166 * 640, out.single().chunk.pcm.size)
+    assertEquals(1500L, out.single().endpoint["lastPcmAgeMs"])
+    assertEquals(5460L, out.single().endpoint["firmwareSilenceAgeMs"])
+  }
   @Test fun pcmRingKeepsOnlyRecentBytesInOrder() {
     val ring = PcmRing(4); ring.write(byteArrayOf(1, 2, 3)); ring.write(byteArrayOf(4, 5, 6))
     assertArrayEquals(byteArrayOf(3, 4, 5, 6), ring.toByteArray())

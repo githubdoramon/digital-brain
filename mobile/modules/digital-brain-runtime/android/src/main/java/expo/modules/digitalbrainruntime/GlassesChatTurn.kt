@@ -23,7 +23,7 @@ internal object GlassesChatTurn {
     val client = GlassesChatClient(c) { check(onMain(eligible)) }
     register(client)
     val timeout = Runnable { client.cancel() }
-    main.postDelayed(timeout, 70_000)
+    main.postDelayed(timeout, 200_000)
     var thread: String? = null
     try {
       val response = client.request(text, requestId, capturedAt, timezone)
@@ -31,7 +31,7 @@ internal object GlassesChatTurn {
       thread = response.optString("thread_id").takeIf { it.isNotBlank() }
       val encoded = response.optJSONObject("audio")
         ?: return GlassesChatResult("audio_unavailable", thread,
-          response.optString("audio_error").takeIf { it in setOf("tts_not_configured", "tts_failed", "tts_invalid_audio", "tts_text_too_long") })
+          response.optString("audio_error").takeIf { it in setOf("tts_not_configured", "tts_failed", "tts_invalid_audio", "tts_text_too_long", "tts_audio_too_long", "tts_audio_empty") })
       val audio = GlassesChatPolicy.audio(encoded)
       val finished = CountDownLatch(1)
       var spoken = false

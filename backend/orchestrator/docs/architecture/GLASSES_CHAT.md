@@ -28,7 +28,10 @@ Main and memory-expert prompts receive a request-scoped voice instruction:
 usually one or two short sentences, around twenty seconds, natural English,
 without Markdown, URLs or long lists. Formatting cleanup happens before
 persistence and synthesis so one canonical answer is stored and spoken.
-Other requests and restored chat history do not inherit the voice modality.
+The controller also enforces at most sixty words/600 characters before persistence,
+ending at a complete sentence when possible, so verbose model output cannot
+produce an unbounded spoken reply. Other requests and restored chat history do
+not inherit the voice modality.
 Existing confirmation/clarification workflows remain owned by normal chat.
 
 The controller excludes Home Assistant, shell and skill-script tools from this
@@ -59,7 +62,7 @@ never reused. Complete synthesis is requested as WAV; responses must be
 nonempty mono PCM16 at a supported rate, at most four MiB and forty-five seconds.
 Provider redirects, retries, oversized streams and malformed/truncated WAVs are
 rejected. Speech has a separate deadline capped at twenty-five seconds within a
-sixty-second chat request. Validated PCM and its rate are returned inline in a
+180-second chat request. Validated PCM and its rate are returned inline in a
 `no-store` authenticated JSON response. Reply audio stays in bounded memory on
 both sides; no reply audio files or public download URLs are created.
 
@@ -82,8 +85,8 @@ invalidate the native generation, cancel the HTTP connection, and stop playback.
 The proxy forwards client cancellation. The backend cancels its running chat/TTS
 task on disconnect/deadline. An already dispatched regular chat tool effect
 cannot be undone by transport cancellation; requests are never automatically
-retried. Native requests have a seventy-second watchdog and job wake locks are
-bounded to 170 seconds including transcription and playback.
+retried. Native requests have a 200-second watchdog and job wake locks are
+bounded to 300 seconds including transcription and playback.
 
 Before chat/tool execution the backend fsyncs an owner-scoped UUID claim under
 `GLASSES_COMMAND_RECEIPT_DIR/chat` (the existing persistent command mount).
@@ -113,3 +116,9 @@ and `no-store` responses.
 Hardware validation is still required for locked-phone chat, physical audio
 routing, response echo exclusion, real provider latency, call/OTA/disconnect races,
 and memory/battery cost. Host tests and compilation do not establish those results.
+
+Audio validation diagnostics distinguish empty and overlong Kokoro output and
+record only frame count, sample rate and duration. Android waits up to 190 seconds
+for the bounded 180-second server turn, with a 200-second HTTP watchdog. These
+bounds accommodate regular chat latency; capture freshness and session inactivity
+limits remain unchanged.

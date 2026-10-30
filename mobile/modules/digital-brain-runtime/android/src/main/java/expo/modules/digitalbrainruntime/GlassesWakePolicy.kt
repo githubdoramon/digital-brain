@@ -8,7 +8,8 @@ internal interface GlassesWakeDetector {
   fun release()
 }
 internal enum class WakeEnd { SILENCE, LIMIT }
-internal data class WakeCapture(val chunk: SpeechChunk, val wakeAtMs: Long, val endAtMs: Long, val reason: WakeEnd, val completedElapsedMs: Long = 0)
+internal data class WakeCapture(val chunk: SpeechChunk, val wakeAtMs: Long, val endAtMs: Long, val reason: WakeEnd, val completedElapsedMs: Long = 0,
+  val endpoint: Map<String, Any> = emptyMap())
 
 /** Serial-worker state machine. No audio leaves memory before an accepted wake completes. */
 internal class GlassesWakePolicy(
@@ -91,10 +92,14 @@ internal class GlassesWakePolicy(
   }
   private fun appendCapture(bytes: ByteArray) { capture?.let { it.write(bytes, 0, minOf(bytes.size, MAX_BYTES - it.size())) } }
   private fun silenceLimit() = if (capture != null && !commandStarted) WAKE_SILENCE_MS else SILENCE_MS
+  // Firmware VAD can lag incoming audio. Once capturing, received PCM must
+  // postpone endpointing even while the firmware still reports silence.
+  // This never applies the user's wake-volume threshold to their command.
+  private fun silenceStart(): Long? = silenceAt?.let { if (capture != null) maxOf(it, lastPcm) else it }
   fun waitMs(elapsed: Long): Long {
     val deadlines = mutableListOf<Long>()
     silenceAt?.let {
-      deadlines.add(it + silenceLimit())
+      deadlines.add(checkNotNull(silenceStart()) + silenceLimit())
       if (capture == null && gateOpen && !flushedSilence) deadlines.add(it + 100)
     }
     if (capture != null) deadlines.add(lastWake + 30_000)
@@ -108,7 +113,7 @@ internal class GlassesWakePolicy(
       if (detector.accept(ByteArray(9600))) begin(wall, elapsed)
     }
     if (capture != null && elapsed - lastWake >= 30_000) { finish(wall, elapsed, WakeEnd.LIMIT); return }
-    if (silenceAt?.let { elapsed - it >= silenceLimit() } == true) {
+    if (silenceStart()?.let { elapsed - it >= silenceLimit() } == true) {
       if (capture != null) finish(wall, elapsed, WakeEnd.SILENCE) else resetUtterance()
       speech = false; silenceAt = null
     } else if (lastPcm > 0 && silenceAt == null && elapsed - lastPcm >= 3000) {
@@ -118,8 +123,12 @@ internal class GlassesWakePolicy(
   }
   private fun finish(wall: Long, elapsed: Long, reason: WakeEnd) {
     val bytes = capture?.toByteArray() ?: return
+    val endpoint = mapOf("firmwareSpeech" to speech, "commandStarted" to commandStarted,
+      "lastPcmAgeMs" to (elapsed - lastPcm).coerceAtLeast(0),
+      "firmwareSilenceAgeMs" to (silenceAt?.let { elapsed - it } ?: 0L).coerceAtLeast(0),
+      "silenceLimitMs" to silenceLimit())
     capture = null
-    onCapture(WakeCapture(SpeechChunk(startWall, bytes), wakeWall, wall, reason, elapsed))
+    onCapture(WakeCapture(SpeechChunk(startWall, bytes), wakeWall, wall, reason, elapsed, endpoint))
     resetUtterance()
   }
   private fun resetUtterance() {

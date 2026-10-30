@@ -412,3 +412,39 @@ async def test_busy_local_inference_never_queues_another_turn(monkeypatch):
             await local.synthesize_local("Another reply.")
     finally:
         slot.release()
+
+
+def test_spoken_answer_has_a_hard_bound_before_persistence():
+    from voice_context import speech_text
+
+    text = "Your next meeting starts tomorrow. " + "Additional background information. " * 70
+    concise = speech_text(text)
+    assert concise.startswith("Your next meeting starts tomorrow.")
+    assert len(concise.split()) <= 60
+    assert len(concise) <= 600
+    assert concise.endswith(".")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frames,reason", [(0, "tts_audio_empty"), (24000 * 46, "tts_audio_too_long")]
+)
+async def test_local_audio_rejections_have_specific_safe_reasons(monkeypatch, frames, reason):
+    import sys
+
+    import glasses_kokoro as local
+
+    class Samples:
+        def __len__(self):
+            return frames
+
+    engine = SimpleNamespace(create=lambda *a, **kw: (Samples(), 24000))
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", SimpleNamespace(Kokoro=object))
+    monkeypatch.setattr(local.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(local, "_engine", engine)
+    monkeypatch.setattr(
+        local, "_engine_key", ("/app/models/kokoro/model.onnx", "/app/models/kokoro/voices.bin")
+    )
+    with pytest.raises(glasses_tts.SpeechUnavailable, match=reason):
+        await local.synthesize_local("A short reply.")

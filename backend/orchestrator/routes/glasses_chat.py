@@ -21,7 +21,7 @@ from time_context import use_time_context
 from voice_context import spoken_reply, voice_stage
 
 _active_owners: set[str] = set()
-CHAT_DEADLINE_SECONDS = 60
+CHAT_DEADLINE_SECONDS = 180
 _wake = re.compile(r"^\W*([^\W\d_]+)\W+([^\W\d_]+)\b[\s,.:;!?-]*(.*)$", re.S)
 
 

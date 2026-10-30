@@ -8,6 +8,7 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 
 from glasses_tts import SpeechUnavailable, pcm_payload
+from voice_context import voice_audio
 
 _worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="glasses-kokoro")
 _slot = threading.BoundedSemaphore(1)
@@ -37,8 +38,11 @@ def _generate(text):
         samples, rate = _engine.create(
             text, voice=os.getenv("KOKORO_VOICE", "af_heart"), speed=1.0, lang="en-us"
         )
-        if not 0 < len(samples) <= rate * 45:
-            raise SpeechUnavailable("tts_invalid_audio")
+        voice_audio(len(samples), rate)
+        if len(samples) == 0:
+            raise SpeechUnavailable("tts_audio_empty")
+        if len(samples) > rate * 45:
+            raise SpeechUnavailable("tts_audio_too_long")
         pcm = bytearray()
         for sample in samples:
             pcm.extend(

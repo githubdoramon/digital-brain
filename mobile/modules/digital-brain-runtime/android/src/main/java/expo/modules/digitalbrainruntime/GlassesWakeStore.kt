@@ -57,7 +57,7 @@ internal object GlassesWakeStore {
         .put("wakeDetectedAt", Instant.ofEpochMilli(capture.wakeAtMs)).put("endedAt", Instant.ofEpochMilli(capture.endAtMs))
         .put("timezone", ZoneId.systemDefault().id).put("language", "en").put("text", "")
         .put("receivedAudioDurationMs", capture.chunk.pcm.size * 1000L / 32000)
-        .put("endReason", capture.reason.name.lowercase()).put("transcriptionStatus", "pending")
+        .put("endReason", capture.reason.name.lowercase()).put("endpoint", JSONObject(capture.endpoint)).put("transcriptionStatus", "pending")
         .put("baseUri", baseUri)
       atomic(File(dir, "capture.json"), meta.toString().toByteArray())
       processing.add(dir.path)
