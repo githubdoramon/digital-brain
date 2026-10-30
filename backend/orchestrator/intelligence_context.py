@@ -55,10 +55,12 @@ FIELDS = {
         "updated_at",
         "intelligence_manual_at",
         "is_proposal",
+        "requested_at",
     ),
     "proposals": ("proposal_id", "kind", "status", "payload"),
     "projects": ("project_id", "title", "description", "status"),
-    "lookback": ("message_id", "body", "sent_at", "sender_identity_id", "outgoing"),
+    "lookback": ("message_id", "body", "sent_at", "sender_identity_id", "outgoing",
+                 "conversation_id", "anchor_ref", "direction", "reply_id", "forwarded"),
     "related": ("kind", "id", "title"),
 }
 IDENTITY_SECTIONS = {"people", "contacts", "contact_relationships", "entities"}
@@ -150,7 +152,7 @@ def compact_context(context, *, extraction=False, query="", anchors=()):
     result = {}
     for section, fields in FIELDS.items():
         result[section] = []
-        if extraction and section not in IDENTITY_SECTIONS:
+        if extraction and section not in IDENTITY_SECTIONS | {"lookback"}:
             continue
         rows = []
         for row in context.get(section, []):
@@ -189,12 +191,16 @@ def compact_context(context, *, extraction=False, query="", anchors=()):
                 score += 1000
             # Extraction needs source identities and literal name/alias matches,
             # including every ambiguous match, rather than unrelated profiles.
-            if extraction and query and score == 0:
+            if section == "lookback":
+                # A short 'Done' reply has no lexical overlap with its request.
+                # Preserve the retrieval order and its before/after quotas.
+                score = -len(rows)
+            if extraction and query and score == 0 and section != "lookback":
                 continue
             rows.append((score, item))
         rows.sort(key=lambda row: row[0], reverse=True)
         # No embeddings, evidence histories, raw metadata or source snapshots.
-        budget = 6000 if section in IDENTITY_SECTIONS else 8000
+        budget = 12000 if section == "lookback" else 6000 if section in IDENTITY_SECTIONS else 8000
         for _, item in rows[:40]:
             size = len(json_for(item).encode("utf-8"))
             if size <= budget:

@@ -16,6 +16,12 @@ from psycopg.types.json import Jsonb
 
 import knowledge_prose
 from db import get_conn
+from intelligence_conversation import (
+    actor_matches,
+    proposal_requested_at,
+    resolution_is_current,
+    surrounding_messages,
+)
 from job_leases import LEASE_INTERVAL_SQL
 from knowledge_references import contact_ref, normalize_finding
 from observability.logger import get_runtime_logger
@@ -332,12 +338,21 @@ def context_for(owner, batch, extra_text=""):
         )
         tasks = [dict(r) for r in cur.fetchall()]
         cur.execute(
-            """SELECT * FROM intelligence_proposals WHERE user_email = %s
-            AND to_tsvector('simple', payload::text) @@ to_tsquery('simple', %s)
+            """SELECT p.* FROM intelligence_proposals p WHERE user_email = %s
+            AND (to_tsvector('simple', payload::text) @@ to_tsquery('simple', %s)
+                OR (p.kind='task' AND p.status='pending' AND EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(p.evidence) e
+                    JOIN intelligence_sources s ON s.source_id=(e->>'source_id')::bigint
+                    WHERE s.payload->>'conversation_id'=ANY(%s)
+                    AND (s.owner_email IS NULL OR s.owner_email=p.user_email))))
             ORDER BY created_at DESC LIMIT 60""",
-            (owner, query),
+            (owner, query, conversations),
         )
         proposals = [dict(r) for r in cur.fetchall()]
+        proposal_sources = list({e["source_id"] for p in proposals for e in p["evidence"]})
+        cur.execute("SELECT source_id,payload FROM intelligence_sources WHERE source_id=ANY(%s) AND (owner_email IS NULL OR owner_email=%s)",
+                    (proposal_sources, owner))
+        request_sources = cur.fetchall()
         for p in proposals:
             if p["kind"] == "task" and p["status"] == "pending":
                 tasks.append(
@@ -351,6 +366,7 @@ def context_for(owner, batch, extra_text=""):
                         "assignee_ref": p["payload"].get("assignee_ref"),
                         "intelligence_manual_at": None,
                         "is_proposal": True,
+                        "requested_at": proposal_requested_at(cur, owner, p, request_sources),
                     }
                 )
         cur.execute(
@@ -360,29 +376,7 @@ def context_for(owner, batch, extra_text=""):
             (owner, query),
         )
         projects = [dict(r) for r in cur.fetchall()]
-        cur.execute(
-            """SELECT m.message_id, m.body, m.sent_at, m.sender_identity_id, m.outgoing,
-                m.conversation_id FROM messaging_messages m JOIN messaging_accounts a USING(account_id)
-            WHERE a.user_email = %s AND NOT m.deleted AND EXISTS (
-                SELECT 1 FROM jsonb_to_recordset(%s) AS anchor(conversation_id TEXT, sent_at TIMESTAMPTZ)
-                WHERE anchor.conversation_id=m.conversation_id
-                    AND m.sent_at >= anchor.sent_at - INTERVAL '2 days' AND m.sent_at <= anchor.sent_at)
-            ORDER BY m.sent_at DESC LIMIT 60""",
-            (
-                owner,
-                Jsonb(
-                    [
-                        {
-                            "conversation_id": r["payload"]["conversation_id"],
-                            "sent_at": r["payload"]["sent_at"],
-                        }
-                        for r in batch
-                        if r["kind"] == "message"
-                    ]
-                ),
-            ),
-        )
-        lookback = [{**dict(r), "body": r["body"][:1500]} for r in cur.fetchall()]
+        lookback = surrounding_messages(cur, owner, batch, utcnow())
         cur.execute(
             """SELECT 'event' AS kind, id AS id, title, left(summary, 2000) AS text FROM events
             WHERE NOT is_cancelled AND to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(summary,''))
@@ -495,6 +489,7 @@ def evidence_for(finding, batch):
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 8:
         reject("invalid_evidence", "invalid_evidence_count", finding=finding)
     result = []
+    minimum_quote = 1 if finding.get("kind") == "complete" else 8
     for e in evidence:
         row = refs.get(e.get("ref"))
         quote = e.get("quote", "")
@@ -502,9 +497,9 @@ def evidence_for(finding, batch):
         if (
             not row
             or not isinstance(quote, str)
-            or not 8 <= len(quote.strip()) <= 1200
+            or not minimum_quote <= len(quote.strip()) <= 1200
             or exact_quote is None
-            or not 8 <= len(exact_quote.strip()) <= 1200
+            or not minimum_quote <= len(exact_quote.strip()) <= 1200
         ):
             reject(
                 "invalid_evidence",
@@ -638,6 +633,7 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
             "proposals_created",
             "tasks_completed",
             "proposals_expired",
+            "proposals_suppressed",
             "findings_skipped",
             "contact_changes_applied",
             "contact_changes_supported",
@@ -667,6 +663,8 @@ def apply_batch(owner, run, batch, context, findings, *, review=False):
                 outcome = contact_learning.save(cur, owner, f)
             elif f["kind"] == "complete":
                 outcome = _complete_task(cur, owner, f, tasks[f["existing_id"]], batch, context)
+            elif f["kind"] == "task" and resolution_is_current(cur, owner, f, batch):
+                outcome = "proposals_suppressed"
             else:
                 outcome = _save_proposal(cur, owner, f)
             counts[outcome or "findings_skipped"] += 1
@@ -918,7 +916,7 @@ def _save_proposal(cur, owner, f):
             owner,
             f["kind"],
             dedupe,
-            Jsonb({k: v for k, v in f.items() if k != "evidence"}),
+            Jsonb({k: v for k, v in f.items() if k not in {"evidence", "verified_resolution"}}),
             Jsonb(f["evidence"]),
             f.get("reason", ""),
         ),
@@ -926,33 +924,28 @@ def _save_proposal(cur, owner, f):
     return "proposals_created" if cur.rowcount else None
 
 
-def _complete_task(cur, owner, f, task, batch, context):
+def _complete_task(cur, owner, f, task, batch, _context):
     """Require explicit completion, an actor match and a fresh task version."""
     if not f.get("explicit_completion") or not f.get("verified_completion"):
         return
     refs = {r["source_id"]: r for r in batch}
-    people = {p["identity_id"]: p for p in context["people"]}
+    boundary = task["created_at"]
+    if task.get("is_proposal"):
+        cur.execute("""SELECT evidence,created_at FROM intelligence_proposals
+            WHERE proposal_id=%s AND user_email=%s AND status='pending'
+            AND created_at=%s FOR SHARE""", (task["todo_id"], owner, task["created_at"]))
+        proposal = cur.fetchone()
+        if not proposal:
+            return
+        boundary = proposal_requested_at(cur, owner, proposal)
     matching = []
     for e in f["evidence"]:
         row = refs[e["source_id"]]
         p = row["payload"]
         if row["kind"] != "message" or not row["actionable"] or p.get("forwarded", True):
             continue
-        actor = people.get(p.get("identity_id"), {})
-        cur.execute(
-            "SELECT contact_id FROM messaging_identities WHERE identity_id=%s FOR SHARE",
-            (p.get("identity_id"),),
-        )
-        current_actor = cur.fetchone()
-        if current_actor:
-            actor = dict(current_actor)
-        kind, assignee = task["assignee_kind"], task.get("assignee_ref")
-        matches = (
-            (kind == "user" and p.get("outgoing"))
-            or (kind == "identity" and assignee == p.get("identity_id"))
-            or (kind == "contact" and assignee == actor.get("contact_id"))
-        )
-        if matches and datetime.fromisoformat(p["sent_at"]) >= task["created_at"]:
+        matches = actor_matches(cur, task, {"outgoing": p.get("outgoing"), "sender_identity_id": p.get("identity_id")})
+        if matches and datetime.fromisoformat(p["sent_at"]) >= boundary:
             # A manual reopening/edit after this evidence takes precedence.
             if (
                 not task.get("intelligence_manual_at")

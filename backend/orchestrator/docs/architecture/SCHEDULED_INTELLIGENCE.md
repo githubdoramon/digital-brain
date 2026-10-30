@@ -235,3 +235,35 @@ conflicted provider mappings are excluded. The exact mention token and resolved
 identity are retained in the bounded model context; a mention alone is not proof
 of an assignee. This affects subsequent analysis and does not rewrite existing
 proposals or reopen completed work.
+### Conversation resolution before proposing tasks
+
+Messaging context is owner-scoped and read in both directions from each primary
+message: up to six earlier messages within two days and twelve later messages
+within seven days, with explicit quoted-reply links eligible outside those time
+windows. Future-dated and deleted messages, excluded conversations and channels
+are omitted. The shared batch cap is sixty context rows. Retrieval prioritizes
+explicit replies and balances anchor/direction slots before prompt compaction.
+Bodies are bounded to 1,200 characters; conversation context has its own 12,000-byte
+projection budget. Both extraction and reconciliation receive this context, even
+when a short reply has no lexical overlap with the request. Context may clarify or
+resolve a request but is never independently newly actionable evidence.
+
+Pending task proposals are retrieved by source conversation as well as lexical
+match so a terse completion can find its request. Generated proposal tasks expose
+`requested_at`, derived from their original evidence, to the completion reviewer.
+The controller reconstructs that boundary from stored evidence before expiring a
+still-pending proposal. Ordinary todos keep their creation/manual-edit boundaries.
+Short exact completion citations are allowed, with the same independent semantic
+review, actor, forwarding, source-freshness and date guards; short citations remain
+invalid for new tasks and facts.
+
+New task candidates with later direct assignee speech get a narrowly bounded
+independent completion review before proposal persistence. It must identify an
+actual supplied message and exact quote proving this exact task's full completion.
+Wrong actors, forwarded statements, acknowledgments, partial progress and uncertain
+or invented citations do not suppress proposals. At commit, the controller checks
+the completion's owner, conversation, body hash, current deletion/exclusion state,
+actor and timestamp again. A changed or deleted reply cannot suppress work using a
+stale verdict. Reviews run only for eligible new-task candidates, use bounded input
+and output, and do not add LLM calls to ordinary fact-only extraction. Diagnostic
+events record these decisions locally; no source text goes to external telemetry.
