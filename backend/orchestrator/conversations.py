@@ -294,6 +294,27 @@ def get_thread_with_messages(thread_id: str, user_email: str) -> dict[str, Any] 
     return thread
 
 
+def get_chat_state(user_email: str, thread_id: str | None = None) -> dict[str, Any]:
+    """Cheap owner-scoped revision probe. Reads never extend session inactivity."""
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        if thread_id:
+            cur.execute(
+                "SELECT id, updated_at FROM conversation_threads WHERE id=%s AND user_email=%s",
+                (thread_id, user_email),
+            )
+        else:
+            cur.execute(
+                """SELECT t.id,t.updated_at,ms.updated_at AS session_updated_at
+                FROM main_sessions ms JOIN conversation_threads t
+                  ON t.id=ms.current_thread_id AND t.user_email=ms.user_email
+                WHERE ms.user_email=%s""", (user_email,),
+            )
+        row = cur.fetchone()
+    if row is None or (not thread_id and _is_main_session_timed_out(row["session_updated_at"])):
+        return {"thread_id": None, "revision": None}
+    return {"thread_id": row["id"], "revision": row["updated_at"].isoformat()}
+
+
 def get_conversation_history(thread_id: str, user_email: str) -> list[dict[str, str]]:
     thread = get_thread_with_messages(thread_id, user_email)
     if not thread:
@@ -571,12 +592,14 @@ def set_message_metadata_field(
             UPDATE conversation_messages
             SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
             WHERE message_id = %s
-            RETURNING 1
+            RETURNING thread_id
             """,
             (Json({field: value}), message_id),
         )
-        updated = cur.fetchone() is not None
+        changed = cur.fetchone()
+        updated = changed is not None
         if updated:
+            cur.execute("UPDATE conversation_threads SET updated_at=NOW() WHERE id=%s", (changed["thread_id"],))
             conn.commit()
         else:
             conn.rollback()

@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import conversations
+from llm_admission import interactive_request
 from llm_config import get_fast_model, get_smart_model
 from observability.logger import get_runtime_logger
 from time_context import with_request_time
@@ -118,6 +119,7 @@ def _get_main_controller():
 
 
 @with_request_time
+@interactive_request
 async def answer_question(
     question: str,
     search_limit: int = 30,
@@ -243,6 +245,7 @@ async def answer_question(
 
 
 @with_request_time
+@interactive_request
 async def answer_question_stream(
     question: str,
     search_limit: int = 30,

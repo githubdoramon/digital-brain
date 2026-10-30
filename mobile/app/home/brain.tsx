@@ -50,6 +50,7 @@ import type {
   EventPlaceOption,
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
+import { createChatRefreshLoop } from '@/chat/liveRefresh';
 import {
   buildComposerPdfAttachment,
   buildComposerMediaAttachment,
@@ -1305,6 +1306,9 @@ export function ChatConversationScreen({
   >([]);
   const hasHydratedSessionRef = useRef(false);
   const restoreGenerationRef = useRef(0);
+  const chatIdentityRef = useRef({ token, isMainChat, initialThreadId });
+  chatIdentityRef.current = { token, isMainChat, initialThreadId };
+  const pendingResumeRef = useRef<symbol | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const commandsEnabled = isMainChat;
@@ -1470,15 +1474,23 @@ export function ChatConversationScreen({
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading, isMainChat]);
 
   const resumePendingRun = useCallback(async () => {
-    if (!token || isSendingRef.current) return;
+    if (!token || isSendingRef.current || pendingResumeRef.current) return;
+    const generation = restoreGenerationRef.current;
+    const identity = chatIdentityRef.current;
+    const isCurrent = () => restoreGenerationRef.current === generation &&
+      chatIdentityRef.current.token === identity.token &&
+      chatIdentityRef.current.isMainChat === identity.isMainChat &&
+      chatIdentityRef.current.initialThreadId === identity.initialThreadId && !isSendingRef.current;
     const pendingRun = await loadPendingRun();
-    if (!pendingRun?.runId || isSendingRef.current) return;
-    const activeThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
+    if (!pendingRun?.runId || !isCurrent() || pendingResumeRef.current) return;
+    const activeThreadId = isMainChat ? threadId : (initialThreadId ?? threadId);
     const belongsToMainSession = isMainChat && pendingRun.threadId === null;
     if (!belongsToMainSession && (!activeThreadId || pendingRun.threadId !== activeThreadId)) {
       return;
     }
 
+    const lease = Symbol();
+    pendingResumeRef.current = lease;
     setForceScrollNext(true);
     setMessages((prev) =>
       mergePendingTurn(
@@ -1491,6 +1503,7 @@ export function ChatConversationScreen({
     );
 
     const updatePendingMessage = (nextContent: string) => {
+      if (!isCurrent()) return;
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingRun.pendingMessageId
@@ -1506,6 +1519,7 @@ export function ChatConversationScreen({
     };
 
     const setProgressChip = (chipLabelRaw: string) => {
+      if (!isCurrent()) return;
       const chipLabel = chipLabelRaw.trim();
       if (!chipLabel) return;
 
@@ -1531,7 +1545,7 @@ export function ChatConversationScreen({
     try {
       await waitForRunCompletion(pendingRun.runId, token, {
         onSessionInfo: (nextThreadId) => {
-          setThreadId((prev) => nextThreadId ?? prev);
+          if (isCurrent()) setThreadId((prev) => nextThreadId ?? prev);
         },
         onStatus: (statusMessage) => {
           updatePendingMessage(statusMessage || 'Reconnecting...');
@@ -1539,6 +1553,7 @@ export function ChatConversationScreen({
         onProgressChip: setProgressChip,
       });
 
+      if (!isCurrent()) return;
       const restored = isMainChat
         ? await restoreChatHistory(token, {
             threadId: pendingRun.threadId,
@@ -1547,6 +1562,7 @@ export function ChatConversationScreen({
         : pendingRun.threadId
           ? await loadThreadHistory(token, pendingRun.threadId)
           : { threadId: null, pendingEventId: null, messages: [] };
+      if (!isCurrent()) return;
       setThreadId(restored.threadId);
       setThreadTitle(restored.threadTitle ?? null);
       setPendingEventId(restored.pendingEventId);
@@ -1555,6 +1571,7 @@ export function ChatConversationScreen({
       }
       await clearPendingRun();
     } catch (error) {
+      if (!isCurrent()) return;
       if (shouldKeepPendingRun(error)) {
         return;
       }
@@ -1574,6 +1591,8 @@ export function ChatConversationScreen({
         ),
       );
       await clearPendingRun();
+    } finally {
+      if (pendingResumeRef.current === lease) pendingResumeRef.current = null;
     }
   }, [initialThreadId, isMainChat, pendingEventId, threadId, token]);
 
@@ -1583,103 +1602,139 @@ export function ChatConversationScreen({
     void resumePendingRun();
   }, [allowed, isAuthLoading, isBootstrapping, isMainChat, resumePendingRun, token]);
 
-  const syncLatestThreadState = useCallback(async () => {
-    if (!token || !allowed || isAuthLoading || isBootstrapping) return;
+  const syncLatestThreadState = useCallback(
+    async (context?: { signal: AbortSignal; isCurrent: () => boolean }) => {
+      if (!token || !allowed || isAuthLoading || isBootstrapping || isSendingRef.current)
+        return false;
+      const generation = restoreGenerationRef.current;
+      const identity = chatIdentityRef.current;
+      const isCurrent = () =>
+        (!context || context.isCurrent()) &&
+        !isSendingRef.current &&
+        restoreGenerationRef.current === generation &&
+        chatIdentityRef.current.token === identity.token &&
+        chatIdentityRef.current.isMainChat === identity.isMainChat &&
+        chatIdentityRef.current.initialThreadId === identity.initialThreadId;
 
-    const restored = isMainChat
-      ? await restoreChatHistory(token, {
-          threadId,
-          pendingEventId,
-        })
-      : threadId
-        ? await loadThreadHistory(token, threadId)
-        : { threadId: null, pendingEventId: null, messages: [] };
-    if (isSendingRef.current) return;
-    setThreadId(restored.threadId);
-    setThreadTitle(restored.threadTitle ?? null);
-    setPendingEventId(restored.pendingEventId);
-    const pendingRun = await loadPendingRun();
-    if (isSendingRef.current) return;
-    const activeScreenThreadId = isMainChat ? threadId : initialThreadId ?? threadId;
-    const relevantPendingRun =
-      pendingRun &&
-      ((isMainChat && pendingRun.threadId === null) ||
-        (activeScreenThreadId && pendingRun.threadId === activeScreenThreadId))
-        ? pendingRun
-        : null;
-    if (restored.messages.length > 0 || relevantPendingRun) {
-      setMessages((prev) => {
-        if (relevantPendingRun) {
-          return mergePendingTurn(
-            restored.messages,
-            relevantPendingRun.pendingMessageId,
-            relevantPendingRun.question,
-            prev,
-            relevantPendingRun.userMessageId,
-          );
-        }
-
-        const pendingIndex = prev.findIndex((message) => message.pending);
-        const previousUser = pendingIndex > 0 ? prev[pendingIndex - 1] : undefined;
-        return pendingIndex >= 0 && previousUser?.role === 'user'
-          ? mergePendingTurn(
+      const restored = isMainChat
+        ? await restoreChatHistory(
+            token,
+            {
+              threadId,
+              pendingEventId,
+            },
+            { signal: context?.signal },
+          )
+        : threadId
+          ? await loadThreadHistory(token, threadId, context?.signal)
+          : { threadId: null, pendingEventId: null, messages: [] };
+      if (!isCurrent()) return false;
+      const pendingRun = await loadPendingRun();
+      if (!isCurrent()) return false;
+      const activeScreenThreadId = restored.threadId;
+      const relevantPendingRun =
+        pendingRun &&
+        ((isMainChat &&
+          pendingRun.threadId === null &&
+          (!threadId || restored.threadId === threadId)) ||
+          (activeScreenThreadId && pendingRun.threadId === activeScreenThreadId))
+          ? pendingRun
+          : null;
+      if (restored.threadId !== threadId && !relevantPendingRun) {
+        restoreGenerationRef.current++;
+      }
+      setThreadId(restored.threadId);
+      setThreadTitle(restored.threadTitle ?? null);
+      setPendingEventId(restored.pendingEventId);
+      {
+        setMessages((prev) => {
+          if (relevantPendingRun) {
+            return mergePendingTurn(
               restored.messages,
-              prev[pendingIndex].id,
-              previousUser.content,
+              relevantPendingRun.pendingMessageId,
+              relevantPendingRun.question,
               prev,
-            )
-          : restored.messages;
-      });
-    }
-  }, [
-    allowed,
-    initialThreadId,
-    isAuthLoading,
-    isBootstrapping,
-    isMainChat,
-    pendingEventId,
-    threadId,
-    token,
-  ]);
+              relevantPendingRun.userMessageId,
+            );
+          }
 
-  useEffect(() => {
-    if (!token || !allowed || isAuthLoading || isBootstrapping) return;
+          const pendingIndex = prev.findIndex((message) => message.pending);
+          const previousUser = pendingIndex > 0 ? prev[pendingIndex - 1] : undefined;
+          return restored.threadId === threadId &&
+            pendingIndex >= 0 &&
+            previousUser?.role === 'user'
+            ? mergePendingTurn(restored.messages, prev[pendingIndex].id, previousUser.content, prev)
+            : restored.messages.length
+              ? restored.messages
+              : starterMessages;
+        });
+      }
+      return true;
+    },
+    [
+      allowed,
+      isAuthLoading,
+      isBootstrapping,
+      isMainChat,
+      pendingEventId,
+      threadId,
+      token,
+      starterMessages,
+    ],
+  );
 
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState !== 'active') return;
-
-      void (async () => {
-        try {
-          await syncLatestThreadState();
-          await resumePendingRun();
-        } catch {
-          // Ignore foreground sync failures and keep current UI state.
-        }
-      })();
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, syncLatestThreadState, token]);
+  const latestSyncRef = useRef(syncLatestThreadState);
+  latestSyncRef.current = syncLatestThreadState;
+  const resumeRunRef = useRef(resumePendingRun);
+  resumeRunRef.current = resumePendingRun;
+  const canLiveSyncRef = useRef(false);
+  canLiveSyncRef.current = Boolean(
+    token &&
+    allowed &&
+    !isAuthLoading &&
+    !isBootstrapping &&
+    !isConfirmingEvent &&
+    !isRegeneratingTitle,
+  );
 
   useFocusEffect(
     useCallback(() => {
-      if (!token || !allowed || isAuthLoading || isBootstrapping) {
-        return () => undefined;
-      }
-
-      void (async () => {
-        try {
-          await syncLatestThreadState();
-          await resumePendingRun();
-        } catch {
-          // Keep the currently rendered conversation if a focus refresh fails.
-        }
-      })();
-
-      return () => undefined;
-    }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, syncLatestThreadState, token]),
+      if (
+        !token ||
+        !allowed ||
+        isAuthLoading ||
+        isBootstrapping ||
+        (!isMainChat && !initialThreadId)
+      )
+        return;
+      const loop = createChatRefreshLoop({
+        canRefresh: () => canLiveSyncRef.current && !isSendingRef.current,
+        readRevision: async (signal) => {
+          const suffix = isMainChat ? '' : `?thread_id=${encodeURIComponent(initialThreadId!)}`;
+          const state = await apiFetch(`/mobile/chat-state${suffix}`, {
+            token,
+            signal,
+            cache: 'no-store',
+          });
+          return JSON.stringify(state);
+        },
+        refresh: async (context) => {
+          const applied = await latestSyncRef.current(context);
+          if (!applied || !context.isCurrent()) return false;
+          void resumeRunRef.current();
+          return context.isCurrent();
+        },
+      });
+      if (AppState.currentState === 'active') loop.start();
+      const listener = AppState.addEventListener('change', (state) => {
+        if (state === 'active') loop.start();
+        else loop.pause();
+      });
+      return () => {
+        loop.pause();
+        listener.remove();
+      };
+    }, [allowed, initialThreadId, isAuthLoading, isBootstrapping, isMainChat, token]),
   );
 
   useEffect(() => {
@@ -1828,6 +1883,7 @@ export function ChatConversationScreen({
     const activeThreadId = threadId || initialThreadId;
     if (!token || !activeThreadId || isRegeneratingTitle || isSending) return;
 
+    restoreGenerationRef.current++;
     setIsRegeneratingTitle(true);
     try {
       const updatedThread = await regenerateThreadTitle(token, activeThreadId);
@@ -1934,6 +1990,7 @@ export function ChatConversationScreen({
 
       setIsSending(true);
       isSendingRef.current = true;
+      restoreGenerationRef.current++;
       let activeRunId: string | null = null;
       let activeRunThreadId = isMainChat ? threadId : threadId ?? initialThreadId;
       try {
@@ -2279,6 +2336,7 @@ export function ChatConversationScreen({
           return;
         }
 
+        restoreGenerationRef.current++;
         setIsConfirmingEvent(true);
         try {
           await apiFetch('/mobile/commands/contact/confirm', {
@@ -2347,6 +2405,7 @@ export function ChatConversationScreen({
           return;
         }
 
+        restoreGenerationRef.current++;
         setIsConfirmingEvent(true);
         try {
           await apiFetch('/mobile/commands/contact/confirm', {
@@ -2487,6 +2546,7 @@ export function ChatConversationScreen({
           return;
         }
 
+        restoreGenerationRef.current++;
         setIsConfirmingEvent(true);
         try {
           const modifications = eventDraftModificationsByPreview[action.previewId] || {};

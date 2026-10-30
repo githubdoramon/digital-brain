@@ -5,6 +5,7 @@ worker occupied. Foreground calls retain normal transport retries. A bounded
 background reservation prevents continuous foreground traffic from starving history.
 """
 
+import inspect
 import math
 import os
 import random
@@ -35,6 +36,7 @@ class BackgroundDeferred(RuntimeError):
 @dataclass
 class _State:
     foreground: int = 0
+    foreground_turns: int = 0
     background: bool = False
     failures: int = 0
     cooldown_until: float = 0
@@ -48,6 +50,42 @@ def is_background():
 
 
 @contextmanager
+def foreground_work(endpoint=None):
+    """Reserve priority across routing, tool work and successive model rounds."""
+    if is_background():
+        yield
+        return
+    with _LOCK:
+        state = _state(endpoint or os.getenv("LLM_BASE_URL", ""))
+        state.foreground_turns += 1
+    try:
+        yield
+    finally:
+        with _LOCK:
+            state.foreground_turns -= 1
+
+
+def interactive_request(function):
+    if inspect.isasyncgenfunction(function):
+        @wraps(function)
+        async def stream(*args, **kwargs):
+            with foreground_work():
+                iterator = function(*args, **kwargs)
+                try:
+                    async for event in iterator:
+                        yield event
+                finally:
+                    await iterator.aclose()
+        return stream
+
+    @wraps(function)
+    async def call(*args, **kwargs):
+        with foreground_work():
+            return await function(*args, **kwargs)
+    return call
+
+
+@contextmanager
 def background_work(lane="background", *, poll_seconds=0, before_request=None):
     token = _BACKGROUND.set(True)
     session = {
@@ -57,6 +95,7 @@ def background_work(lane="background", *, poll_seconds=0, before_request=None):
         "deferred": None,
         "request_lock": threading.RLock(),
         "endpoint": os.getenv("LLM_BASE_URL", ""),
+        "foreground_reservation": False,
         # Keep a live worker's FIFO position across polls, including scheduler
         # jitter and one missed poll. Stopped workers must still expire.
         "waiter_seconds": max(60, 3 * poll_seconds),
@@ -108,7 +147,7 @@ def _blocked(state, now, lane):
         return BackgroundDeferred("background_busy")
     if state.waiting and next(iter(state.waiting)) != lane:
         return BackgroundDeferred("background_turn")
-    if state.foreground and now - state.last_background < RESERVATION_SECONDS:
+    if (state.foreground or state.foreground_turns) and now - state.last_background < RESERVATION_SECONDS:
         return BackgroundDeferred("foreground_priority")
     return None
 
@@ -142,6 +181,8 @@ def request_slot(endpoint):
             if blocked:
                 state.deferred += 1
                 raise _record_deferral(blocked)
+            if session is not None:
+                session["foreground_reservation"] = bool(state.foreground or state.foreground_turns)
             state.background = True
             state.last_background = time.monotonic()
             state.waiting.pop(lane, None)
@@ -152,6 +193,11 @@ def request_slot(endpoint):
             raise _record_deferral(
                 BackgroundDeferred("provider_cooldown", state.cooldown_until - time.monotonic())
             )
+        elif background and not session.get("foreground_reservation") and (state.foreground or state.foreground_turns) and time.monotonic() - state.last_background < RESERVATION_SECONDS:
+            # Owning a workflow slot does not authorize starting another phase
+            # in front of an interactive turn that arrived in the meantime.
+            state.deferred += 1
+            raise _record_deferral(BackgroundDeferred("foreground_priority"))
         elif not background:
             state.foreground += 1
     try:
@@ -206,6 +252,7 @@ def status():
         return [
             {
                 "foreground": s.foreground,
+                "foreground_turns": s.foreground_turns,
                 "background": s.background,
                 "cooldown_seconds": max(0, math.ceil(s.cooldown_until - now)),
                 "failure_streak": s.failures,

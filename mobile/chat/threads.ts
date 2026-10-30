@@ -156,9 +156,15 @@ export async function regenerateThreadTitle(
   })) as ThreadSummary;
 }
 
-export async function loadThreadHistory(token: string, threadId: string): Promise<RestoreResult> {
+export async function loadThreadHistory(
+  token: string,
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<RestoreResult> {
   const thread = (await apiFetch(`/mobile/threads/${encodeURIComponent(threadId)}`, {
     token,
+    signal,
+    cache: 'no-store',
   })) as ThreadDetail;
 
   return {
@@ -174,13 +180,14 @@ export async function restoreChatHistory(
   storedSession: StoredChatSession | null,
   options?: {
     preferStoredThread?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<RestoreResult> {
   const preferStoredThread = options?.preferStoredThread === true;
 
   if (preferStoredThread && storedSession?.threadId) {
     try {
-      const restored = await loadThreadHistory(token, storedSession.threadId);
+      const restored = await loadThreadHistory(token, storedSession.threadId, options?.signal);
       return {
         ...restored,
         pendingEventId: storedSession.pendingEventId ?? null,
@@ -190,7 +197,11 @@ export async function restoreChatHistory(
     }
   }
 
-  const mainSession = (await apiFetch('/mobile/main-session', { token })) as MainSession;
+  const mainSession = (await apiFetch('/mobile/main-session', {
+    token,
+    signal: options?.signal,
+    cache: 'no-store',
+  })) as MainSession;
 
   const threadId = mainSession.thread_id ?? null;
   const resolvedPendingEventId = mainSession.pending_event_id ?? null;

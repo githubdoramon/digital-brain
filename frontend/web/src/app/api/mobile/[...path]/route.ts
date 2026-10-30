@@ -48,6 +48,8 @@ export async function handler(
   ]).has(targetPath);
   const isGlassesChat = request.method === "POST" &&
     new Set(["glasses/chat", "glasses/chat/speech-test"]).has(targetPath);
+  const isLiveChatRead = request.method === "GET" &&
+    (new Set(["chat-state", "main-session"]).has(targetPath) || /^threads\/[^/]+$/.test(targetPath));
   const authStartedAt = performance.now();
   const authHeader = await buildAuthorizationHeader(request);
   const proxyAuthMs = performance.now() - authStartedAt;
@@ -76,6 +78,7 @@ export async function handler(
     body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
     duplex: "half",
     ...(isGlassesChat ? { signal: request.signal } : {}),
+    ...(isLiveChatRead ? { signal: request.signal, cache: "no-store" as const } : {}),
   };
 
   try {
@@ -114,7 +117,7 @@ export async function handler(
       responseHeaders.set("server-timing", timing);
       responseHeaders.set("cache-control", "no-store");
     }
-    if (isGlassesChat) responseHeaders.set("cache-control", "no-store");
+    if (isGlassesChat || isLiveChatRead) responseHeaders.set("cache-control", "no-store");
     return new Response(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,

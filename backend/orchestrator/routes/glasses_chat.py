@@ -18,7 +18,7 @@ from routes.chat import ask
 from schemas import AskIn, ClientContextIn
 from search_normalization import normalize_search_text
 from time_context import use_time_context
-from voice_context import spoken_reply, voice_stage
+from voice_context import spoken_reply, voice_progress, voice_stage
 
 _active_owners: set[str] = set()
 CHAT_DEADLINE_SECONDS = 300
@@ -132,6 +132,7 @@ def create_glasses_chat_router() -> APIRouter:
                 }
                 with spoken_reply(), use_time_context(clock):
                     voice_tasks = BackgroundTasks()
+                    chat_started = time.perf_counter()
                     result = await ask(
                         AskIn(
                             question=phrase,
@@ -141,14 +142,20 @@ def create_glasses_chat_router() -> APIRouter:
                         user,
                     )
                     background_tasks.add_task(_voice_background_tasks, voice_tasks)
+                    chat_ms = (time.perf_counter() - chat_started) * 1000
+                    voice_progress("chat_complete", duration_ms=chat_ms)
                     voice_stage("answer_ready")
                     audio, audio_error = None, None
+                    tts_started = time.perf_counter()
                     try:
                         audio = await synthesize(result.answer)
                         voice_stage("speech_ready")
                     except SpeechUnavailable as exc:
                         audio_error = str(exc)
                         voice_stage("speech_failed", audio_error)
+                    tts_ms = (time.perf_counter() - tts_started) * 1000
+                    voice_progress("tts_complete", duration_ms=tts_ms, success=audio is not None)
+                    response.headers["Server-Timing"] = f"voice_chat;dur={chat_ms:.1f}, voice_tts;dur={tts_ms:.1f}"
                     return {
                         "answer": result.answer,
                         "thread_id": result.thread_id,

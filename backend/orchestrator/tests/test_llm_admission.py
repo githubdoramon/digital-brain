@@ -228,3 +228,79 @@ def test_sync_stream_closes_provider_connection_before_releasing_admission(
         )
     response.close.assert_called_once()
     assert gate.status()[0]["foreground"] == 0
+
+
+def test_admitted_background_phase_yields_to_an_interactive_turn_between_model_calls():
+    started, release = threading.Event(), threading.Event()
+
+    def foreground():
+        with gate.foreground_work(ENDPOINT):
+            started.set()
+            assert release.wait(2)
+
+    with gate.background_work("knowledge"):
+        with gate.request_slot(ENDPOINT):
+            pass  # First phase completed before the interactive request arrived.
+        thread = threading.Thread(target=foreground)
+        thread.start()
+        try:
+            assert started.wait(2)
+            state = gate._state(ENDPOINT)
+            assert state.foreground_turns == 1 and state.foreground == 0
+            with pytest.raises(gate.BackgroundDeferred, match="foreground_priority"):
+                with gate.request_slot(ENDPOINT):
+                    pytest.fail("A second background phase must not start")
+        finally:
+            release.set()
+            thread.join(2)
+    assert gate._state(ENDPOINT).foreground_turns == 0
+    assert not gate._state(ENDPOINT).background
+
+
+@pytest.mark.asyncio
+async def test_interactive_priority_is_released_on_cancellation_and_stream_close():
+    started = asyncio.Event()
+
+    @gate.interactive_request
+    async def waiting():
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(waiting())
+    await started.wait()
+    assert gate._state(ENDPOINT).foreground_turns == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert gate._state(ENDPOINT).foreground_turns == 0
+
+    closed = []
+
+    @gate.interactive_request
+    async def stream():
+        try:
+            yield "partial"
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    iterator = stream()
+    assert await iterator.__anext__() == "partial"
+    assert gate._state(ENDPOINT).foreground_turns == 1
+    await iterator.aclose()
+    assert closed == [True]
+    assert gate._state(ENDPOINT).foreground_turns == 0
+
+
+def test_explicit_background_fairness_reservation_can_finish_its_phases(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    with gate.foreground_work(ENDPOINT):
+        state = gate._state(ENDPOINT)
+        clock[0] = state.last_background + gate.RESERVATION_SECONDS + 1
+        with gate.background_work("reserved-history"):
+            assert gate.background_ready()
+            with gate.request_slot(ENDPOINT):
+                pass
+            with gate.request_slot(ENDPOINT):
+                pass  # The bounded reservation covers the whole workflow.

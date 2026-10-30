@@ -25,7 +25,7 @@ from time import perf_counter
 from typing import Any, Optional
 
 from observability.log_stream import DECISION_LEVEL, INTENTIONAL_DEBUG_LEVEL
-from voice_context import is_voice_request
+from voice_context import is_voice_request, voice_progress
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +300,7 @@ class AgentLogger:
         run_id = run_id or str(uuid.uuid4())
         if is_voice_request():
             # Voice text belongs in chat evidence/private captures, never diagnostic exports.
+            voice_progress("agent_started")
             return run_id
 
         log = AgentRunLog(
@@ -378,6 +379,11 @@ class AgentLogger:
         had_tool_calls: bool = False,
     ) -> None:
         """Log LLM call metrics for a step."""
+        if is_voice_request():
+            voice_progress("model_complete", round_number=step_number, duration_ms=duration_ms,
+                           input_tokens=prompt_tokens, output_tokens=completion_tokens,
+                           count=int(had_tool_calls))
+            return
         with self._lock:
             if run_id not in self._logs:
                 return
@@ -415,6 +421,11 @@ class AgentLogger:
         extracted_facts: Optional[list[str]] = None,
     ) -> None:
         """Log a tool call within a step."""
+        if is_voice_request():
+            voice_progress("tool_complete", round_number=step_number, duration_ms=duration_ms,
+                           tool_name=tool_name, success=pre_validation_passed and
+                           not (isinstance(result, dict) and (result.get("success") is False or result.get("error"))))
+            return
         tool_log = ToolCallLog(
             tool_name=tool_name,
             arguments=arguments,
@@ -586,6 +597,9 @@ class AgentLogger:
         detected_pattern: str,
     ) -> None:
         """Log detection of malformed LLM output."""
+        if is_voice_request():
+            voice_progress("format_retry")
+            return
         self._log(f"MALFORMED OUTPUT DETECTED: {detected_pattern}", "ERROR")
         self._log(f"  Content preview: {content_preview[:100]}...", "ERROR")
         self._log("  Requesting LLM to retry with proper tool call format", "DECISION")
@@ -595,6 +609,9 @@ class AgentLogger:
         content_preview: str,
     ) -> None:
         """Log detection of continuation intent without tool call."""
+        if is_voice_request():
+            voice_progress("continuation_retry")
+            return
         self._log("CONTINUATION INTENT WITHOUT TOOL CALL", "DECISION")
         self._log(f"  Content: {content_preview[:80]}...", "DECISION")
         self._log("  Prompting LLM to actually invoke the tool", "DECISION")
@@ -620,6 +637,9 @@ class AgentLogger:
         Returns:
             The completed AgentRunLog, or None if not found
         """
+        if is_voice_request():
+            voice_progress("agent_complete", success=success)
+            return None
         with self._lock:
             if run_id not in self._logs:
                 return None

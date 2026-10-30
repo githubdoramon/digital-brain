@@ -87,3 +87,19 @@ test(`${target} carries cancellation, authentication and ephemeral audio without
   assert.equal(calls, 1);
 });
 }
+
+for (const target of ['chat-state', 'main-session', 'threads/thread-sample']) {
+  test(`${target} bypasses caching and propagates cancellation`, async () => {
+    const req = new Request(`https://frontend.invalid/api/mobile/${target}`, {
+      headers: { authorization: 'Bearer synthetic-token' },
+    });
+    req.nextUrl = new URL(req.url);
+    const route = load(async (url, options) => {
+      assert.equal(options.cache, 'no-store');
+      assert.equal(options.signal, req.signal);
+      return new Response('{}', { headers: { 'cache-control': 'public, max-age=3600' } });
+    });
+    const response = await route.handler(req, { params: Promise.resolve({ path: target.split('/') }) });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  });
+}

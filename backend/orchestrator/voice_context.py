@@ -10,6 +10,37 @@ _VOICE = ContextVar("glasses_voice_request", default=False)
 DEVICE_TOOLS = {"home_assistant", "bash", "run_skill_script"}
 
 
+def voice_progress(event: str, *, duration_ms=0, round_number=0, count=0,
+                   input_tokens=None, output_tokens=None, tool_name=None, success=True):
+    """Allow-listed operational metadata; never prompts, identifiers or results."""
+    if not is_voice_request() or event not in {
+        "agent_started", "model_complete", "tool_complete", "agent_complete",
+        "continuation_retry", "format_retry", "context_budget",
+        "routing_complete", "chat_complete", "tts_complete",
+    }:
+        return
+    name = "none"
+    if event == "tool_complete":
+        from tools.registry import get_registry
+
+        contract = get_registry().get_contract(tool_name)
+        name = contract.name if contract is not None else "unknown"
+    numbers = [max(0, min(1_000_000_000, int(n or 0))) for n in (
+        duration_ms, round_number, count,
+    )]
+    tokens = ["unknown" if n is None else max(0, min(1_000_000_000, int(n)))
+              for n in (input_tokens, output_tokens)]
+    token = _VOICE.set(False)
+    try:
+        logging.getLogger(__name__).info(
+            "[glasses-chat] event=%s duration_ms=%d round=%d count=%d input_tokens=%s "
+            "output_tokens=%s tool=%s outcome=%s",
+            event, *numbers, *tokens, name, "success" if success else "failed",
+        )
+    finally:
+        _VOICE.reset(token)
+
+
 def voice_stage(stage: str, reason: str = "none") -> None:
     """Only fixed status enums may leave the speech privacy boundary."""
     if stage not in {

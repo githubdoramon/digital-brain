@@ -173,3 +173,23 @@ disconnect, sign-out and disable invalidate pending output. Listening is paused
 without enabling it or arming a microphone; an already-active detector is replaced
 with a fresh one afterward. The diagnostic export retains only test timestamps,
 outcome and safe errors alongside content-free playback metadata.
+
+## Chat visibility and interactive priority
+
+The mobile chat screen probes authenticated `/mobile/chat-state` every three
+seconds only while focused and foregrounded. The probe returns the owner-scoped
+thread ID and revision, without message content. It does not touch main-session
+inactivity. Messages/title/cards reload only after a revision change; metadata
+edits update the thread revision atomically. Main-session resets clear the old
+view. Reads bypass proxy caching, have a bounded deadline and error backoff, and
+stop on background/blur. Stale snapshots cannot overwrite a local send, another
+account or another viewed thread; pending-run recovery is deduplicated.
+
+Both streamed app chat and glasses chat hold foreground model priority across
+routing, tool work and successive model rounds. A background workflow rechecks
+that priority before every subsequent model phase, even if it already owns an
+admission slot. It yields through the existing durable deferral path. The bounded
+five-minute background reservation still permits an explicitly reserved workflow
+to finish. Already-dispatched provider calls cannot be preempted by this
+process-local policy; concurrent processes/provider clients remain outside its
+scope.

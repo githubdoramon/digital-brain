@@ -939,6 +939,15 @@ def create_chat_router() -> APIRouter:
             messages=thread_detail.get("messages") or [],
         )
 
+    @router.get("/mobile/chat-state")
+    def get_chat_revision(response: Response, thread_id: str | None = Query(default=None, min_length=1, max_length=200),
+                          user: dict = Depends(get_current_user)):
+        response.headers["Cache-Control"] = "no-store"
+        user_email = user.get("email")
+        if not user_email:
+            raise HTTPException(400, "Authenticated user email missing")
+        return conversations.get_chat_state(user_email, thread_id)
+
     @router.post("/threads", response_model=ThreadOut)
     @router.post("/mobile/threads", response_model=ThreadOut)
     def create_conversation_thread(payload: ThreadCreate, user: dict = Depends(get_current_user)):

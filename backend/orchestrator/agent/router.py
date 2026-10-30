@@ -28,6 +28,7 @@ from observability import trace
 from observability.mirador import timed_workflow_stage
 from tools.registry import ALWAYS_AVAILABLE_GROUPS
 from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
+from voice_context import voice_progress
 
 
 class IntentType(str, Enum):
@@ -206,6 +207,7 @@ class IntentRouter:
             # obvious personal statements.
             rule_result.should_generate_facts = False
             duration_ms = (perf_counter() - start_time) * 1000
+            voice_progress("routing_complete", duration_ms=duration_ms)
             trace.trace_router_rule_match(
                 rule_result.intent.value,
                 rule_result.confidence,
@@ -221,6 +223,7 @@ class IntentRouter:
                 llm_start = perf_counter()
                 llm_result = await asyncio.to_thread(self._llm_classify, question, conversation_history)
                 llm_duration = (perf_counter() - llm_start) * 1000
+                voice_progress("routing_complete", duration_ms=llm_duration, count=1)
                 trace.trace_router_llm_result(
                     llm_result.intent.value,
                     llm_result.confidence,

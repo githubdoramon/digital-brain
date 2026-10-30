@@ -341,6 +341,9 @@ def prepare_request(
         payload[key] = min(int(payload.get(key) or budget.output_limit), budget.output_limit)
     measurement = input_measurement(payload)
     before = measurement["estimated_tokens"]
+    from voice_context import voice_progress
+    voice_progress("context_budget", input_tokens=before,
+                   count=len(payload.get("tools") or []))
     target = int(budget.input_limit * 0.8)
     if policy and policy.target_input_tokens is not None:
         target = min(target, policy.target_input_tokens)

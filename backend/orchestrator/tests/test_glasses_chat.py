@@ -136,7 +136,7 @@ def test_speech_stage_reports_failure_without_private_content(route, monkeypatch
     monkeypatch.setattr(glasses_chat, "synthesize", unavailable)
     with caplog.at_level(logging.INFO, logger="voice_context"):
         route[0].post("/mobile/glasses/chat", json=body())
-    messages = [r.getMessage() for r in caplog.records if r.name == "voice_context"]
+    messages = [r.getMessage() for r in caplog.records if r.name == "voice_context" and " stage=" in r.getMessage()]
     assert messages == [
         "[glasses-chat] stage=started reason=none",
         "[glasses-chat] stage=answer_ready reason=none",
@@ -246,7 +246,8 @@ def test_voice_logs_do_not_enter_console_or_general_log_buffer():
         run = agent_logger.start_run("private speech", "viewer@example.com")
         assert agent_logger.export_json(run) is None
     assert output.getvalue() == ""
-    assert len(get_log_buffer().get_recent()) == before
+    assert all("private speech" not in str(entry) and "viewer@example.com" not in str(entry)
+               for entry in get_log_buffer().get_recent()[before:])
 
 
 @pytest.mark.parametrize(
@@ -666,3 +667,26 @@ async def test_speech_test_disconnect_cancels_synthesis(route, monkeypatch):
                        {"email": "viewer@example.com"})
     assert exc.value.status_code == 499 and cancelled.is_set()
     assert "viewer@example.com" not in glasses_chat._active_owners
+
+
+def test_voice_agent_progress_is_visible_without_transcript_reasoning_arguments_or_identity(caplog):
+    from voice_context import voice_progress
+
+    with caplog.at_level(logging.INFO, logger="voice_context"), spoken_reply():
+        log = AgentLogger()
+        run = log.start_run("A private fictional sentence.", "alex@example.com")
+        log.log_llm_call(run, 1, 125, content="Private answer", reasoning="Private reasoning")
+        log.log_tool_call(run, 1, "get_events", {"query": "Private argument"}, duration_ms=12,
+                          result={"events": [{"title": "Private record"}]})
+        log.log_continuation_detected("Private continuation")
+        log.complete_run(run, final_answer="Private answer")
+        voice_progress("context_budget", input_tokens=1200, count=2)
+        voice_progress("not_allowed")
+        voice_progress("tool_complete", tool_name="private_unregistered_name")
+        assert log.export_json(run) is None
+    messages = "\n".join(r.getMessage() for r in caplog.records if r.name == "voice_context")
+    for expected in ["event=agent_started", "event=model_complete", "duration_ms=125", "event=tool_complete",
+                     "tool=get_events", "event=agent_complete", "input_tokens=1200", "tool=unknown"]:
+        assert expected in messages
+    for private in ["private", "Private", "alex@example.com", "not_allowed"]:
+        assert private not in messages

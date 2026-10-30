@@ -103,3 +103,59 @@ def test_get_active_main_session_clears_timed_out_thread(monkeypatch):
 
     assert result is None
     assert cleared == ["user@example.com"]
+
+
+def _revision_cursor(monkeypatch, row):
+    from unittest.mock import MagicMock
+    conn, cur = MagicMock(), MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchone.return_value = row
+    monkeypatch.setattr(conversations, "get_conn", lambda: conn)
+    return conn, cur
+
+
+def test_chat_revision_is_owner_scoped_and_does_not_load_messages_or_touch_session(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn, cur = _revision_cursor(monkeypatch, {
+        "id": "thread:sample", "updated_at": now, "session_updated_at": now,
+    })
+    assert conversations.get_chat_state("alex@example.com") == {
+        "thread_id": "thread:sample", "revision": now.isoformat(),
+    }
+    query, args = cur.execute.call_args.args
+    assert args == ("alex@example.com",)
+    assert "t.user_email=ms.user_email" in query
+    assert "conversation_messages" not in query and "UPDATE" not in query
+    conn.commit.assert_not_called()
+
+
+def test_expired_main_revision_is_empty_without_extending_the_idle_window(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn, _ = _revision_cursor(monkeypatch, {
+        "id": "thread:old", "updated_at": now,
+        "session_updated_at": now - timedelta(minutes=31),
+    })
+    assert conversations.get_chat_state("alex@example.com") == {"thread_id": None, "revision": None}
+    conn.commit.assert_not_called()
+
+
+def test_explicit_thread_probe_checks_owner_and_does_not_apply_main_timeout(monkeypatch):
+    now = datetime.now(timezone.utc) - timedelta(days=1)
+    _, cur = _revision_cursor(monkeypatch, {"id": "thread:history", "updated_at": now})
+    assert conversations.get_chat_state("alex@example.com", "thread:history")["revision"] == now.isoformat()
+    query, args = cur.execute.call_args.args
+    assert "user_email=%s" in query and args == ("thread:history", "alex@example.com")
+    _revision_cursor(monkeypatch, None)
+    assert conversations.get_chat_state("other@example.com", "thread:history") == {"thread_id": None, "revision": None}
+
+
+def test_metadata_edits_invalidate_chat_revision_atomically(monkeypatch):
+    conn, cur = _revision_cursor(monkeypatch, {"thread_id": "thread:sample"})
+    assert conversations.set_message_metadata_field(1, "command_resolved", {"status": "created"})
+    calls = cur.execute.call_args_list
+    assert len(calls) == 2
+    assert "RETURNING thread_id" in calls[0].args[0]
+    assert "updated_at=NOW()" in calls[1].args[0]
+    assert calls[1].args[1] == ("thread:sample",)
+    conn.commit.assert_called_once()

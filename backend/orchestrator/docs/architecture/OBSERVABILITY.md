@@ -125,3 +125,21 @@ does not infer a page view or correlate requests by user/session identity.
 Telemetry setup failures are logged and do not prevent the orchestrator from
 starting. Missing keys disable Mirador export. This feature does not instrument
 the mobile app or web frontend.
+
+## Glasses request progress
+
+Voice requests retain their transcript privacy boundary. Ordinary agent/payload
+logging remains suppressed, but explicit `[glasses-chat]` progress records expose
+routing duration, pre-compaction input estimates/tool counts, model round duration,
+registered tool names/durations/outcomes, continuation/format retries, completion,
+and separate chat/TTS duration. Missing token measurements are `unknown`, not zero.
+These allow-listed records contain no prompts, answers, reasoning, tool arguments,
+results, owner/thread/request identifiers or raw errors. Full conversational text
+continues to belong to the authenticated chat and private wake captures. Local
+progress records do not enable external application-log export.
+
+Glasses chat returns numeric `Server-Timing` fields `voice_chat` and `voice_tts`.
+Chat duration includes routing and all model/tool rounds; playback still waits for
+one canonical completed answer and bounded TTS, unlike a screen displaying early
+streamed text. Host tests and provider traces do not establish physical playback
+latency on a device.
