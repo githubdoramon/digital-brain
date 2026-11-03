@@ -262,8 +262,6 @@ def _defer_learning(jobs, exc):
 @traced_intelligence_run()
 @llm_admission.background_work("knowledge")
 def process_once(owners):
-    if not llm_admission.background_ready():
-        return False
     jobs = claim(owners, batched=True)
     if not jobs:
         return False
@@ -288,6 +286,11 @@ def process_once(owners):
                 len(batch) - len(jobs),
                 sum(len(row["text"]) for row in batch),
             )
+            needs_model = bool(intelligence_model.eligible_sources(batch))
+            if needs_model and not llm_admission.background_ready():
+                raise llm_admission.BackgroundDeferred("background_wait", 10)
+            # The shared analyzer returns immediately for ineligible sources,
+            # retaining its normal selection diagnostics without a model request.
             context, findings = intelligence_model.analyze(
                 job["user_email"], batch, knowledge_only=True, durable_splits=True
             )
@@ -350,6 +353,8 @@ def process_once(owners):
                     )
                     statuses.append(status)
                 conn.commit()
+        if not needs_model:
+            logger.info("[knowledge] skipped_sources_drained source_parts=%d", len(jobs))
         diagnostic(
             "knowledge_learning_committed",
             owner=job["user_email"],

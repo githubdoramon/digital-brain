@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import intelligence
 import knowledge
 import knowledge_jobs as jobs
+import llm_admission
 from tests.test_intelligence import (  # noqa: F401
     OTHER,
     OWNER,
@@ -171,6 +172,68 @@ def test_chat_capture_is_transactional_and_never_captures_assistant(database):
             ).fetchone()["n"]
             == 1
         )
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_skipped_learning_drains_during_sustained_llm_contention(database, monkeypatch, historical):
+    setup_owner(database)
+    with database() as conn:
+        for number in range(3):
+            thread = f"stale-thread-{number}"
+            conn.execute("INSERT INTO conversation_threads VALUES(%s,%s)", (thread, OWNER))
+            conn.execute(
+                "INSERT INTO conversation_messages(thread_id,role,content) VALUES(%s,'user',%s)",
+                (thread, f"My test device has setting {number}."),
+            )
+        conn.execute("DELETE FROM conversation_messages WHERE thread_id LIKE 'stale-thread-%'")
+        conn.execute("UPDATE knowledge_learning SET historical=%s", (historical,))
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Skipped sources must not consult admission or invoke the model")
+
+    monkeypatch.setattr(jobs.llm_admission, "background_ready", unexpected)
+    monkeypatch.setattr(jobs.intelligence_model, "_ask", unexpected)
+    with llm_admission.background_work("occupied"), llm_admission.request_slot(
+        "http://localhost:11434/v1"
+    ):
+        for _ in range(3):
+            assert jobs.process_once([OWNER])
+        assert not jobs.process_once([OWNER])
+    with database() as conn:
+        rows = conn.execute("SELECT status,lease_token,error_code FROM knowledge_learning").fetchall()
+        assert len(rows) == 3
+        assert all(row == {"status": "done", "lease_token": None, "error_code": None} for row in rows)
+        assert conn.execute("SELECT COUNT(*) AS n FROM intelligence_knowledge").fetchone()["n"] == 0
+
+
+def test_eligible_learning_defers_without_spending_attempts_when_llm_busy(database, monkeypatch):
+    setup_owner(database)
+    with database() as conn:
+        conn.execute("INSERT INTO conversation_threads VALUES('active-thread',%s)", (OWNER,))
+        conn.execute(
+            "INSERT INTO conversation_messages(thread_id,role,content) VALUES('active-thread','user','My device has a quiet fan.')"
+        )
+    monkeypatch.setattr(
+        jobs.intelligence_model, "analyze",
+        lambda *args, **kwargs: pytest.fail("Busy provider must not receive an analysis request"),
+    )
+    with llm_admission.background_work("occupied"), llm_admission.request_slot(
+        "http://localhost:11434/v1"
+    ):
+        assert jobs.process_once([OWNER])
+    with database() as conn:
+        row = conn.execute("SELECT * FROM knowledge_learning").fetchone()
+        assert row["status"] == "pending"
+        assert row["attempts"] == 0
+        assert row["lease_token"] is None and row["lease_until"] is None
+        assert row["error_code"] == "background_wait"
+        assert row["next_attempt_at"] > intelligence.utcnow()
+        conn.execute("UPDATE knowledge_learning SET next_attempt_at=NOW()")
+    monkeypatch.setattr(jobs.intelligence_model, "analyze", lambda *args, **kwargs: ({}, []))
+    assert jobs.process_once([OWNER])
+    with database() as conn:
+        row = conn.execute("SELECT status,error_code,attempts FROM knowledge_learning").fetchone()
+        assert row == {"status": "done", "error_code": None, "attempts": 1}
 
 
 def test_chat_clarification_retries_deferred_source_with_original_evidence(database, monkeypatch):

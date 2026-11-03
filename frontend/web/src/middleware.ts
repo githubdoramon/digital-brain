@@ -72,6 +72,19 @@ function validateServiceHeader(request: NextRequest, rule: ServiceKeyRule) {
 export default function middleware(request: NextRequest, event: NextFetchEvent) {
   const pathname = request.nextUrl.pathname;
 
+  if (pathname.startsWith("/llm/") || pathname.startsWith("/api/llm/")) {
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader?.toLowerCase().startsWith("bearer ")) {
+      return NextResponse.json({ error: { message: "Missing proxy token" } }, { status: 401 });
+    }
+    if (pathname.startsWith("/llm/")) {
+      const url = request.nextUrl.clone();
+      url.pathname = `/api${pathname}`;
+      return NextResponse.rewrite(url);
+    }
+    return NextResponse.next();
+  }
+
   const serviceKeyRule = findServiceKeyRule(pathname);
 
   if (serviceKeyRule) {

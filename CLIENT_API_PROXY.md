@@ -53,3 +53,31 @@ authenticated owner/provider checks as the web routes. Identity listing supports
 phone numbers and provider identifiers. Mobile sends `expected_contact_id`
 (including explicit null for an unlinked identity) so concurrent link changes
 return 409 rather than overwriting a stale association.
+
+## External LLM clients (Anarlog)
+
+The public frontend exposes `/llm/v1/models` (GET) and
+`/llm/v1/chat/completions` (POST), forwarding only those operations to the
+private orchestrator. `/api/llm/v1` is also accepted. This is stateless inference:
+no Digital Brain memories, tools, prompt additions, or conversation persistence.
+
+Set `LLM_PROXY_TOKEN` in the backend environment to a dedicated random secret
+(for example, `openssl rand -hex 32`); empty disables both endpoints. Rotate it
+by replacing the value and restarting the orchestrator. It authorizes inference
+only and is distinct from Google login, internal service, and upstream LLM keys.
+The frontend forwards this Bearer token; it never substitutes a service credential.
+
+In Anarlog choose **Custom**, set the base URL to
+`https://brain.example/llm/v1`, and enter that token as the API key. Model discovery
+lists only configured `LLM_CHAT_MODEL_FAST`, `LLM_CHAT_MODEL_SMART`, and optional
+`LLM_CHAT_MODEL_VISION` values. The provider must support the OpenAI-compatible
+chat-completions API, including SSE when `stream` is true.
+
+Requests are limited to 2 MiB, one completion, and 16,384 output tokens (the
+output limit is supplied when omitted). Up to two inference requests run at once
+per orchestrator process; excess requests return 429 with Retry-After. They also
+participate in shared foreground LLM admission. Streaming is forwarded without
+buffering; cancellation closes upstream HTTP resources and releases capacity.
+Keep reverse-proxy buffering disabled and its read timeout long enough for
+inference (up to 900 seconds). Provider errors are sanitized. Request and response
+contents and credentials are not logged by this gateway.

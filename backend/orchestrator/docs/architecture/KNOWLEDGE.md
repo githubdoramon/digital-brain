@@ -71,6 +71,12 @@ outages defer work without spending that source-part validation budget; requests
 from historical learning, scheduled intelligence and summaries share the admission
 policy in [LLM_ADMISSION.md](LLM_ADMISSION.md).
 
+Knowledge learning checks source eligibility before consulting LLM admission.
+Batches containing only stale, deleted, excluded or empty evidence commit their
+normal completion receipts without waiting for provider capacity, and log
+`[knowledge] skipped_sources_drained`. Eligible batches still obey admission;
+contention releases their leases and defers them without consuming retry attempts.
+
 Intelligence uses two bounded phases. Extraction receives primary source text and
 compact identity/entity hints; it does not receive archive facts, task lists,
 proposal histories or unrelated documents. Reconciliation retrieves matching records

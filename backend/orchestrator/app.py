@@ -51,6 +51,7 @@ from routes.glasses_speech_eval import create_glasses_speech_eval_router
 from routes.google_calendar import create_google_calendar_router
 from routes.intelligence import create_intelligence_router
 from routes.knowledge import create_knowledge_router
+from routes.llm_proxy import create_llm_proxy_router
 from routes.messaging import create_messaging_router
 from routes.microsoft_calendar import create_microsoft_calendar_router
 from routes.news import create_news_router
@@ -217,6 +218,7 @@ install_request_middleware(api)
 api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())
 api.include_router(create_chat_router())
+api.include_router(create_llm_proxy_router())
 api.include_router(create_contacts_router())
 api.include_router(create_messaging_router())
 api.include_router(create_intelligence_router())
