@@ -64,6 +64,7 @@ def test_ingest_generated_pdf_uses_regular_document_ingest_flow(tmp_path, monkey
         captured["title"] = kwargs["title"]
         captured["tags"] = kwargs["tags"]
         captured["user_email"] = kwargs["user_email"]
+        captured["app_generated"] = kwargs["app_generated"]
         captured["filename"] = upload.filename
         captured["content_type"] = upload.content_type
         captured["bytes"] = upload.file.read(4)
@@ -92,6 +93,7 @@ def test_ingest_generated_pdf_uses_regular_document_ingest_flow(tmp_path, monkey
         "title": "Checklist PDF",
         "tags": ["Travel"],
         "user_email": "user@example.com",
+        "app_generated": True,
         "filename": "Travel-Checklist.pdf",
         "content_type": "application/pdf",
         "bytes": b"%PDF",

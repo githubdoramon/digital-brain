@@ -437,28 +437,31 @@ internal IDs and related-record pointers from prose. Controller normalization
 removes ID-only annotations and replaces inline references with supplied labels;
 unknown people retain a neutral description without inventing an identity.
 
-Read paths return stored text unchanged. To repair previously learned prose, run
-`scripts/repair_knowledge_prose.py` once in the updated orchestrator container:
+Read paths return stored text unchanged. The completed one-time prose repair and
+its command-line script have been retired. New facts and summaries retain
+normalization before persistence; no recurring repair or read-time rewriting is needed.
 
-```bash
-docker compose exec -T orchestrator python scripts/repair_knowledge_prose.py --dry-run
-docker compose exec -T orchestrator python scripts/repair_knowledge_prose.py --apply
-```
+### Generated document provenance (0095)
 
-The default is a dry run; JSON lines preview statement/reason changes followed by
-counts. Both commands accept `--owner reader@example.com` to restrict the repair.
-`--batch-size` controls transaction size (default 100, maximum 1,000).
-Apply preserves each original fact in `intelligence_knowledge_revisions`, cleans
-only derived statement/inference prose, increments its revision and clears changed
-statement embeddings. Normal triggers invalidate affected summaries; separately
-polluted summaries also invalidate their versions and leases for regeneration by
-the existing worker. Identity labels resolve only inside their owner's archive.
-Manual edits, deleted facts, evidence quotes and structured links are untouched.
-No LLM runs in the script. Batches commit independently; failures roll back the
-current batch, and rerunning resumes safely without revising already repaired facts.
-Dry-run and apply summary counts can differ if concurrent workers regenerate them.
-New facts and summaries retain normalization before persistence, so no recurring
-repair or read-time rewriting is needed.
+App-generated PDFs persist `raw_metadata.evidence_origin=app_generated` before
+capture or enhancement. Source snapshots carry that origin. Generated material is
+kept searchable but excluded from independent fact/contact/task extraction; the
+controller also rejects citations to it. Preparation agendas, questions and
+checklists are not evidence that an action occurred.
+
+Migration 0095 marks existing documents with the explicit legacy assistant footer
+or the app's default generated-PDF description. It captures their new origin and
+requeues failed learning for those documents through the no-model skip path,
+preserving completed receipts and active leases. Unknown uploads remain ordinary
+evidence; a preparation title alone does not identify an app-generated document.
+Older snapshots with the footer are also excluded at extraction. Previously learned
+facts are not automatically deleted by this migration.
+
+Output-guard failures retain their exact reason under
+`error_details.details.reason` (for example `whitespace_loop`, `trailing_output`,
+`response_size`, or `repeated_syntax`), including failures wrapped for durable
+batch splitting. The failure inspector exports this field; reasons absent from
+older failure records cannot be reconstructed retroactively.
 
 The mobile Knowledge screen retains search, its paginated fact list, and existing
 contact-specific navigation. The subject carousel and its entity-list request are

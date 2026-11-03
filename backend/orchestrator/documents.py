@@ -157,6 +157,7 @@ def ingest_document(
     upload: UploadFile,
     document_date: datetime | None = None,
     user_email: str | None = None,
+    app_generated: bool = False,
 ) -> dict[str, Any]:
     """Persist a new document, extracting text, embeddings, and tags."""
     provided_title = (title or "").strip()
@@ -173,6 +174,8 @@ def ingest_document(
         "title_provided": bool(provided_title),
         "description_provided": bool((description or "").strip()),
     }
+    if app_generated:
+        base_raw_metadata["evidence_origin"] = "app_generated"
     placeholder_title = provided_title or _derive_title_from_filename(stored.file_name) or document_id
     try:
         row = _create_document_placeholder(

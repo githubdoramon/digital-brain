@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import document_enhancement_jobs
 import documents
 
@@ -44,7 +46,8 @@ def test_enqueue_document_enhancement_uses_replacing_job(monkeypatch):
     }
 
 
-def test_upload_creates_placeholder_and_queues_before_enhancement(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("app_generated", [False, True])
+def test_upload_creates_placeholder_and_queues_before_enhancement(monkeypatch, tmp_path: Path, app_generated):
     stored = documents.StoredFileInfo(
         document_id="doc:123",
         path=tmp_path / "doc:123.txt",
@@ -53,14 +56,16 @@ def test_upload_creates_placeholder_and_queues_before_enhancement(monkeypatch, t
         size=5,
     )
     events: list[str] = []
+    metadata = {}
     stored.path.write_text("hello")
 
     monkeypatch.setattr(documents, "_store_upload", lambda _upload, _document_id: stored)
-    monkeypatch.setattr(
-        documents,
-        "_create_document_placeholder",
-        lambda **_kwargs: events.append("placeholder") or {"document_id": "doc:123", "title": "Notes"},
-    )
+    def placeholder(**kwargs):
+        events.append("placeholder")
+        metadata.update(kwargs["raw_metadata"])
+        return {"document_id": "doc:123", "title": "Notes"}
+
+    monkeypatch.setattr(documents, "_create_document_placeholder", placeholder)
     monkeypatch.setattr(
         documents,
         "_enqueue_document_enhancement",
@@ -80,10 +85,12 @@ def test_upload_creates_placeholder_and_queues_before_enhancement(monkeypatch, t
         description=None,
         upload=SimpleNamespace(filename="notes.txt", content_type="text/plain"),
         user_email="user@example.test",
+        app_generated=app_generated,
     )
 
     assert events == ["placeholder", "queued", "read"]
     assert result["enhancement_status"] == "pending"
+    assert metadata.get("evidence_origin") == ("app_generated" if app_generated else None)
 
 
 def test_process_due_once_marks_document_complete(monkeypatch):

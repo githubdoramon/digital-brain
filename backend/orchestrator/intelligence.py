@@ -16,6 +16,7 @@ from psycopg.types.json import Jsonb
 
 import knowledge_prose
 from db import get_conn
+from evidence_provenance import is_app_generated
 from intelligence_conversation import (
     actor_matches,
     proposal_requested_at,
@@ -509,6 +510,8 @@ def evidence_for(finding, batch):
                 allowed_refs=list(refs),
                 source_text=row["text"] if row else None,
             )
+        if is_app_generated(row):
+            reject("invalid_evidence", "app_generated_source", citation=e, finding=finding)
         if row["payload"].get("deleted") or row["payload"].get("excluded"):
             reject("invalid_evidence", "excluded_source", citation=e, finding=finding)
         result.append(

@@ -139,6 +139,7 @@ def ingest_generated_pdf(
         upload=upload,
         document_date=None,
         user_email=requester or None,
+        app_generated=True,
     )
 
 

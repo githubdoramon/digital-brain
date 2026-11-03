@@ -81,6 +81,10 @@ class LLMDegenerateOutputError(LLMOutputExhaustedError):
 
     code = "output_degenerate"
 
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.details = {"reason": reason}
+
 
 class LLMEmptyContentError(ValueError):
     """No usable answer was emitted, including reasoning-only completions."""

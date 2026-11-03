@@ -84,6 +84,7 @@ def database(monkeypatch, request):
                 "0090_learning_evidence_recovery.sql",
                 "0092_messenger_identity_profiles.sql",
                 "0093_learning_failure_isolation.sql",
+                "0095_generated_document_provenance.sql",
             ):
                 if name == "0093_learning_failure_isolation.sql" and getattr(request, "param", None) in {
                     "pre_efficiency", "pre_fairness", "pre_context", "pre_reliability",
