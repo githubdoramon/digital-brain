@@ -16,6 +16,7 @@ from agents.daily_briefing.executor import (
     _fetch_similar_events,
     _format_context_text,
     _format_event_for_analysis,
+    _generate_markdown,
     _generate_news_section_markdown,
     _generate_summary,
     _normalize_similarity_attendees,
@@ -27,6 +28,30 @@ from agents.daily_briefing.executor import (
     _synthesise_event_summary,
     _synthesise_event_summary_from_current_context,
 )
+
+
+def test_briefing_omits_proposals_but_keeps_other_archive_items():
+    context = {
+        "date": "2026-11-06",
+        "timezone": "Europe/Lisbon",
+        "intelligence": {
+            "proposals": [{"statement": "Review this suggestion"}],
+            "knowledge": [{"statement": "A recent fact", "status": "active"}],
+            "completed": [{"description": "A finished task"}],
+        },
+    }
+    with patch("agents.daily_briefing.executor._build_event_sections_deterministic", return_value=""), patch(
+        "agents.daily_briefing.executor.validate_event_sections", return_value=MagicMock(valid=True)
+    ):
+        result = _generate_markdown(context)
+        context["intelligence"] = {"proposals": [{"statement": "Review this suggestion"}]}
+        proposals_only = _generate_markdown(context)
+
+    assert "Suggestions to review" not in result
+    assert "Review this suggestion" not in result
+    assert "Recently learned" in result and "A recent fact" in result
+    assert "Completed" in result and "A finished task" in result
+    assert "From your archive" not in proposals_only
 from agents.daily_briefing.news_curation import (
     NEWS_CURATION_BUCKET_MAX_CANDIDATES,
     NEWS_CURATION_TIMEOUT_SECONDS,

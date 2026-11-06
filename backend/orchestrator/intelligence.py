@@ -1169,16 +1169,10 @@ def briefing_digest(owner):
         )
         knowledge = [dict(r) for r in cur.fetchall()]
         cur.execute(
-            """SELECT payload->>'statement' AS statement, kind FROM intelligence_proposals
-            WHERE user_email=%s AND status='pending' ORDER BY created_at DESC LIMIT 8""",
-            (owner,),
-        )
-        proposals = [dict(r) for r in cur.fetchall()]
-        cur.execute(
             """SELECT t.description FROM intelligence_task_evidence e JOIN todos t USING(todo_id)
             WHERE e.user_email=%s AND e.action='completed' AND t.status='completed'
             AND e.recorded_at >= NOW() - INTERVAL '1 day' ORDER BY e.recorded_at DESC LIMIT 5""",
             (owner,),
         )
         completed = [dict(r) for r in cur.fetchall()]
-    return {"knowledge": knowledge, "proposals": proposals, "completed": completed}
+    return {"knowledge": knowledge, "completed": completed}

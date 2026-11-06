@@ -1984,11 +1984,8 @@ def _generate_markdown(
 
     sections = [header, core_sections, birthdays_section, todos_section]
     digest = context.get("intelligence") or {}
-    if any(digest.values()):
+    if digest.get("knowledge") or digest.get("completed"):
         lines = ["## From your archive"]
-        if digest.get("proposals"):
-            lines.append("### Suggestions to review")
-            lines.extend("- " + " ".join(item["statement"].split()) for item in digest["proposals"])
         if digest.get("knowledge"):
             lines.append("### Recently learned")
             lines.extend("- " + " ".join(item["statement"].split()) +

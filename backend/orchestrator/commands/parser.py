@@ -64,7 +64,8 @@ def parse_command(message: str) -> Optional[ParsedCommand]:
     # Split on first whitespace to separate command from args
     parts = without_slash.split(maxsplit=1)
 
-    command = parts[0].lower()
+    # Speech transcription may punctuate the boundary after a spoken command.
+    command = parts[0].rstrip(",.!?;:").lower()
     args = parts[1] if len(parts) > 1 else ""
 
     return ParsedCommand(
