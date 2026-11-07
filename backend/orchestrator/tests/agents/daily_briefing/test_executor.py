@@ -28,6 +28,13 @@ from agents.daily_briefing.executor import (
     _synthesise_event_summary,
     _synthesise_event_summary_from_current_context,
 )
+from agents.daily_briefing.news_curation import (
+    NEWS_CURATION_BUCKET_MAX_CANDIDATES,
+    NEWS_CURATION_TIMEOUT_SECONDS,
+)
+from agents.daily_briefing.news_curation import (
+    curate_collected_news as _curate_collected_news,
+)
 
 
 def test_briefing_omits_proposals_but_keeps_other_archive_items():
@@ -52,13 +59,6 @@ def test_briefing_omits_proposals_but_keeps_other_archive_items():
     assert "Recently learned" in result and "A recent fact" in result
     assert "Completed" in result and "A finished task" in result
     assert "From your archive" not in proposals_only
-from agents.daily_briefing.news_curation import (
-    NEWS_CURATION_BUCKET_MAX_CANDIDATES,
-    NEWS_CURATION_TIMEOUT_SECONDS,
-)
-from agents.daily_briefing.news_curation import (
-    curate_collected_news as _curate_collected_news,
-)
 
 # ---------------------------------------------------------------------------
 # Helpers
