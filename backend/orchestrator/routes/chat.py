@@ -1055,6 +1055,8 @@ def _ask_run_error_payload(event: dict[str, Any] | None = None) -> dict[str, str
         event.get("code") == "context_length_exceeded"
         or event.get("message") == "context_length_exceeded"
     ) else "execution_error"
+    if code == "context_length_exceeded":
+        return {"code": code, "message": "I couldn’t fit all the information needed to finish this request. Please try a narrower question or start a new chat."}
     return {"code": code, "message": "I couldn’t finish this request. Please try again."}
 
 

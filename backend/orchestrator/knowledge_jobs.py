@@ -251,12 +251,13 @@ def _defer_learning(jobs, exc):
                 ),
             )
         conn.commit()
-    logger.info(
-        "[knowledge] learning_deferred reason=%s delay_s=%d parts=%d",
-        exc.reason,
-        exc.delay,
-        len(jobs),
-    )
+    if exc.reason != "background_wait":
+        logger.info(
+            "[knowledge] learning_deferred reason=%s delay_s=%d parts=%d",
+            exc.reason,
+            exc.delay,
+            len(jobs),
+        )
 
 
 @traced_intelligence_run()
@@ -266,29 +267,20 @@ def process_once(owners):
     if not jobs:
         return False
     job = jobs[0]
-    logger.info(
-        "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d parts=%d recovered=%d batch_limit=%d",
-        job["user_email"],
-        job["source_id"],
-        job["part"],
-        job["historical"],
-        job["attempts"] + 1,
-        len(jobs),
-        sum(item["status"] == "running" for item in jobs),
-        job.get("batch_limit", knowledge_batching.MAX_PARTS),
-    )
     try:
         with _heartbeat(job, jobs=jobs):
             batch = knowledge_batching.sources(jobs, source_batch)
-            logger.info(
-                "[knowledge] batch_prepared primary_parts=%d supporting_parts=%d source_chars=%d",
-                len(jobs),
-                len(batch) - len(jobs),
-                sum(len(row["text"]) for row in batch),
-            )
             needs_model = bool(intelligence_model.eligible_sources(batch))
             if needs_model and not llm_admission.background_ready():
                 raise llm_admission.BackgroundDeferred("background_wait", 10)
+            logger.info(
+                "[knowledge] learning_started owner=%s source_ref=%s:%s historical=%s attempt=%d parts=%d recovered=%d batch_limit=%d supporting_parts=%d source_chars=%d",
+                job["user_email"], job["source_id"], job["part"], job["historical"],
+                job["attempts"] + 1, len(jobs),
+                sum(item["status"] == "running" for item in jobs),
+                job.get("batch_limit", knowledge_batching.MAX_PARTS),
+                len(batch) - len(jobs), sum(len(row["text"]) for row in batch),
+            )
             # The shared analyzer returns immediately for ineligible sources,
             # retaining its normal selection diagnostics without a model request.
             context, findings = intelligence_model.analyze(

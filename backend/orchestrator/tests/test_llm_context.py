@@ -90,6 +90,26 @@ def result_messages(name="get_document", result=None):
     ]
 
 
+def test_read_results_still_compact_when_answer_step_disables_tools():
+    from agent.llm_transport import _compaction_policy
+    from tools.registry import get_registry
+
+    messages = result_messages("fetch_web_page", {
+        "url": "https://example.com/rates", "content": "Historical rate evidence. " * 7000,
+        "_validation": {"status": "satisfied"},
+    })
+    messages.append({"role": "user", "content": "Answer from the available evidence."})
+    policy = _compaction_policy(get_registry().get_tool_definitions_for_groups(["web"]))
+    policy = _compaction_policy([], policy, messages)
+    assert "fetch_web_page" in policy.read_only_tools
+    fitted = context.prepare_request(payload(messages), policy=policy,
+                                     summarize=lambda _: "Historical rate evidence.")
+    result = json.loads(fitted["messages"][2]["content"])
+    assert result["_context_compacted"] is True
+    assert any(ref["value"] == "https://example.com/rates" for ref in result["references"])
+    assert fitted["messages"][-1] == messages[-1]
+
+
 def test_budget_accounts_for_reasoning_model_overrides_and_provider_limits(monkeypatch):
     assert context.request_budget("smart-test").input_limit == 13000
     assert context.request_budget("smart-test", reasoning_effort="xhigh").input_limit == 11000

@@ -55,9 +55,10 @@ def resolve_tool_visibility(
     )
     state_groups = list(classification.allowed_tool_groups or [])
 
-    # Conversation needs neither the full catalogue nor an obligatory UI call.
+    # Routing is advisory: a conversational classification must not prevent the
+    # agent from correcting a mistaken route or acting on a follow-up request.
     if classification.intent == "conversational":
-        return [], ToolVisibilityMode.NONE, []
+        return all_tools, ToolVisibilityMode.FULL, all_groups
 
     if restriction_mode != "conservative":
         selected_groups = _with_always_available(state_groups, known_groups)

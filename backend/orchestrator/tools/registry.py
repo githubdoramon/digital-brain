@@ -812,6 +812,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     maximum=20000,
                 ),
             ],
+            constraints=["read_only"],
         )
     )
 

@@ -383,7 +383,7 @@ Migration `0084_learning_progress.sql` adds activity/success timestamps without
 inventing completion times for old receipts or requeuing successful work.
 
 A third, independent `knowledge-progress` observer thread logs `[learning] progress`
-immediately on startup and every 60 seconds, even while extraction/summarization is
+immediately on startup and every 15 minutes, even while extraction/summarization is
 blocked in a long model call. One header records snapshot time, process-local worker
 liveness, cutoffs and historical catch-up state; individual lane lines record counts,
 active refs, elapsed time, oldest waiting dates, next retry and last successful commit.

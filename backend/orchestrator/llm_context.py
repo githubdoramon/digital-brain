@@ -476,7 +476,7 @@ def prepare_request(
             except Exception:
                 # No partial summary or silent truncation. Keep the complete original.
                 logger.warning("[llm_context] Compaction unavailable; retaining original context")
-                break
+                continue
             if len(policy.cache) >= 64:
                 policy.cache.clear()
             policy.cache[digest] = summary

@@ -11,7 +11,7 @@ import llm_admission
 from db import get_conn
 from observability.logger import get_runtime_logger
 
-LOG_INTERVAL_SECONDS = 60
+LOG_INTERVAL_SECONDS = 15 * 60
 logger = get_runtime_logger(__name__)
 _PHASES = (
     "processed",

@@ -165,7 +165,7 @@ predicates, fact statements, quotes or model reasoning enter these summaries.
 Snapshot failure emits `progress_snapshot_unavailable` and never fails the work.
 
 The independent knowledge progress observer also emits `[learning] progress` at
-startup and every minute during long model calls. Its shared API snapshot reports
+startup and every 15 minutes during long model calls. Its shared API snapshot reports
 canonical knowledge history and scheduled coverage through the current snapshot time, including
 late imports beyond a previous run's cutoff, retry reasons, active runs, elapsed time,
 oldest waiting source dates and latest successful receipts. `/mobile/intelligence/status`

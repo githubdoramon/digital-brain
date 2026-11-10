@@ -114,7 +114,7 @@ def conversation_route():
     )
 
 
-def test_conversation_route_has_no_catalogue_or_obligatory_ui_call():
+def test_conversation_route_can_recover_from_misclassification():
     route = conversation_route()
     assert route.intent is IntentType.CONVERSATIONAL
     tools, _, groups = resolve_tool_visibility(
@@ -124,7 +124,8 @@ def test_conversation_route_has_no_catalogue_or_obligatory_ui_call():
         high_threshold=0.8,
         medium_threshold=0.6,
     )
-    assert tools == groups == []
+    assert {tool["function"]["name"] for tool in tools} >= {"web_search", "fetch_web_page"}
+    assert "web" in groups
     assert "tools" not in " ".join(build_execution_plan("Tell me a joke", route.intent)).lower()
 
 
@@ -205,8 +206,8 @@ async def test_controller_finishes_conversation_in_one_model_round(
         result = await controller.run(user_request)
     assert result == {"answer": answer, "rounds": 1, "achieved": True}
     model.assert_called_once()
-    assert model.call_args.args[1] == []
-    assert estimate_input({"messages": model.call_args.args[0]}) < 1600
+    assert any(tool["function"]["name"] == "web_search" for tool in model.call_args.args[1])
+    assert estimate_input({"messages": model.call_args.args[0]}) < 2500
 
 
 def test_conversation_keeps_explicit_rules_but_skips_archive(monkeypatch):

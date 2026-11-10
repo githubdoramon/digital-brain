@@ -13,15 +13,23 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 
-def _compaction_policy(tools, policy=None):
+def _compaction_policy(tools, policy=None, messages=()):
     from tools.registry import get_registry
 
     registry = get_registry()
     policy = policy or CompactionPolicy()
-    policy.read_only_tools = frozenset(
+    historical_names = {
+        (call.get("function") or {}).get("name")
+        for message in messages
+        for call in message.get("tool_calls") or []
+    }
+    names = historical_names | {
+        (tool.get("function") or {}).get("name") for tool in tools
+    }
+    policy.read_only_tools = policy.read_only_tools | frozenset(
         name
-        for tool in tools
-        if (name := (tool.get("function") or {}).get("name"))
+        for name in names
+        if name
         and (contract := registry.get_contract(name)) is not None
         and "read_only" in contract.constraints
     )
@@ -45,7 +53,7 @@ def call_llm_with_tools(
         model=model,
         timeout=timeout,
         reasoning_effort=reasoning_effort,
-        context_policy=_compaction_policy(tools, context_policy),
+        context_policy=_compaction_policy(tools, context_policy, messages),
     )
 
     if data.get("choices"):
@@ -93,7 +101,7 @@ async def stream_llm_with_tools(
         model=model,
         timeout=timeout,
         reasoning_effort=reasoning_effort,
-        context_policy=_compaction_policy(tools, context_policy),
+        context_policy=_compaction_policy(tools, context_policy, messages),
     ):
         line = line.strip()
         if not line or line == "data: [DONE]":
