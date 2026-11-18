@@ -123,8 +123,18 @@ compactor: retain the latest 12 dialogue messages and the current request verbat
 summarize older exchanges when input exceeds 80% of the model input budget, and never
 modify persisted conversation messages or knowledge-learning evidence. Summaries retain
 the original unanswered request, scope corrections, dismissed people/topics, and action
-outcomes. Failed compaction retains originals and fails explicitly if they cannot fit.
+outcomes. Failed compaction retains originals. If a research turn with only read calls
+still cannot fit, the controller can make one answer-only attempt from a small set
+of evidence excerpts, ranked and deduplicated with source IDs retained. Other turns
+retain the explicit context error. Recovery neither retries tools nor changes stored evidence.
 Compaction caches are request-scoped; this does not introduce persistent thread summaries.
+
+For past meeting recaps, a single topic-aligned calendar match triggers a bounded lookup
+for discussion notes before synthesis. Multiple plausible matches require a focused
+clarification. The answer distinguishes an agenda or calendar record from evidence of
+the discussion. Memory-search normalization preserves explicit bounds and takes the
+specific query's date before any fallback based on the overall goal. A bare month
+does not produce an inferred day.
 
 The router classifies follow-up corrections against the original unanswered request and
 returns task-relevant `contact_references`. The controller verifies those phrases occur

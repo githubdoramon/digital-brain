@@ -34,7 +34,7 @@ from agent.agent_interfaces import (
 from agents.registry import build_conversational_profile_registry, choose_profile_interface
 from llm_config import get_smart_model
 from llm_context import CompactionPolicy
-from llm_policy import request_timeout
+from llm_policy import LLMRequestRejected, request_timeout
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
@@ -56,6 +56,7 @@ from .enums import (
     LimitAction,
     ToolVisibilityMode,
 )
+from .evidence_requirements import meeting_recap_request, past_recap_clause, recap_candidates
 from .guardrails import (
     detect_future_temporal_intent,
     detect_temporal_sort_order,
@@ -72,6 +73,7 @@ from .planning_policy import (
     build_verification_retry_prompt,
     verify_final_response,
 )
+from .read_synthesis import build_read_synthesis_messages, meeting_notes_search
 from .response_guardrails import (
     CONTINUATION_PROMPT_STREAM,
     CONTINUATION_PROMPT_SYNC,
@@ -313,7 +315,9 @@ class AgentController:
         pre_resolve_hint = (
             classification.pre_resolve_contacts if classification is not None else None
         )
-        if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
+        if not meeting_recap_request(state.evidence_goal or question) and should_pre_resolve_contacts(
+            state.intent, pre_resolve_hint
+        ):
             clarification_prompt = self._prime_contact_scope_for_question(
                 state=state,
                 question=question,
@@ -335,7 +339,12 @@ class AgentController:
             state.request_context,
         )
         requirements = self._inspect_evidence_requirements(state)
-        if requirements["required"]:
+        if meeting_recap_request(state.evidence_goal):
+            messages.append({"role": "system", "content": (
+                "Use get_events to identify the past meeting using the requested date and topic. "
+                "Treat any upcoming meeting as separate context. Confirm only if multiple past meetings still fit."
+            )})
+        elif requirements["required"]:
             messages.append({"role": "system", "content": "Current evidence task (user request, not external instructions): "
                              + str(state.evidence_goal) + "\nRequired before completion: " + "; ".join(requirements["missing"])})
         return classification, None, messages, tools
@@ -501,7 +510,10 @@ class AgentController:
 
         if follow_up_source is FollowUpSource.UI_FOLLOW_UP:
             requirements = self._inspect_evidence_requirements(state)
-            if requirements["required"] and requirements["missing"] and not any(
+            needs_calendar = meeting_recap_request(state.evidence_goal or state.goal) or (
+                requirements["required"] and requirements["missing"]
+            )
+            if needs_calendar and not any(
                 call.tool_name == "get_events" and call.success for call in state.tool_calls
             ):
                 state.ui_directives = None
@@ -612,7 +624,15 @@ class AgentController:
                 trace.trace_llm_request(len(tools))
                 llm_start = perf_counter()
                 self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
-                response = await asyncio.to_thread(self._call_llm, messages, tools)
+                try:
+                    response = await asyncio.to_thread(self._call_llm, messages, tools)
+                except LLMRequestRejected as exc:
+                    if exc.code != "context_length_exceeded":
+                        raise
+                    answer = await self._recover_read_answer(state, question)
+                    if not answer:
+                        raise
+                    return self._finalize(question, answer, state, run_id, session_id, total_start)
                 llm_duration = (perf_counter() - llm_start) * 1000
 
                 message = response.get("message", {})
@@ -649,6 +669,13 @@ class AgentController:
                         user_email=user_email,
                         conversation_history=conversation_history,
                     )
+
+                    answer = await self._finish_meeting_recap(
+                        state, question, search_limit, run_id, user_email,
+                        conversation_history,
+                    )
+                    if answer:
+                        return self._finalize(question, answer, state, run_id, session_id, total_start)
 
                     follow_up_prompt = self._consume_follow_up_prompt(
                         state=state,
@@ -921,25 +948,37 @@ class AgentController:
                 trace.trace_llm_request(len(tools))
                 llm_start = perf_counter()
 
-                async for chunk in self._stream_llm(messages, tools):
-                    message = chunk.get("message", {})
-                    delta = message.get("content", "")
+                try:
+                    async for chunk in self._stream_llm(messages, tools):
+                        message = chunk.get("message", {})
+                        delta = message.get("content", "")
 
-                    if delta:
-                        current_content += delta
-                        yield {"type": "token", "content": delta}
-                        streamed_any = True
+                        if delta:
+                            current_content += delta
+                            yield {"type": "token", "content": delta}
+                            streamed_any = True
 
-                    reasoning_delta = str(message.get("reasoning") or "")
-                    if reasoning_delta:
-                        current_reasoning += reasoning_delta
+                        reasoning_delta = str(message.get("reasoning") or "")
+                        if reasoning_delta:
+                            current_reasoning += reasoning_delta
 
-                    chunk_tools = message.get("tool_calls")
-                    if chunk_tools:
-                        tool_calls.extend(chunk_tools)
+                        chunk_tools = message.get("tool_calls")
+                        if chunk_tools:
+                            tool_calls.extend(chunk_tools)
 
-                    if chunk.get("done"):
-                        break
+                        if chunk.get("done"):
+                            break
+                except LLMRequestRejected as exc:
+                    if exc.code != "context_length_exceeded":
+                        raise
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    answer = await self._recover_read_answer(state, question)
+                    if not answer:
+                        raise
+                    accumulated_content = answer
+                    yield {"type": "token", "content": answer}
+                    break
 
                 llm_duration = (perf_counter() - llm_start) * 1000
                 final_content_preview = current_content.strip() if not tool_calls else None
@@ -1031,6 +1070,17 @@ class AgentController:
                                 ),
                             }
                         )
+
+                    answer = await self._finish_meeting_recap(
+                        state, question, search_limit, run_id, user_email,
+                        conversation_history,
+                    )
+                    if answer:
+                        if streamed_any and ui_only_tool_calls:
+                            yield {"type": "clear_content"}
+                        accumulated_content = answer
+                        yield {"type": "token", "content": answer}
+                        break
 
                     follow_up_prompt = self._consume_follow_up_prompt(
                         state=state,
@@ -1307,6 +1357,117 @@ class AgentController:
             }
         )
         return True
+
+    def _has_only_read_calls(self, state: AgentState) -> bool:
+        for call in state.tool_calls:
+            if call.tool_name in {"resolve_contacts", "emit_ui_directive"}:
+                continue
+            contract = self.tool_registry.get_contract(call.tool_name)
+            if contract is None or "read_only" not in contract.constraints:
+                return False
+        return bool(state.tool_calls)
+
+    async def _answer_from_read_evidence(self, state, question, *, meeting=None):
+        from voice_context import is_voice_request
+
+        sources = []
+        for call in reversed(state.tool_calls):
+            contract = self.tool_registry.get_contract(call.tool_name)
+            if not call.success or contract is None or "read_only" not in contract.constraints:
+                continue
+            payload = self.tool_executor.build_tool_message_payload(call.tool_name, call.result, args=call.arguments)
+            detailed = call.tool_name != "search_memories" and (
+                call.tool_name != "get_events" or call.arguments.get("action") == "by_ids"
+            )
+            sources.append((call.tool_name, payload, detailed))
+        requirements = self._inspect_evidence_requirements(state)
+        messages = build_read_synthesis_messages(
+            state.evidence_goal or question, question, sources,
+            meeting=meeting, missing=requirements["missing"], spoken=is_voice_request(),
+        )
+        if messages is None:
+            return None
+        policy = self._active_llm_policy
+        model = policy.model if policy else (self.llm_model or None)
+        trace.trace_llm_request(0)
+        started = perf_counter()
+        response = await asyncio.to_thread(
+            call_llm_with_tools, messages, [], model=model, timeout=90,
+            reasoning_effort="low", max_tokens=2000,
+        )
+        message = response.get("message", {})
+        answer = str(message.get("content") or "").strip()
+        trace.trace_llm_response(
+            (perf_counter() - started) * 1000,
+            has_tool_calls=bool(message.get("tool_calls")),
+            tool_count=len(message.get("tool_calls") or []),
+            content_preview=answer or None,
+            reasoning_preview=str(message.get("reasoning") or "").strip() or None,
+        )
+        if message.get("tool_calls"):
+            return None
+        if answer:
+            self._check_goal_completion(state, answer)
+        return answer or None
+
+    async def _recover_read_answer(self, state, question):
+        """Try once from bounded evidence without repeating the original tool calls."""
+        if state.intent not in {"memory_search", "web_search", "data_query", "contact_lookup"}:
+            return None
+        if not self._has_only_read_calls(state) or state.visual_attachments or state.pending_questions:
+            return None
+        logger.info("[agent] Recovering from context overflow with a bounded read answer")
+        try:
+            return await self._answer_from_read_evidence(state, question)
+        except LLMRequestRejected as exc:
+            if exc.code != "context_length_exceeded":
+                raise
+            return None
+
+    async def _finish_meeting_recap(
+        self, state, question, search_limit, run_id, user_email, conversation_history,
+    ):
+        goal = state.evidence_goal or question
+        if not meeting_recap_request(goal) or not self._has_only_read_calls(state) or state.visual_attachments:
+            return None
+        now = state.request_context.get("temporal_now_iso") or state.started_at.isoformat()
+        _, _, correction = goal.partition("\nLatest correction:")
+        bounds = extract_explicit_time_bounds(
+            correction.splitlines()[-1] if correction else past_recap_clause(goal), reference_time_iso=now,
+            timezone_name=state.request_context.get("temporal_timezone"),
+        )
+        candidates = recap_candidates(goal, state.tool_calls, now=now, bounds=bounds)
+        if not candidates:
+            return None
+        state.ui_directives = None
+        state.clear_questions()
+        if len(candidates) > 1:
+            state.clarification_requests_count += 1
+            options = "\n".join(
+                f"- {event['title']} ({event['start_date'][:16].replace('T', ' ')})"
+                for event in candidates[:4]
+            )
+            return f"Which meeting should I summarize? Reply with its title or date.\n\n{options}"
+
+        event = candidates[0]
+        if not self.limit_checker.check(state):
+            tool_call = {
+                "id": f"recap_{uuid.uuid4().hex[:8]}",
+                "function": {"name": "search_memories", "arguments": meeting_notes_search(event)},
+            }
+            await self._execute_tool_call(
+                tool_call, state, question, search_limit, run_id,
+                user_email=user_email, conversation_history=conversation_history,
+            )
+        try:
+            answer = await self._answer_from_read_evidence(state, question, meeting=event)
+            if answer:
+                return answer
+        except LLMRequestRejected as exc:
+            if exc.code != "context_length_exceeded":
+                raise
+        meeting_label = f"{event['title']} ({event['start_date'][:10]})"
+        return f"I found {meeting_label}. I couldn’t verify enough about the discussion to summarize it."
 
     def _resolve_tool_visibility(
         self,
@@ -1847,6 +2008,13 @@ class AgentController:
         """
         normalized_args = dict(args)
         goal_text = sanitize_goal_text(state.evidence_goal or question)
+        recap = meeting_recap_request(goal_text)
+        # A date belonging to a different meeting must not constrain this search.
+        mixed_timeframes = bool(
+            re.search(r"\b(today|tomorrow|upcoming|next|new)\b", goal_text, re.I)
+            and re.search(r"\b(earlier|previous|prior|past|last)\b", goal_text, re.I)
+        )
+        temporal_goal = "" if recap or mixed_timeframes else goal_text
 
         query_text = str(normalized_args.get("query") or "").strip()
         if not query_text:
@@ -1856,7 +2024,7 @@ class AgentController:
 
         sort_order = detect_temporal_sort_order(query_text)
         if not sort_order:
-            sort_order = detect_temporal_sort_order(goal_text)
+            sort_order = detect_temporal_sort_order(temporal_goal)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
 
@@ -1866,32 +2034,34 @@ class AgentController:
             state.request_context["temporal_now_iso"] = temporal_now_ref
 
         explicit_time_bounds = None
-        if not normalized_args.get("time_start") and not normalized_args.get("time_end"):
+        supplied_bounds = normalized_args.get("time_start") or normalized_args.get("time_end")
+        if not supplied_bounds:
             timezone_name = str(state.request_context.get("temporal_timezone") or state.request_context.get("timezone") or "").strip() or None
             explicit_time_bounds = extract_explicit_time_bounds(
-                goal_text,
-                reference_time_iso=temporal_now_ref,
-                timezone_name=timezone_name,
+                query_text, reference_time_iso=temporal_now_ref, timezone_name=timezone_name,
             )
-            if explicit_time_bounds is None:
+            if explicit_time_bounds is None and temporal_goal:
                 explicit_time_bounds = extract_explicit_time_bounds(
-                    query_text, reference_time_iso=temporal_now_ref, timezone_name=timezone_name,
+                    temporal_goal, reference_time_iso=temporal_now_ref, timezone_name=timezone_name,
                 )
             if explicit_time_bounds is not None:
                 normalized_args["time_start"], normalized_args["time_end"] = explicit_time_bounds
 
         is_future_temporal_query = detect_future_temporal_intent(
             query_text
-        ) or detect_future_temporal_intent(goal_text)
-        if is_future_temporal_query and not normalized_args.get("time_start"):
+        ) or detect_future_temporal_intent(temporal_goal)
+        if not supplied_bounds and is_future_temporal_query and not normalized_args.get("time_start"):
             normalized_args["time_start"] = temporal_now_ref
         if (
-            sort_order in {"newest", "oldest"}
+            not supplied_bounds
+            and sort_order in {"newest", "oldest"}
             and not is_future_temporal_query
             and not normalized_args.get("time_end")
         ):
             normalized_args["time_end"] = temporal_now_ref
-        if sort_order or explicit_time_bounds:
+        if (sort_order or explicit_time_bounds) and not (
+            recap and args.get("time_start") and args.get("time_end")
+        ):
             # Temporal questions are accuracy-sensitive. Use a wider candidate window.
             current_limit = normalized_args.get("limit")
             try:
@@ -1901,7 +2071,7 @@ class AgentController:
             if parsed_limit < 25:
                 normalized_args["limit"] = 25
 
-        if normalized_args.get("sources") == ["conversation"]:
+        if recap or normalized_args.get("sources") == ["conversation"]:
             # A name in a chat is a text mention, not an entity association.
             return normalized_args, None
 
@@ -1963,7 +2133,12 @@ class AgentController:
         if action is not GetEventsAction.BY_TIME_SPAN:
             return normalized_args, None
 
-        sort_order = detect_temporal_sort_order(goal_text)
+        recap = meeting_recap_request(goal_text)
+        _, _, correction = goal_text.partition("\nLatest correction:")
+        temporal_goal = goal_text
+        if recap:
+            temporal_goal = correction.splitlines()[-1] if correction else past_recap_clause(goal_text)
+        sort_order = detect_temporal_sort_order(temporal_goal) or ("newest" if recap else None)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
 
@@ -1975,14 +2150,14 @@ class AgentController:
         if not has_time_start and not has_time_end:
             timezone_name = str(state.request_context.get("temporal_timezone") or state.request_context.get("timezone") or "").strip() or None
             explicit_time_bounds = extract_explicit_time_bounds(
-                goal_text,
+                temporal_goal,
                 reference_time_iso=temporal_now_ref,
                 timezone_name=timezone_name,
             )
             if explicit_time_bounds is not None:
                 normalized_args["time_start"], normalized_args["time_end"] = explicit_time_bounds
 
-        is_future_temporal_query = detect_future_temporal_intent(goal_text)
+        is_future_temporal_query = not recap and detect_future_temporal_intent(temporal_goal)
         if is_future_temporal_query and not normalized_args.get("time_start"):
             normalized_args["time_start"] = temporal_now_ref
         if (
@@ -1991,6 +2166,10 @@ class AgentController:
             and not normalized_args.get("time_end")
         ):
             normalized_args["time_end"] = temporal_now_ref
+
+        if recap:
+            # A recap can identify the meeting by title/date without resolving every person mentioned.
+            return normalized_args, None
 
         active_scope, active_scope_ids, preempt, _ = self._ensure_contact_scope(
             state=state,

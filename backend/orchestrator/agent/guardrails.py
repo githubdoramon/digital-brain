@@ -223,9 +223,12 @@ def detect_future_temporal_intent(query: str) -> bool:
     return any(re.search(pattern, q) for pattern in future_patterns)
 
 
+_MONTH = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+_DAY = r"(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
 _EXPLICIT_DATE_HINT = re.compile(
-    r"(\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b)",
-    flags=re.IGNORECASE,
+    rf"\b(?:\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?"
+    rf"|{_MONTH}\.?\s+{_DAY}(?![/-]\d)|{_DAY}\s+(?:of\s+)?{_MONTH})\b",
+    re.IGNORECASE,
 )
 
 
@@ -279,6 +282,7 @@ def extract_explicit_time_bounds(
     # Relative calendar windows are explicit user constraints too. The generic
     # date parser can recognize them but the absolute-date filter below rejects
     # them, so resolve these against the trusted originating request clock here.
+    # A month without a day must not inherit the day of the request clock.
     if not _EXPLICIT_DATE_HINT.search(text):
         base = settings.get("RELATIVE_BASE") or datetime.now(request_tz)
         relative_days = re.findall(r"\b(today|tomorrow|yesterday)\b", text, re.I)

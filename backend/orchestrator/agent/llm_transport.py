@@ -44,6 +44,7 @@ def call_llm_with_tools(
     timeout: int,
     reasoning_effort: str | None = None,
     context_policy: CompactionPolicy | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Make a synchronous chat-completions call with tool definitions."""
     data = call_llm_chat(
@@ -54,6 +55,7 @@ def call_llm_with_tools(
         timeout=timeout,
         reasoning_effort=reasoning_effort,
         context_policy=_compaction_policy(tools, context_policy, messages),
+        max_tokens=max_tokens,
     )
 
     if data.get("choices"):

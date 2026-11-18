@@ -82,6 +82,10 @@ _NOISE = {
     "scheduled",
     "week",
     "last",
+    "previous",
+    "past",
+    "recent",
+    "new",
 }
 
 
@@ -109,7 +113,15 @@ def evidence_goal(question: str, history: list[dict] | None) -> str:
     """Carry the original task into short follow-ups without using assistant assertions."""
     if re.search(r"\b(forget|instead|ignore|different|another)\b", question, re.I):
         return question
-    continuation = bool(
+    messages = (history or [])[-12:]
+    recap_selection = bool(
+        messages and messages[-1].get("role") == "assistant"
+        and message_body(str(messages[-1].get("content") or "")).startswith(
+            "Which meeting should I summarize?"
+        )
+        and len(question) <= 200
+    )
+    continuation = recap_selection or bool(
         re.search(
             r"^\s*(?:so[?!. ]*$|and[?!. ]*$|then[?!. ]*$|yes\b|no\b|ok(?:ay)?\b|continue\b|go on\b|do it\b)"
             r"|\b(?:participants?|attendees?|original (?:request|question)|you (?:look|check))\b",
@@ -119,17 +131,17 @@ def evidence_goal(question: str, history: list[dict] | None) -> str:
     )
     if not continuation or (meeting_request(question) and _anchors(question)):
         return question
-    messages = (history or [])[-12:]
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         content = message_body(str(message.get("content") or ""))
         if (
             message.get("role") == "user"
-            and meeting_request(content)
-            and re.search(
-                r"\b(find|research|prepare|profiles?|public|who|tell|show|list|get)\b",
-                content,
-                re.I,
+            and (
+                (recap_selection and meeting_recap_request(content))
+                or (meeting_request(content) and re.search(
+                    r"\b(find|research|prepare|profiles?|public|who|tell|show|list|get)\b",
+                    content, re.I,
+                ))
             )
         ):
             corrections = [
@@ -146,21 +158,94 @@ def meeting_request(goal: str) -> bool:
     return bool(
         re.search(r"\b(meeting|call|interview)\b", text)
         and re.search(r"\b(participants?|attendees?|prepare|profiles?)\b", text)
+        and not meeting_recap_request(goal)
     )
 
 
-def _anchors(goal: str) -> list[str]:
-    # Topic immediately before/after a meeting reference is stronger than generic
-    # research language elsewhere in the sentence. No inferred company/person IDs.
-    text = goal.split("\nLatest correction:")[0]
+def meeting_recap_request(goal: str) -> bool:
+    """Recognize requests that need a past discussion, not attendee research."""
+    goal = goal.split("\nLatest correction:", 1)[0]
+    return bool(
+        re.search(r"\b(summari[sz]e|summary|recap|what (?:did we discuss|was discussed|happened))\b", goal, re.I)
+        and past_recap_clause(goal)
+        and not re.search(r"\b(?:participants?|attendees?|profiles?|public|research|send|schedule|update|delete|create)\b", goal, re.I)
+    )
+
+
+def past_recap_clause(goal: str) -> str:
     match = re.search(
-        r"\b(?:my|our|the)\s+([\w '&.-]{1,70}?)\s+(?:meeting|call|interview)\b", text, re.I
+        r"\b(?:last|previous|past|most recent)\b[^.!?\n]{0,80}?\b(?:meeting|call|interview)\b[^.!?\n]*",
+        goal.split("\nLatest correction:", 1)[0], re.I,
     )
-    if not match:
-        match = re.search(
-            r"\b(?:meeting|call|interview)\s+(?:about|with|for)\s+([\w &.-]{1,70})", text, re.I
+    return match[0] if match else ""
+
+
+def _topic_groups(goal: str) -> list[set[str]]:
+    """Collect a topic beside a meeting reference, allowing slash-separated names."""
+    text = goal.split("\nLatest correction:")[0]
+    patterns = (
+        r"\b(?:meeting|call|interview)\s+(?:about|with|for)\s+([\w '/&-]{1,70}?)"
+        r"(?=\s+(?:today|tomorrow|yesterday|this|last|next|to)\b|[^\w '/&-]|$)",
+        r"\b(?:my|our|the|last|previous|past|most recent)\s+([\w '/&-]{1,70}?)\s+(?:meeting|call|interview)\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.I):
+            groups = [set(topic_terms(name)) for name in match[1].split("/")]
+            if any(groups):
+                return [group for group in groups if group]
+    return []
+
+
+def _anchors(goal: str) -> bool:
+    return bool(_topic_groups(goal))
+
+
+def _event_matches(event: dict, topics: list[set[str]], fields: tuple[str, ...]) -> bool:
+    text = " ".join(str(event.get(field) or "") for field in fields if field != "people")
+    if "people" in fields:
+        text += " " + " ".join(
+            str(person.get("display_name") or "")
+            for person in event.get("people") or []
+            if isinstance(person, dict)
         )
-    return topic_terms(match.group(1)) if match else []
+    return not topics or any(group <= _tokens(text) for group in topics)
+
+
+def recap_candidates(goal: str, calls: list[Any], *, now: str, bounds=None) -> list[dict]:
+    """Use inspected past events with a matching title, keeping the latest version per ID."""
+    topics = _topic_groups(past_recap_clause(goal)) or _topic_groups(goal)
+    if not topics and not bounds:
+        return []
+    cutoff = datetime.fromisoformat(now)
+    events = {}
+    for call in calls:
+        if call.tool_name != "get_events" or not call.success:
+            continue
+        for event in call.result.get("events", []):
+            if not isinstance(event, dict) or not event.get("id") or event.get("is_cancelled"):
+                continue
+            try:
+                start = datetime.fromisoformat(str(event.get("start_date") or ""))
+                if start >= cutoff or (bounds and not _in_window(event, bounds)):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if _event_matches(event, topics, ("title",)) and (
+                topics or re.search(r"\b(meeting|call|interview)\b", str(event.get("title")), re.I)
+            ):
+                previous = events.get(event["id"], {})
+                events[event["id"]] = {**previous, **{key: value for key, value in event.items() if value}}
+    candidates = list(events.values())
+    _, _, correction = goal.partition("\nLatest correction:")
+    if correction:
+        selected = [event for event in candidates if _tokens(event["title"]) <= _tokens(correction.splitlines()[-1])]
+        if selected or not bounds:
+            return selected
+    if len(candidates) > 1 and len({normalize_search_text(event["title"]) for event in candidates}) == 1:
+        dates = [datetime.fromisoformat(event["start_date"]) for event in candidates]
+        latest = max(dates)
+        return [event for event, date in zip(candidates, dates) if date == latest]
+    return candidates
 
 
 def _in_window(event: dict, bounds: tuple[str, str] | None) -> bool:
@@ -179,27 +264,17 @@ def inspect_requirements(
     """Return missing evidence and concrete read guidance, independent of routed intent."""
     if not meeting_request(goal):
         return {"required": False, "missing": [], "completed": []}
-    anchors = _anchors(goal)
+    topics = _topic_groups(goal)
     events = {}
     for call in calls:
         if call.tool_name != "get_events" or not call.success:
             continue
         for event in (call.result or {}).get("events", []):
-            text = normalize_search_text(
-                str(event.get("title") or "")
-                + " "
-                + str(event.get("summary") or "")
-                + " "
-                + " ".join(
-                    str(person.get("display_name") or "")
-                    for person in event.get("people", [])
-                    if isinstance(person, dict)
-                )
-            )
-            if (not anchors or all(term in _tokens(text) for term in anchors)) and _in_window(
-                event, bounds
-            ):
+            if _event_matches(event, topics, ("title", "summary", "people")) and _in_window(event, bounds):
                 events[str(event.get("id"))] = event
+    title_matches = {key: row for key, row in events.items() if _event_matches(row, topics, ("title",))}
+    if title_matches:
+        events = title_matches
     result: dict[str, Any] = {
         "required": True,
         "missing": [],
