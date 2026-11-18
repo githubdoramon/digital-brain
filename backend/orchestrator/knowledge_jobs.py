@@ -22,7 +22,7 @@ from learning_failures import rejection_details
 from llm_policy import failure_code
 from observability.diagnostics import diagnostic
 from observability.logger import get_runtime_logger
-from observability.mirador import traced_intelligence_run
+from observability.instrumentation import traced_intelligence_run
 
 _STOP = threading.Event()
 _THREAD = None

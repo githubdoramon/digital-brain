@@ -105,8 +105,7 @@ If speech fails after chat completes, the text reply remains in the normal chat
 and the native Listening screen reports that it could not play the reply.
 Private wake JSON records chat status, thread reference and safe audio failure
 reason. General logs include only fixed `[glasses-chat]` stage/reason events and suppress content-bearing chat work in this modality,
-including its deferred callbacks. Mirador retains static request/agent/model/tool
-timing and outcomes without text, IDs or audio. Original capture WAV/JSON saving
+including its deferred callbacks. Original capture WAV/JSON saving
 remains unchanged.
 
 ## Validation

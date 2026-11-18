@@ -27,9 +27,6 @@ python-multipart
 pyyaml==6.0.3
 resend==2.50.0
 feedparser==6.0.14
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
 
 
 

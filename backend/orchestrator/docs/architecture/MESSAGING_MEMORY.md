@@ -233,7 +233,7 @@ otherwise show conversation, sender, time, and available filename.
 "No matching delivery message was found" is not "the delivery never happened."
 Coverage, missing history, event loss, and attachment availability must remain
 available to reasoning. Content belongs in private storage, not application logs,
-analytics, Mirador spans, metrics labels, or general diagnostic exports.
+analytics, traces, metrics labels, or general diagnostic exports.
 
 ## Remaining extensions
 

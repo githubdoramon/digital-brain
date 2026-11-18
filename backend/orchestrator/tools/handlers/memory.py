@@ -15,7 +15,7 @@ from collections import Counter
 from typing import TYPE_CHECKING, Any, Optional
 
 from memory_graph_terms import contains_personal_document_term
-from observability.mirador import timed_workflow_stage
+from observability.instrumentation import timed_workflow_stage
 from tools.limit_policy import wants_all_results
 
 if TYPE_CHECKING:

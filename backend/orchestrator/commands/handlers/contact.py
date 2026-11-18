@@ -37,7 +37,7 @@ from commands.registry import CommandRegistry
 from llm_helpers import build_json_schema_response_format
 from llm_json_schemas import CONTACT_UPDATE_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
-from observability.mirador import timed_workflow_stage
+from observability.instrumentation import timed_workflow_stage
 from search_normalization import normalize_search_text
 from ui_dsl import (
     build_need_user_input,

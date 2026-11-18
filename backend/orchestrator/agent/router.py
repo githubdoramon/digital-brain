@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.contact_resolution import FAMILY_RELATIONSHIP_PATTERN, THIRD_PARTY_REFERENCE_PATTERN
 from memory_graph_terms import contains_personal_document_term
 from observability import trace
-from observability.mirador import timed_workflow_stage
+from observability.instrumentation import timed_workflow_stage
 from tools.registry import ALWAYS_AVAILABLE_GROUPS
 from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 from voice_context import voice_progress

@@ -21,8 +21,6 @@ def app_module(monkeypatch):
     for name in (
         "configure_logging",
         "install_stdout_logger",
-        "configure_mirador",
-        "shutdown_mirador",
         "run_pending_migrations",
     ):
         monkeypatch.setattr(module, name, MagicMock())
@@ -70,7 +68,6 @@ async def test_startup_serves_requests_while_warmup_is_stuck_and_shutdown_cancel
         await asyncio.wait_for(lifespan.__aexit__(None, None, None), timeout=1)
     assert cancelled.is_set()
     assert app_module.knowledge_jobs.stop_worker.call_count == 1
-    assert app_module.shutdown_mirador.call_count == 1
 
 
 async def test_warmup_failure_does_not_fail_startup_or_shutdown(app_module, monkeypatch, caplog):
@@ -84,7 +81,6 @@ async def test_warmup_failure_does_not_fail_startup_or_shutdown(app_module, monk
     async with app_module.lifespan(app_module.api):
         await asyncio.wait_for(completed.wait(), timeout=1)
     assert app_module.meeting_transcript_jobs.stop_worker.call_count == 1
-    assert app_module.shutdown_mirador.call_count == 1
     assert "reason=RuntimeError" in caplog.text
     assert "PRIVATE_PROVIDER_BODY" not in caplog.text
 
@@ -182,84 +178,3 @@ async def test_shutdown_cancel_closes_inflight_http_client(async_transport):
         await task
     assert cancelled.is_set()
     assert all(client.is_closed for client in clients)
-
-
-@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
-async def test_async_warmup_trace_covers_the_await_and_records_only_safe_metadata(
-    monkeypatch, outcome
-):
-    import sys
-    import types
-    from contextlib import contextmanager
-
-    from observability import mirador
-
-    attributes = {}
-    closed = []
-    options = []
-    span = MagicMock()
-    span.set_attribute.side_effect = lambda key, value: attributes.__setitem__(key, value)
-
-    @contextmanager
-    def start_span(name, **kwargs):
-        options.append(kwargs)
-        try:
-            yield span
-        finally:
-            closed.append(True)
-
-    trace = types.ModuleType("opentelemetry.trace")
-    trace.get_tracer = lambda _: types.SimpleNamespace(start_as_current_span=start_span)
-    trace.StatusCode = types.SimpleNamespace(ERROR="error")
-    trace.Status = lambda code: code
-    package = types.ModuleType("opentelemetry")
-    package.trace = trace
-    monkeypatch.setitem(sys.modules, "opentelemetry", package)
-    monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace)
-    metrics = MagicMock()
-    monkeypatch.setattr(mirador, "_record_llm_metrics", metrics)
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    @mirador.traced_llm_request
-    async def request(payload):
-        entered.set()
-        await release.wait()
-        if outcome == "failure":
-            raise RuntimeError("PRIVATE_PROVIDER_BODY")
-        return {"usage": {"prompt_tokens": 3, "completion_tokens": 1}}
-
-    task = asyncio.create_task(request({"model": "smart-test", "messages": []}))
-    try:
-        await asyncio.wait_for(entered.wait(), timeout=1)
-        assert not closed
-        metrics.assert_not_called()
-        if outcome == "cancelled":
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        else:
-            release.set()
-            if outcome == "failure":
-                with pytest.raises(RuntimeError):
-                    await task
-            else:
-                await task
-    finally:
-        if not task.done():
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-    assert closed == [True]
-    assert options == [{"record_exception": False, "set_status_on_exception": False}]
-    assert attributes["llm.outcome"] == ("success" if outcome == "success" else "error")
-    assert attributes["gen_ai.request.stream"] is False
-    assert "PRIVATE_PROVIDER_BODY" not in str(attributes)
-    if outcome == "success":
-        assert attributes["gen_ai.usage.input_tokens"] == 3
-        assert attributes["gen_ai.usage.output_tokens"] == 1
-    else:
-        assert attributes["error.type"] == (
-            "RuntimeError" if outcome == "failure" else "CancelledError"
-        )
-    metrics.assert_called_once()

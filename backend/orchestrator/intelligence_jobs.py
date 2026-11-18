@@ -16,7 +16,7 @@ from job_leases import HEARTBEAT_SECONDS, LEASE_INTERVAL_SQL, LEASE_SECONDS, lea
 from learning_failures import rejection_details
 from llm_policy import LLMRequestRejected, failure_code
 from observability.logger import get_runtime_logger
-from observability.mirador import traced_intelligence_run
+from observability.instrumentation import traced_intelligence_run
 
 JOB_TYPE = "scheduled_intelligence"
 TIMEZONE = "Europe/Lisbon"

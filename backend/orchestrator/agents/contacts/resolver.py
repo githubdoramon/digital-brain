@@ -58,7 +58,7 @@ from llm_json_schemas import (
 )
 from observability import trace
 from observability.logger import get_runtime_logger
-from observability.mirador import timed_workflow_stage
+from observability.instrumentation import timed_workflow_stage
 from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,

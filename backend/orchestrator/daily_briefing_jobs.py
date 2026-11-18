@@ -290,7 +290,7 @@ def _execute_daily_briefing_job(
     user_email: str,
     revision: int | None,
 ) -> None:
-    from observability.mirador import traced_daily_briefing_run
+    from observability.instrumentation import traced_daily_briefing_run
 
     with traced_daily_briefing_run() as trace:
         _execute_daily_briefing_job_impl(

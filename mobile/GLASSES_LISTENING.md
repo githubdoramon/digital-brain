@@ -28,7 +28,7 @@ A completed capture is first staged atomically with fsync in private account-sco
 
 Failed copies retain private originals and expose Retry saving; process-recovered pending transcription is marked interrupted when exported by retry. Active inference files are excluded from concurrent retries. At four pending recovery captures, listening pauses until saves are retried. The directory is account-scoped; retry accesses only the signed-in account. Completion receipts keep the last 32 identifiers to avoid duplicate counter increments after interrupted cleanup. Sign-out cancels queued inference and suppresses stale callbacks. Existing completed captures remain user files.
 
-No audio, transcript text, storage/network identifiers, raw exceptions or account identifiers enter general diagnostics, system logs, analytics or Mirador. Completed capture audio goes only to authenticated transcription; verified non-command phrases go to authenticated regular chat as described below. Safe diagnostics retain VAD/wake/quiet/drop/error/LED counts, capture state and inference/audio durations. Save recovery never executes commands, submits chat or uploads audio again.
+No audio, transcript text, storage/network identifiers, raw exceptions or account identifiers enter general diagnostics, system logs, analytics or external telemetry. Completed capture audio goes only to authenticated transcription; verified non-command phrases go to authenticated regular chat as described below. Safe diagnostics retain VAD/wake/quiet/drop/error/LED counts, capture state and inference/audio durations. Save recovery never executes commands, submits chat or uploads audio again.
 
 ## Validation
 

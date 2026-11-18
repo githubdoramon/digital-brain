@@ -63,32 +63,9 @@ normalization never guesses unknown contacts or bypasses ambiguity checks.
 
 ## Architecture Documentation
 
-**Mirador AI observability**: The Python orchestrator exports privacy-conscious
-OpenTelemetry spans for AI entry-point requests, agent runs, LLM calls, and
-registered tool calls, plus HTTP, LLM, agent-run, and per-tool metrics to
-Mirador only when `MIRADOR_API_KEY` is configured in
-`backend/.env` or the optional user-private Compose env file. Never export
-prompt/output text, tool arguments/results, user or conversation identifiers,
-or credentials. Add one privacy-conscious child span per registered tool call
-under the active agent span. Keep AI request spans active through the complete
-ASGI response stream so streamed agent and LLM work remains on one trace. Record
-metrics for other HTTP routes without creating a trace for every frontend request.
-Trace every production LLM request made through `llm_helpers`, including async
-SSE streams, warm-up calls, and background workflows without an agent-run parent.
-Wrap scheduled/background daily-briefing jobs in one `daily_briefing.run` parent
-span and propagate its OpenTelemetry context into briefing worker threads; keep
-only outcome, duration, bounded counts, and safe child LLM/tool spans. In async
-LLM stream wrappers, detach the span context before yielding each chunk so
-generator cancellation or cross-context resumption cannot raise detach errors.
-Keep the `agent.run` span itself populated with the run count, rounds, total tool
-calls, failed tool calls, and validation repairs so its summary is readable without
-opening child spans.
-Record bounded workflow-stage duration histograms for critical chat, command,
-and contact-resolution steps; use only static workflow, stage, and outcome
-labels so counts, averages, and latency distributions can be compared safely.
-Do not enable blanket HTTP, SQL, or application-log export. See
-`backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
-
+**Observability**: Provider-neutral instrumentation hooks are inactive. Do not
+export prompts, outputs, tool arguments or results, user or conversation
+identifiers, or credentials. See `backend/orchestrator/docs/architecture/OBSERVABILITY.md`.
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 

@@ -458,7 +458,7 @@ commits before exit, and restart resumes local outbox work independently of Pyth
 Expose only safe counters, queue age/size, last successful ingest, connection state,
 and bounded error codes. Never log message text, raw event payloads, phone/JID,
 contact names, pairing codes, keys, or URLs. Upstream tracing defaults do not certify
-every log site: audit logging and keep `tracing-pii` off. No content in Mirador.
+every log site: audit logging and keep `tracing-pii` off. Do not export content as telemetry.
 
 ## Implementation sequence and completion evidence
 

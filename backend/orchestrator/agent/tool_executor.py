@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from observability import trace
 from observability.logger import get_runtime_logger
-from observability.mirador import traced_tool_call
+from observability.instrumentation import traced_tool_call
 from tools.action_enums import HomeAssistantAction
 from ui_dsl.clarification import extract_need_user_input
 

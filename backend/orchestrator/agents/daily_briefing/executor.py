@@ -38,7 +38,7 @@ from llm_helpers import (
 from llm_json_schemas import (
     DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA,
 )
-from observability.mirador import submit_with_current_context
+from observability.instrumentation import submit_with_current_context
 from search_normalization import normalize_search_text
 from tools.handlers.memory import _synthesize_memory_summary
 
